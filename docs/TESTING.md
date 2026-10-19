@@ -10,14 +10,15 @@ Office LAN IP: `192.168.1.122` (API Port: `8001`, Web Port: `5173`, Metro Port: 
 
 | Test Suite / Step | Command Executed | Result | Details / Output |
 |---|---|---|---|
-| **Backend Authorization & Unit Tests** | `cd services/api && .venv/bin/python -m pytest -v` | **PASS** | `2 passed in 4.39s` (login generic 401 error, role gates, pathology pending sample result handling) |
+| **Backend Authorization & Unit Tests** | `cd services/api && PYTHONPATH=. .venv/bin/pytest -v` | **PASS** | `2 passed in 4.38s` (login generic 401 error, role gates, pathology pending sample result handling) |
 | **Web Console Lint / Typecheck** | `cd apps/web && npm run lint` (`tsc --noEmit`) | **PASS** | `0 errors` |
-| **Web Console Production Build** | `cd apps/web && npm run build` (`tsc -b && vite build`) | **PASS** | Built in 142ms: `dist/index.html` (0.16 kB), `dist/assets/index-B9uCI2zX.js` (187.59 kB) |
-| **Expo Dependencies Check** | `cd apps/mobile && npx expo install --check` | **PASS** | Dependencies reconciled with Expo SDK 53; `react-native@0.79.6` verified. |
-| **Expo Diagnostics (`expo-doctor`)** | `cd apps/mobile && npx expo-doctor` | **PASS** | `18/18 checks passed. No issues detected!` |
-| **Mobile TypeScript Check** | `cd apps/mobile && npm run typecheck` | **PASS** | `0 errors` |
-| **Expo Go Metro Bundler Startup** | `cd apps/mobile && npx expo start --lan` | **PASS** | Metro running on `exp://192.168.1.122:8081`, manifest served via HTTP 200. |
-| **Expo Android Bundle Compilation** | `curl "http://192.168.1.122:8081/node_modules/expo-router/entry.bundle?platform=android&..."` | **PASS** | HTTP 200 OK, full Android bundle generated (6.58 MB) with zero missing modules. |
+| **Web Console Production Build** | `cd apps/web && npm run build` (`tsc -b && vite build`) | **PASS** | Built in 132ms: `dist/index.html` (0.16 kB), `dist/assets/index-BHi2PgBA.js` (195.79 kB) |
+| **Expo Dependencies Check** | `cd apps/mobile && npx expo install --check` | **PASS** | Dependencies reconciled with Expo SDK 57 (`expo@57.0.30`, `react-native@0.86.3`, `react@19.2.3`, `typescript@6.0.3`). |
+| **Expo Diagnostics (`expo-doctor`)** | `cd apps/mobile && npx expo-doctor` | **PASS** | `21/21 checks passed. No issues detected!` |
+| **Mobile TypeScript Check** | `cd apps/mobile && npm run typecheck` | **PASS** | `0 errors` on TypeScript 6.0 |
+| **Expo Go Metro Bundler Startup** | `REACT_NATIVE_PACKAGER_HOSTNAME=192.168.1.122 npx expo start --lan --clear` | **PASS** | Metro running on `exp://192.168.1.122:8081`, manifest served via HTTP 200 with `runtimeVersion: exposdk:57.0.0`. |
+| **Expo Android Bundle Compilation** | `curl "http://192.168.1.122:8081/node_modules/expo-router/entry.bundle?platform=android&..."` | **PASS** | HTTP 200 OK, full Android bundle generated (7.52 MB, 1505 modules) with zero missing modules. |
+| **Expo Web Bundle Compilation** | `curl "http://192.168.1.122:8081/node_modules/expo-router/entry.bundle?platform=web&..."` | **PASS** | HTTP 200 OK, web bundle generated (4.93 MB, 959 modules). |
 | **LAN API Health & Connectivity** | `curl -i http://192.168.1.122:8001/health` | **PASS** | HTTP 200 `{"status":"ok","service":"m3-api","time":"..."}` |
 | **Web Dev Console on LAN** | `curl -i http://192.168.1.122:5173` | **PASS** | HTTP 200 OK |
 | **Full LAN API E2E Flow** | `python3 scripts/verify_e2e_lan.py` | **PASS** | All 6 roles authenticated with PIN 2468, role restrictions enforced (403), intake -> assessment -> pathology -> follow-up -> research molecular results verified. |
@@ -84,6 +85,17 @@ Office LAN IP: `192.168.1.122` (API Port: `8001`, Web Port: `5173`, Metro Port: 
       1. `config.resolver.assetExts.push('wasm')` for WebAssembly bundling.
       2. A custom `resolveRequest` hook that automatically resolves extensionless subpath imports for `inline-style-prefixer/lib/*` and `react-native-web/dist/index`.
       3. Verified web bundling compiles cleanly with HTTP 200 OK (`4.42 MB`, 793 modules bundled).
+
+12. **Expo SDK 53 -> 57 Compatibility Upgrade for Installed Expo Go**:
+    - *Issue*: Mobile device running latest Expo Go client rejected the project because Expo Go required SDK 57, whereas the repository was pinned to SDK 53.
+    - *Fix*:
+      - Inspected package configuration and confirmed purely managed workflow (no native `android/` or `ios/` source folders).
+      - Backed up repository state in git commit `487f44c`.
+      - Upgraded `expo@57.0.30`, `react@19.2.3`, `react-dom@19.2.3`, `react-native@0.86.3`, and `expo-router@~57.0.28`.
+      - Added required peer dependency `react-native-worklets@0.10.1` for `react-native-reanimated@4.5.1`.
+      - Upgraded TypeScript to `~6.0.3` and `@types/react` to `~19.2.4`.
+      - Reconciled all native module versions via `npx expo install --check` and validated with `npx expo-doctor` (`21/21 checks passed. No issues detected!`).
+      - Verified manifest outputs `runtimeVersion: exposdk:57.0.0` and Android bundle compiles cleanly (7.52 MB).
 
 ---
 
