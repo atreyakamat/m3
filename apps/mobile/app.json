@@ -1,0 +1,23 @@
+{
+  "expo": {
+    "name": "M3 Surveillance",
+    "slug": "m3-surveillance",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "scheme": "m3",
+    "plugins": [
+      "expo-router",
+      "expo-sqlite",
+      "expo-secure-store",
+      "expo-asset",
+      "expo-font"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "android": {
+      "package": "org.m3.surveillance"
+    }
+  }
+}
