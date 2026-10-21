@@ -16,6 +16,7 @@ from . import permissions, questionnaire as questionnaire_schema
 from .analytics import router as analytics_router
 from .config import get_settings
 from .database import get_db
+from . import kafka_producer
 from .models import (AuditEvent, Case, CaseEvent, ClinicalAssessment, DiagnosticTest, Facility, FollowUp,
                      MolecularResult, Notification, Patient, QuestionnaireSubmission, RoleAssignment, Sample, Session,
                      Site, SymptomReport, SlideFollowUp, TravelEvent, User, WorkerQrToken, WorkerSiteAssignment,
@@ -42,6 +43,13 @@ app.add_middleware(RequestCorrelationMiddleware)
 app.add_middleware(CORSMiddleware, allow_origins=get_settings().cors_list, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.include_router(analytics_router)
 
+@app.on_event("startup")
+async def _start_event_hub():
+    """Best-effort Kafka event hub (Task 7): a background drain task publishes
+    surveillance events to topic `malaria.events` when KAFKA_ENABLED=true;
+    otherwise this is a no-op."""
+    await kafka_producer.start_event_producer()
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     if isinstance(exc, HTTPException):
@@ -67,8 +75,15 @@ HEALTH_CONTEXT_FIELDS = {"initial_symptoms"}
 
 def patient_view(p: Patient, roles: set[str], own: bool = False):
     """Role-filtered worker profile view; research/admin see pseudonymized fields (PRD 9)."""
-    data = {"id": p.id, "patient_code": p.patient_code, "age_years": p.age_years, "gender": p.gender, "occupation": p.occupation, "consent_status": p.consent_status, "updated_at": p.updated_at}
-    if "clinician" in roles or "pathologist" in roles or own:
+    data = {"id": p.id, "patient_code": p.patient_code, "age_years": p.age_years, "gender": p.gender, "occupation": p.occupation,
+            "consent_status": p.consent_status, "updated_at": p.updated_at,
+            # Screening state drives the single-screening rule in every client;
+            # it is operational (not clinical) data and is safe to expose here.
+            "screening_completed": bool(p.screening_completed),
+            "screened_at": p.screened_at,
+            # Home state (nativity) supports name/state-based lookup for health workers.
+            "nativity": p.nativity}
+    if "clinician" in roles or "pathologist" in roles or own or "health_worker" in roles:
         data.update(display_name=p.display_name, dob=p.dob, age_as_on=p.age_as_on, age_flagged=p.age_flagged,
                     phone_e164=p.phone_e164, alternate_contact=p.alternate_contact, id_type=p.id_type,
                     id_other_details=p.id_other_details, address_present=p.address_present,
@@ -78,6 +93,7 @@ def patient_view(p: Patient, roles: set[str], own: bool = False):
         data["display_name"] = p.display_name
     elif "research_lab" in roles:
         data.pop("occupation", None)
+        data.pop("nativity", None)
     return data
 
 def sample_view(s, roles=None):
@@ -616,7 +632,9 @@ def workers(q: str | None = None, offset: int = Query(0, ge=0), limit: int = Que
         cond = [Patient.patient_code.ilike(like)]
         if roles & {"clinician", "pathologist", "health_worker", "admin", "research_lab"}:
             cond.append(Patient.display_name.ilike(like))
-        if roles & {"clinician", "pathologist", "contractor"}:
+            # Health workers search by name, home state and phone without codes.
+            cond.append(Patient.nativity.ilike(like))
+        if roles & {"clinician", "pathologist", "contractor", "health_worker"}:
             cond.append(Patient.phone_e164.like(f"%{q.strip().lstrip('+')}%"))
         stmt = stmt.where(or_(*cond))
     stmt = stmt.order_by(Patient.updated_at.desc())
@@ -673,8 +691,12 @@ def create_worker(body: WorkerCreate, response: Response = None, user: User = De
     if raw_phone:
         try: existing_phone = normalize_phone(raw_phone)
         except ValueError: raise HTTPException(422, "Mobile number format is invalid")
+        # Single-screening rule: an active profile with the same phone exists.
         duplicates = db.scalars(select(Patient).where(Patient.phone_e164 == existing_phone)).all()
         if duplicates:
+            if any(d.screening_completed for d in duplicates):
+                raise HTTPException(status_code=409, detail="A worker with this mobile number has already completed screening",
+                    headers={"X-Duplicate-Candidates": ",".join(d.patient_code for d in duplicates[:10])})
             raise HTTPException(status_code=409, detail="A worker profile with this mobile already exists",
                 headers={"X-Duplicate-Candidates": ",".join(d.patient_code for d in duplicates[:10])})
     dob = date.fromisoformat(body.dob) if body.dob else None
@@ -715,6 +737,10 @@ def create_worker(body: WorkerCreate, response: Response = None, user: User = De
         db.add(TravelEvent(patient_id=patient.id, origin=body.travel_origin, arrival_date=body.travel_arrival_date))
     if "worker" in roles: user.patient_id = patient.id
     audit(db, user, "worker.created", "worker", patient.id); db.commit()
+    kafka_producer.emit_event("intake.created", {
+        "patient_id": patient.id, "patient_code": patient.patient_code,
+        "site_id": site.id if site else None, "created_by": user.id,
+    })
     return patient_view(patient, roles, own=("worker" in roles))
 
 class WorkerSelfUpdate(BaseModel):
@@ -963,7 +989,16 @@ def submit_questionnaire(body: QuestionnaireSubmitIn, response: Response, user: 
         QuestionnaireSubmission.state == "draft",
         QuestionnaireSubmission.schema_version == questionnaire_schema.SCHEMA_VERSION))
     if draft: db.delete(draft)
-    audit(db, user, "questionnaire.submitted", "questionnaire", submission.id); db.commit()
+    # Single-screening rule: submitting the worker intake questionnaire IS the
+    # worker's one routine screening event; state is stamped once, here.
+    if not patient.screening_completed:
+        patient.screening_completed = True
+        patient.screened_at = now()
+    audit(db, user, "questionnaire.submitted", "questionnaire", submission.id)
+    kafka_producer.emit_event("screening.completed", {
+        "patient_id": patient.id, "submission_id": submission.id, "respondent_user_id": user.id,
+    })
+    db.commit()
     return {"submission_id": submission.id, "duplicate": False, "schema_version": submission.schema_version, "submitted_at": submission.submitted_at}
 
 @app.post("/api/v1/questionnaires/{submission_id}/amend", status_code=201, tags=["screening"])
@@ -1026,16 +1061,51 @@ def assessments(patient_id: str, user: User = Depends(require_roles("clinician",
     return {"items": items}
 
 @app.post("/api/v1/assessments", status_code=201, tags=["clinical"])
-def create_assessment(body: AssessmentCreate, user: User = Depends(require_roles("clinician")), db: Session = Depends(get_db)):
-    _assert_write_role(user, db, "clinical")
+def create_assessment(body: AssessmentCreate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Clinical encounter record.
+
+    Screening governance (SCR-009): the first routine screening is a one-time
+    event. A NEW encounter on an already-screened worker is an authorized
+    RE-SCREEN, permitted only for the `clinician` and `health_worker` roles and
+    only with a recorded reason. Everyone else is rejected with 403. The reason
+    is stored on the assessment row and journaled in the audit log."""
+    patient = db.get(Patient, body.patient_id)
+    roles = effective(user, db)
+    if patient is None:
+        # Preserve the original role matrix: non-clinicians get 403 on this
+        # write path even when the patient id is unknown.
+        if "clinician" not in roles:
+            _die_forbidden_write()
+        raise HTTPException(404, "Patient record not found")
+    is_rescreen = bool(patient.screening_completed)
+    if "clinician" in roles:
+        _assert_write_role(user, db, "clinical")
+    elif "health_worker" in roles:
+        # Health workers may record encounters only as authorized re-screens.
+        if not is_rescreen:
+            _die_forbidden_write()
+    else:
+        _die_forbidden_write()
     patient = require_patient_scope(user, db, body.patient_id)
-    if body.facility_id and not db.get(Facility, body.facility_id):
-        raise HTTPException(422, "Unknown facility reference")
-    if body.treatment_completed == "no" and not str(body.treatment_incomplete_reason or "").strip():
-        raise HTTPException(422, "Reason is required when treatment was not completed")
-    if body.admission_status and body.admission_status.lower() == "admitted" and not body.admission_severity:
-        raise HTTPException(422, "Severity is required when the worker is admitted")
-    payload = body.model_dump()
+    if is_rescreen:
+        reason = (body.re_screening_reason or "").strip()
+        if not reason:
+            raise HTTPException(422, "A re-screening reason is required because this worker has already completed screening")
+        if body.treatment_completed == "no" and not str(body.treatment_incomplete_reason or "").strip():
+            raise HTTPException(422, "Reason is required when treatment was not completed")
+        if body.admission_status and body.admission_status.lower() == "admitted" and not body.admission_severity:
+            raise HTTPException(422, "Severity is required when the worker is admitted")
+        if body.facility_id and not db.get(Facility, body.facility_id):
+            raise HTTPException(422, "Unknown facility reference")
+    else:
+        if body.facility_id and not db.get(Facility, body.facility_id):
+            raise HTTPException(422, "Unknown facility reference")
+        if body.treatment_completed == "no" and not str(body.treatment_incomplete_reason or "").strip():
+            raise HTTPException(422, "Reason is required when treatment was not completed")
+        if body.admission_status and body.admission_status.lower() == "admitted" and not body.admission_severity:
+            raise HTTPException(422, "Severity is required when the worker is admitted")
+    payload = body.model_dump(exclude={"re_screening_reason"})
+    payload["re_screening_reason"] = body.re_screening_reason
     case_id = payload.pop("case_id", None)
     payload["patient_id"] = patient.id
     assessment = ClinicalAssessment(**payload, clinician_id=user.id)
@@ -1052,7 +1122,24 @@ def create_assessment(body: AssessmentCreate, user: User = Depends(require_roles
             _record_case_event(db, user.id, case, from_status, "plan_recorded",
                                "Clinical assessment and disposition recorded")
     db.add(assessment)
-    audit(db, user, "assessment.created", "assessment", assessment.id); db.commit()
+    # The encounter completes the (re-)screening event; the worker's screening
+    # state is stamped the first time any authorized encounter is recorded.
+    if not patient.screening_completed:
+        patient.screening_completed = True
+        patient.screened_at = now()
+    if is_rescreen:
+        audit(db, user, "assessment.rescreened", "assessment", assessment.id,
+              detail={"patient_id": patient.id, "reason": body.re_screening_reason})
+        kafka_producer.emit_event("screening.rescreened", {
+            "patient_id": patient.id, "case_id": case_id, "by_user_id": user.id,
+            "reason_re_screening": body.re_screening_reason,
+        })
+    else:
+        audit(db, user, "assessment.created", "assessment", assessment.id)
+        kafka_producer.emit_event("screening.completed", {
+            "patient_id": patient.id, "case_id": case_id, "by_user_id": user.id,
+        })
+    db.commit()
     return {"id": assessment.id, "case_id": assessment.case_id}
 
 # ---------------- Pathology ----------------
@@ -1089,17 +1176,37 @@ def create_sample(body: SampleCreate, user: User = Depends(require_roles("pathol
     # When the pathology result resolves a pending clinical order, close the
     # loop: advance the case and notify the clinician who placed the order.
     linked_case_id = body.case_id
-    if linked_case_id:
-        case = db.get(Case, linked_case_id)
+    case = db.get(Case, linked_case_id) if linked_case_id else None
+    if case:
+        sample.case_id = case.id
+        if case.status == "awaiting_diagnostic_result" and case_transition_allowed(case.status, "plan_recorded"):
+            case.status = "plan_recorded"
+            _record_case_event(db, user.id, case, "awaiting_diagnostic_result", "plan_recorded",
+                               "Pathology result recorded")
+        _notify_case_agents(db, case, "case_diagnostic_result", _clinician_recipients(db),
+                            title="Diagnostic result available",
+                            body=f"A diagnostic result for case {case.case_code} has been recorded.")
+    if body.result_status == "positive":
+        # Positive malaria test: immediate clinician alert (outbreak response
+        # trigger) plus a Kafka `diagnostic.positive` event for the event hub.
+        species_note = body.species or "undetermined"
+        positive_recipients = _clinician_recipients(db)
         if case:
-            sample.case_id = case.id
-            if case.status == "awaiting_diagnostic_result" and case_transition_allowed(case.status, "plan_recorded"):
-                case.status = "plan_recorded"
-                _record_case_event(db, user.id, case, "awaiting_diagnostic_result", "plan_recorded",
-                                   "Pathology result recorded")
-            _notify_case_agents(db, case, "case_diagnostic_result", _clinician_recipients(db),
-                                title="Diagnostic result available",
-                                body=f"A diagnostic result for case {case.case_code} has been recorded.")
+            _notify_case_agents(db, case, "diagnostic_positive", positive_recipients,
+                                title="Positive malaria test detected",
+                                body=f"POSITIVE result ({species_note}) for case {case.case_code}. Workers may need follow-up.")
+        else:
+            for clinician_id in positive_recipients:
+                db.add(Notification(recipient_user_id=clinician_id, case_id=None, kind="diagnostic_positive",
+                                    title="Positive malaria test detected",
+                                    body=f"POSITIVE result ({species_note}) recorded for worker sample {sample.sample_code}; no linked surveillance case.",
+                                    delivered_at=now()))
+        kafka_producer.emit_event("diagnostic.positive", {
+            "sample_id": sample.id, "sample_code": sample.sample_code, "patient_id": patient.id,
+            "case_id": case.id if case else None, "species": body.species, "method": body.method,
+            "reported_by": user.id,
+        })
+        audit(db, user, "diagnostic.positive_alert", "sample", sample.id, detail={"species": body.species})
     audit(db, user, "sample.created", "sample", sample.id); db.commit()
     return sample_view(sample, effective(user, db))
 
@@ -1474,6 +1581,10 @@ def submit_symptom_report(body: SymptomReportIn, response: Response = None,
                             title="Site coordination notice",
                             body=f"A case was reported at {site.code} ({site.name}). No clinical data is shared here.")
     audit(db, user, "case.created", "case", case.id, detail={"urgent": urgent}); db.commit()
+    kafka_producer.emit_event("symptom_report.created", {
+        "case_id": case.id, "case_code": case.case_code, "patient_id": patient.id,
+        "site_id": case.site_id, "urgent": urgent,
+    })
     return {"case_id": case.id, "case_code": case.case_code, "status": case.status,
             "urgent": case.urgent, "reported_at": report.reported_at}
 

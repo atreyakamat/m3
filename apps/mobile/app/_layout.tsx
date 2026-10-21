@@ -1,13 +1,21 @@
 import { useEffect } from 'react'
 import { Stack } from 'expo-router'
 import * as Network from 'expo-network'
-import { initCache } from '@/src/cache'
+import { initCache, readMeta } from '@/src/cache'
+import { initBaseUrl } from '@/src/api'
 import { useAppStore } from '@/src/store'
+import { NotificationBell } from '@/components/NotificationBell'
+
 export default function Layout() {
   const setOnline = useAppStore((x) => x.setOnline)
+  // Task 1: restore the runtime-configured LAN-IP / tunnel API target.
+  const setCustomServerUrl = useAppStore((x) => x.setCustomServerUrl)
 
   useEffect(() => {
     initCache()
+    initBaseUrl()
+    const storedServer = readMeta('customServerUrl')
+    if (storedServer) setCustomServerUrl(storedServer)
     Network.getNetworkStateAsync().then((s) =>
       setOnline(Boolean(s.isConnected || s.isInternetReachable))
     )
@@ -15,14 +23,17 @@ export default function Layout() {
       setOnline(Boolean(s.isConnected || s.isInternetReachable))
     )
     return () => sub.remove()
-  }, [setOnline])
+  }, [setOnline, setCustomServerUrl])
 
+  // Task 6: accessible medical header (teal surface, white text).
+  // Task 7: NotificationBell mounted in the right header position.
   return (
     <Stack
       screenOptions={{
-        headerStyle: { backgroundColor: '#fafaf9' },
-        headerTintColor: '#18181b',
-        contentStyle: { backgroundColor: '#f5f5f4' },
+        headerStyle: { backgroundColor: '#0f766e' },
+        headerTintColor: '#ffffff',
+        contentStyle: { backgroundColor: '#f8fafc' },
+        headerRight: () => <NotificationBell />,
       }}
     >
       <Stack.Screen name="index" options={{ headerShown: false }} />

@@ -8,6 +8,8 @@ services:
       POSTGRES_PASSWORD: ${COMPOSE_POSTGRES_PASSWORD:-m3_compose_dev_secret}
     volumes:
       - m3-compose-postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
@@ -15,7 +17,37 @@ services:
       retries: 12
     restart: unless-stopped
     networks:
-      - private
+      - m3-network
+
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: m3-compose-kafka
+    ports:
+      - "9092:9092"
+    environment:
+      # Single-node Kafka in KRaft mode (no ZooKeeper).
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      CLUSTER_ID: 4L6g35nZTHSmvTOQ0lLkMg
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,INTERNAL://:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,INTERNAL://kafka:29092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,INTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - m3-network
 
   api:
     build: ./services/api
@@ -29,8 +61,11 @@ services:
       DATABASE_URL: postgresql+psycopg://${COMPOSE_POSTGRES_USER:-m3_compose_user}:${COMPOSE_POSTGRES_PASSWORD:-m3_compose_dev_secret}@db:5432/${COMPOSE_POSTGRES_DB:-m3_compose_dev}
       JWT_SECRET: ${JWT_SECRET:-m3-compose-jwt-secret-dev-only}
       BOOTSTRAP_SECRET: ${BOOTSTRAP_SECRET:-m3-compose-bootstrap-secret}
-      API_CORS_ORIGINS: ${API_CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      API_CORS_ORIGINS: ${API_CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://localhost:8081,http://127.0.0.1:8081,http://192.168.1.116:5173,http://192.168.1.116:8081}
       PORT: 8000
+      KAFKA_ENABLED: ${KAFKA_ENABLED:-true}
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:29092}
+      KAFKA_TOPIC: ${KAFKA_TOPIC:-malaria.events}
     command: sh -c "alembic upgrade head && python -m app.seed && uvicorn app.main:app --host 0.0.0.0 --port 8000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
@@ -39,11 +74,39 @@ services:
       retries: 5
     restart: unless-stopped
     networks:
-      - private
+      - m3-network
+
+  web:
+    build:
+      context: ./apps/web
+      args:
+        VITE_API_BASE_URL: ${API_BASE_URL:-http://192.168.1.116:8003/api/v1}
+    container_name: m3-compose-web
+    depends_on:
+      - api
+    ports:
+      - "5173:80"
+    restart: unless-stopped
+    networks:
+      - m3-network
+
+  mobile-web:
+    build:
+      context: ./apps/mobile
+    container_name: m3-compose-mobile-web
+    depends_on:
+      - api
+    environment:
+      EXPO_PUBLIC_API_BASE_URL: ${API_BASE_URL:-http://192.168.1.116:8003/api/v1}
+    ports:
+      - "8081:8081"
+    restart: unless-stopped
+    networks:
+      - m3-network
 
 volumes:
   m3-compose-postgres-data:
 
 networks:
-  private:
-    internal: false
+  m3-network:
+    driver: bridge

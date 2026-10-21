@@ -108,6 +108,8 @@ class AssessmentCreate(BaseModel):
     discharge_date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
     outcome: str | None = Field(default=None, max_length=100)
     remarks: str | None = Field(default=None, max_length=4000)
+    re_screening_reason: str | None = Field(default=None, max_length=1000,
+        description="Required when the worker has already completed routine screening")
 
 class SampleCreate(BaseModel):
     patient_id: str

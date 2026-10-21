@@ -88,6 +88,11 @@ class Patient(Timestamped, Base):
     preferred_language: Mapped[str] = mapped_column(String(5), default="en")
     occupation: Mapped[str | None] = mapped_column(String(80), nullable=True)
     nativity: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # Single-screening governance (SCR-009): a worker completes routine intake
+    # screening exactly once. Re-screening is an authorized override recorded
+    # with a reason on the new clinical assessment.
+    screening_completed: Mapped[bool] = mapped_column(Boolean, default=False, server_default=sa_false())
+    screened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     consent_status: Mapped[str] = mapped_column(String(20), default="pending")
     initial_symptoms: Mapped[list | None] = mapped_column(JSON, nullable=True)
     # Offline-replay reconciliation identity: set by the creating account.
@@ -185,6 +190,10 @@ class ClinicalAssessment(Timestamped, Base):
     discharge_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
     outcome: Mapped[str | None] = mapped_column(String(100), nullable=True)
     remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Authorization trail for a re-screen: required when the worker already
+    # completed an initial screening and an authorized clinician/health_worker
+    # records a new encounter.
+    re_screening_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     case_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     patient: Mapped[Patient] = relationship(back_populates="assessments")
 

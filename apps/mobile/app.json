@@ -20,6 +20,13 @@
       "package": "org.m3.surveillance",
       "softwareKeyboardLayoutMode": "resize",
       "usesCleartextTraffic": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "69a2bcc0-f89b-4f65-9898-4c6523c75220"
+      }
+    },
+    "owner": "atreyakamat"
   }
 }

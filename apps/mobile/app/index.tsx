@@ -1,7 +1,9 @@
 import React, { useState } from 'react'
 import {
   Alert,
+  Modal,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -10,11 +12,17 @@ import { router } from 'expo-router'
 import { useForm, Controller } from 'react-hook-form'
 import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { api, saveToken } from '@/src/api'
+import {
+  api,
+  saveToken,
+  applyServerUrl,
+  normalizeServerUrl,
+  probeServerUrl,
+} from '@/src/api'
 import { demoWorkers, DEMO_OWNER, initCache, writeWorkers } from '@/src/cache'
 import { t } from '@/src/i18n'
 import { useAppStore } from '@/src/store'
-import { Button, ChipPicker, Field, NoticeBanner, FormShell } from '@/components/ui'
+import { Button, ChipPicker, Field, NoticeBanner, FormShell, StatusBadge } from '@/components/ui'
 
 const loginSchema = z.object({
   phone: z.string().min(8, 'Phone number must be at least 8 digits'),
@@ -48,9 +56,14 @@ const ROLE_OPTIONS = [
 ]
 
 export default function Index() {
-  const { language, setLanguage, setSession, setLastSync, online } = useAppStore()
+  const { language, setLanguage, setSession, setLastSync, online, customServerUrl, setCustomServerUrl } = useAppStore()
   const [mode, setMode] = useState<'login' | 'signup'>('login')
   const [loading, setLoading] = useState(false)
+  // Task 1: runtime server configuration (LAN IP / public tunnel URL).
+  const [serverModalOpen, setServerModalOpen] = useState(false)
+  const [serverInput, setServerInput] = useState('')
+  const [serverTesting, setServerTesting] = useState(false)
+  const [serverStatus, setServerStatus] = useState<null | { ok: boolean; message: string }>(null)
 
   // Login form
   const {
@@ -167,17 +180,65 @@ export default function Index() {
     setLoginValue('pin', '2468')
   }
 
+  function openServerModal() {
+    setServerInput(customServerUrl || '')
+    setServerStatus(null)
+    setServerModalOpen(true)
+  }
+
+  async function testServerConnection() {
+    setServerTesting(true)
+    setServerStatus(null)
+    try {
+      const status = await probeServerUrl(serverInput)
+      setServerStatus(status === 200
+        ? { ok: true, message: `${tr('connOk')}` }
+        : { ok: false, message: `${tr('connFail')} — HTTP ${status}` })
+    } catch (e) {
+      setServerStatus({
+        ok: false,
+        message: `${tr('connFail')}${e instanceof Error && e.message === 'Invalid URL' ? '' : ''} — ${e instanceof Error ? e.message : tr('error')}`,
+      })
+    } finally {
+      setServerTesting(false)
+    }
+  }
+
+  function saveServerUrl() {
+    const normalized = normalizeServerUrl(serverInput)
+    if (!normalized) {
+      setServerStatus({ ok: false, message: tr('serverUrlInvalid') })
+      return
+    }
+    applyServerUrl(normalized)
+    setCustomServerUrl(normalized)
+    setServerStatus({ ok: true, message: `${tr('serverSaved')}: ${normalized}` })
+    Alert.alert(tr('serverSaved'), normalized)
+  }
+
+  function clearServerUrl() {
+    applyServerUrl(null)
+    setCustomServerUrl(null)
+    setServerInput('')
+    setServerStatus({ ok: true, message: tr('serverCleared') })
+  }
+
   return (
     <FormShell contentContainerStyle={s.scrollContent}>
         <View style={s.topBar}>
           <Text style={s.eyebrow}>M3 / GOA</Text>
-          <Button
-            variant="ghost"
-            size="sm"
-            onPress={() => setLanguage(language === 'en' ? 'hi' : 'en')}
-          >
-            {language === 'en' ? 'हिन्दी' : 'English'}
-          </Button>
+          <View style={s.topBarActions}>
+            <Button variant="ghost" size="sm" onPress={openServerModal}>
+              {tr('serverConfig')}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onPress={() => setLanguage(language === 'en' ? 'hi' : 'en')}
+            >
+              {language === 'en' ? 'हिन्दी' : 'English'}
+            </Button>
+          </View>
         </View>
 
         <View style={s.header}>
@@ -425,6 +486,69 @@ export default function Index() {
             {tr('demo')}
           </Button>
         </View>
+
+        {/* Task 1: Server Configuration modal dialog */}
+        <Modal visible={serverModalOpen} transparent animationType="fade" onRequestClose={() => setServerModalOpen(false)}>
+          <View style={s.serverBackdrop}>
+            <View style={s.serverCard}>
+              <Text style={s.serverTitle}>{tr('serverConfig')}</Text>
+              <Text style={s.serverSubtitle}>
+                {tr('currentServer')}: {customServerUrl || '(default)'}
+              </Text>
+              <Field
+                label={tr('serverUrlLabel')}
+                hint={tr('serverUrlHint')}
+                placeholder="192.168.1.116:8003 or https://xyz.trycloudflare.com"
+                value={serverInput}
+                onChangeText={(text) => {
+                  setServerInput(text)
+                  setServerStatus(null)
+                }}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="url"
+              />
+              {serverStatus && (
+                <View style={[s.serverStatusBox, serverStatus.ok ? s.serverStatusOk : s.serverStatusFail]}>
+                  <Text style={[s.serverStatusText, !serverStatus.ok && s.serverStatusFailText]}>
+                    {serverStatus.ok ? '✅ ' : '⚠️ '}
+                    {serverStatus.message}
+                  </Text>
+                </View>
+              )}
+              <View style={s.serverActionsRow}>
+                <View style={s.serverActionBtn}>
+                  <Button
+                    variant="secondary"
+                    size="md"
+                    fullWidth
+                    loading={serverTesting}
+                    onPress={testServerConnection}
+                  >
+                    {serverTesting ? tr('testing') : tr('testConnection')}
+                  </Button>
+                </View>
+                <View style={s.serverActionBtn}>
+                  <Button variant="primary" size="md" fullWidth onPress={saveServerUrl}>
+                    {tr('saveServerUrl')}
+                  </Button>
+                </View>
+              </View>
+              <View style={s.serverActionsRow}>
+                <View style={s.serverActionBtn}>
+                  <Button variant="outline" size="md" fullWidth onPress={clearServerUrl}>
+                    {tr('clearServer')}
+                  </Button>
+                </View>
+                <View style={s.serverActionBtn}>
+                  <Button variant="ghost" size="md" fullWidth onPress={() => setServerModalOpen(false)}>
+                    {language === 'hi' ? 'बंद करें' : 'Close'}
+                  </Button>
+                </View>
+              </View>
+            </View>
+          </View>
+        </Modal>
     </FormShell>
   )
 }
@@ -432,7 +556,7 @@ export default function Index() {
 const s = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#18181b',
+    backgroundColor: '#f8fafc',
   },
   scrollContent: {
     padding: 24,
@@ -446,8 +570,12 @@ const s = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
   },
+  topBarActions: {
+    flexDirection: 'row',
+    gap: 4,
+  },
   eyebrow: {
-    color: '#a1a1aa',
+    color: '#64748b',
     fontWeight: '700',
     letterSpacing: 2,
     fontSize: 12,
@@ -456,13 +584,13 @@ const s = StyleSheet.create({
     gap: 6,
   },
   title: {
-    color: '#ffffff',
+    color: '#1e293b',
     fontWeight: '800',
     fontSize: 34,
     letterSpacing: -1,
   },
   subtitle: {
-    color: '#a1a1aa',
+    color: '#64748b',
     fontSize: 14,
     lineHeight: 20,
   },
@@ -474,7 +602,7 @@ const s = StyleSheet.create({
   },
   segmentedRow: {
     flexDirection: 'row',
-    backgroundColor: '#f4f4f5',
+    backgroundColor: '#f1f5f9',
     borderRadius: 10,
     padding: 4,
     marginBottom: 4,
@@ -496,17 +624,17 @@ const s = StyleSheet.create({
   segmentedTabText: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#71717a',
+    color: '#64748b',
   },
   segmentedTabTextActive: {
-    color: '#18181b',
+    color: '#1e293b',
     fontWeight: '700',
   },
   submitAction: {
     marginTop: 6,
   },
   devBox: {
-    backgroundColor: '#27272a',
+    backgroundColor: '#e2e8f0',
     borderRadius: 12,
     padding: 14,
     gap: 10,
@@ -514,7 +642,7 @@ const s = StyleSheet.create({
   devTitle: {
     fontSize: 12,
     fontWeight: '700',
-    color: '#d4d4d8',
+    color: '#475569',
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
@@ -525,5 +653,58 @@ const s = StyleSheet.create({
   },
   demoSection: {
     alignItems: 'center',
+  },
+  // Task 1: Server Configuration dialog
+  serverBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  serverCard: {
+    width: '100%',
+    maxWidth: 460,
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 20,
+    gap: 12,
+  },
+  serverTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#1e293b',
+  },
+  serverSubtitle: {
+    fontSize: 12,
+    color: '#64748b',
+  },
+  serverStatusBox: {
+    padding: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  serverStatusOk: {
+    backgroundColor: '#ecfdf5',
+    borderColor: '#a7f3d0',
+  },
+  serverStatusFail: {
+    backgroundColor: '#fff1f2',
+    borderColor: '#fecdd3',
+  },
+  serverStatusText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#059669',
+  },
+  serverStatusFailText: {
+    color: '#e11d48',
+  },
+  serverActionsRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  serverActionBtn: {
+    flex: 1,
   },
 })

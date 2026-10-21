@@ -9,7 +9,7 @@ import {
   View,
 } from 'react-native'
 import { router } from 'expo-router'
-import { api, removeToken, baseUrl } from '@/src/api'
+import { api, removeToken, base } from '@/src/api'
 import {
   DEMO_OWNER,
   demoWorkers,
@@ -20,6 +20,7 @@ import {
   readOutbox,
   outboxCount,
   readDraft,
+  readMeta,
   CachedWorker,
 } from '@/src/cache'
 import { t } from '@/src/i18n'
@@ -32,6 +33,10 @@ import {
   StatusBadge,
   EmptyState,
 } from '@/components/ui'
+import { TourModal } from '@/components/TourModal'
+import { WorkerCard } from '@/components/WorkerCard'
+import { WorkerDetailModal } from '@/components/WorkerDetailModal'
+import { NotificationBell } from '@/components/NotificationBell'
 
 interface DashboardMetricData {
   workers?: number
@@ -62,6 +67,10 @@ export default function Dashboard() {
   const [diagnosticsInfo, setDiagnosticsInfo] = useState<any>(null)
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
   const [showDiagnostics, setShowDiagnostics] = useState(false)
+  // Task 3: interactive guided tour (shown once, reopenable from dashboard).
+  const [showTour, setShowTour] = useState(false)
+  // Task 4: worker inspect bottom sheet.
+  const [detailWorker, setDetailWorker] = useState<CachedWorker | null>(null)
 
   const checkDiagnostics = useCallback(async () => {
     setDiagnosticsLoading(true)
@@ -218,6 +227,8 @@ export default function Dashboard() {
 
   useEffect(() => {
     loadCache()
+    // Task 3: auto-open the guided tour on first launch only.
+    if (!readMeta('m3_tour_completed')) setShowTour(true)
     if (session?.demo) {
       setSummary({
         workers: 1,
@@ -254,12 +265,57 @@ export default function Dashboard() {
   const filteredWorkers = cachedWorkers.filter((w) => {
     if (!searchQuery) return true
     const q = searchQuery.toLowerCase()
+    // Task 4: match against name, phone, home state and occupation — no
+    // alphanumeric patient code memorization required from field staff.
     return (
       w.patient_code.toLowerCase().includes(q) ||
       (w.display_name && w.display_name.toLowerCase().includes(q)) ||
+      (w.phone_e164 && w.phone_e164.toLowerCase().includes(q)) ||
+      (w.nativity && w.nativity.toLowerCase().includes(q)) ||
       (w.occupation && w.occupation.toLowerCase().includes(q))
     )
   })
+  // Task 5: quick-action per role, respecting single-screening governance.
+  // Clinician: Screen / Re-screen always via assessment. Health worker: only
+  // authorized re-screen on already-screened workers (routine follow-up else).
+  // Pathology: + Diagnostic. others: no quick action.
+  const quickActionFor = (w: CachedWorker) => {
+    const screened = Boolean(w.screening_completed)
+    if (isClinician) {
+      return {
+        label: screened ? tr('rescreen') : tr('screenWorker'),
+        disabled: !canWrite,
+        onPress: () =>
+          router.push({ pathname: '/assessment', params: { patientId: w.patient_code } }),
+      }
+    }
+    if (isPathology) {
+      return {
+        label: `+ ${tr('pathology')}`,
+        disabled: !canWrite && !isClinician,
+        onPress: () =>
+          router.push({ pathname: '/diagnostic', params: { patientId: w.patient_code } }),
+      }
+    }
+    if (isHealthWorker && screened) {
+      // Authorized re-screening (server enforces role + reason).
+      return {
+        label: tr('rescreen'),
+        disabled: false,
+        onPress: () =>
+          router.push({ pathname: '/assessment', params: { patientId: w.patient_code } }),
+      }
+    }
+    if (isHealthWorker) {
+      return {
+        label: `+ ${tr('followups')}`,
+        disabled: false,
+        onPress: () =>
+          router.push({ pathname: '/followup', params: { patientId: w.patient_code } }),
+      }
+    }
+    return undefined
+  }
 
   return (
     <ScrollView contentContainerStyle={s.container}>
@@ -278,6 +334,8 @@ export default function Dashboard() {
           </View>
         </View>
 
+        {/* Task 7: notification bell with unread badge, top-right header. */}
+        <NotificationBell />
         <StatusBadge
           label={online ? 'ONLINE' : 'OFFLINE'}
           variant={online ? 'success' : 'danger'}
@@ -482,7 +540,7 @@ export default function Dashboard() {
 
         <Field
           label={tr('search')}
-          placeholder="Filter by patient ID or name"
+          placeholder={tr('searchHint')}
           value={searchQuery}
           onChangeText={setSearchQuery}
         />
@@ -497,87 +555,31 @@ export default function Dashboard() {
             }
           />
         ) : (
-          filteredWorkers.map((w) => (
-            <Card key={w.id} style={s.workerCard}>
-              <View style={s.workerTop}>
-                <View style={{ flex: 1 }}>
-                  <Text style={s.workerCode}>{w.patient_code}</Text>
-                  {w.display_name && (
-                    <Text style={s.workerName}>{w.display_name}</Text>
-                  )}
-                </View>
-                <StatusBadge
-                  label={w.consent_status === 'documented' ? 'CONSENTED' : 'PENDING'}
-                  variant={w.consent_status === 'documented' ? 'success' : 'neutral'}
-                />
-              </View>
-
-              <Text style={s.workerMeta}>
-                {[
-                  w.occupation || 'Worker',
-                  w.age_years ? `${w.age_years} yrs` : null,
-                  w.gender ? w.gender : null,
-                ]
-                  .filter(Boolean)
-                  .join(' · ')}
+          filteredWorkers.map((w) => {
+            // Task 5 UI feedback: locked screening shows "Screening Completed".
+            const screeningInfo = Boolean(w.screening_completed) ? (
+              <Text style={s.screenedNote}>
+                🔒 {tr('screeningCompleted')}
+                {w.screened_at ? ` · ${String(w.screened_at).slice(0, 10)}` : ''}
               </Text>
-
-              {w.initial_symptoms && w.initial_symptoms.length > 0 && (
-                <View style={s.symptomBox}>
-                  <Text style={s.symptomLabel}>Initial symptoms:</Text>
-                  <Text style={s.symptomText}>{w.initial_symptoms.join(', ')}</Text>
-                </View>
-              )}
-
-              {/* Quick Action Buttons for this Worker */}
-              {canWrite && (isClinician || isHealthWorker || isPathology) && (
-                <View style={s.workerActionsRow}>
-                  {(isClinician || isHealthWorker) && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onPress={() =>
-                        router.push({
-                          pathname: '/assessment',
-                          params: { patientId: w.patient_code },
-                        })
+            ) : null
+            return (
+              <View key={w.id}>
+                <WorkerCard
+                  worker={w}
+                  onOpenRecord={() => setDetailWorker(w)}
+                  {...(quickActionFor(w)
+                    ? {
+                        onQuickAction: quickActionFor(w)!.onPress,
+                        quickActionLabel: quickActionFor(w)!.label,
+                        quickActionDisabled: quickActionFor(w)!.disabled,
                       }
-                    >
-                      + Assessment
-                    </Button>
-                  )}
-                  {(isPathology || isClinician) && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onPress={() =>
-                        router.push({
-                          pathname: '/diagnostic',
-                          params: { patientId: w.patient_code },
-                        })
-                      }
-                    >
-                      + Diagnostic
-                    </Button>
-                  )}
-                  {(isHealthWorker || isClinician) && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onPress={() =>
-                        router.push({
-                          pathname: '/followup',
-                          params: { patientId: w.patient_code },
-                        })
-                      }
-                    >
-                      + Follow-up
-                    </Button>
-                  )}
-                </View>
-              )}
-            </Card>
-          ))
+                    : {})}
+                />
+                {screeningInfo}
+              </View>
+            )
+          })
         )}
       </View>
 
@@ -615,7 +617,7 @@ export default function Dashboard() {
           />
         </View>
         <Text style={s.workerMeta}>
-          Configured API: {baseUrl}
+          Configured API: {base()}
         </Text>
         <Text style={s.workerMeta}>
           Local Outbox: {readOutbox(owner).length} queued for sync · Draft: {readDraft(owner) ? 'Saved' : 'None'}
@@ -715,13 +717,22 @@ export default function Dashboard() {
         </ScrollView>
       </Modal>
 
+      {/* Worker Detail Modal (Task 4: bottom sheet, four tabs) */}
+      <WorkerDetailModal
+        visible={Boolean(detailWorker)}
+        worker={detailWorker}
+        onClose={() => setDetailWorker(null)}
+      />
+
+      {/* Guided tour (Task 3): auto on first launch, reopenable below. */}
+      <TourModal visible={showTour} onClose={() => setShowTour(false)} />
+
       {/* Footer Controls */}
       <View style={s.footer}>
-        <Button
-          variant="outline"
-          size="sm"
-          onPress={() => setLanguage(language === 'en' ? 'hi' : 'en')}
-        >
+        <Button variant="outline" size="sm" onPress={() => setShowTour(true)}>
+          {tr('startTour')}
+        </Button>
+        <Button variant="outline" size="sm" onPress={() => setLanguage(language === 'en' ? 'hi' : 'en')}>
           {language === 'en' ? 'Switch to हिन्दी' : 'Switch to English'}
         </Button>
         <Button variant="danger" size="sm" onPress={logout}>
@@ -782,7 +793,7 @@ const s = StyleSheet.create({
     paddingTop: 54,
     paddingBottom: 40,
     gap: 16,
-    backgroundColor: '#f4f4f5',
+    backgroundColor: '#f8fafc',
   },
   topNav: {
     flexDirection: 'row',
@@ -794,12 +805,12 @@ const s = StyleSheet.create({
     fontSize: 11,
     letterSpacing: 1.2,
     fontWeight: '700',
-    color: '#71717a',
+    color: '#64748b',
   },
   userName: {
     fontSize: 24,
     fontWeight: '800',
-    color: '#18181b',
+    color: '#1e293b',
     marginTop: 2,
     letterSpacing: -0.5,
   },
@@ -817,19 +828,19 @@ const s = StyleSheet.create({
     flex: 1,
     backgroundColor: '#ffffff',
     borderWidth: 1,
-    borderColor: '#e4e4e7',
+    borderColor: '#e2e8f0',
     padding: 14,
     borderRadius: 12,
   },
   metricLabel: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#71717a',
+    color: '#64748b',
   },
   metricNumber: {
     fontSize: 26,
     fontWeight: '800',
-    color: '#18181b',
+    color: '#0f766e',
     marginTop: 4,
     letterSpacing: -0.5,
   },
@@ -844,11 +855,11 @@ const s = StyleSheet.create({
   sectionTitle: {
     fontWeight: '800',
     fontSize: 18,
-    color: '#18181b',
+    color: '#1e293b',
   },
   sectionSubtitle: {
     fontSize: 12,
-    color: '#71717a',
+    color: '#64748b',
   },
   actionsGrid: {
     gap: 8,
@@ -877,6 +888,12 @@ const s = StyleSheet.create({
   workerCard: {
     gap: 8,
     padding: 14,
+  },
+  screenedNote: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#059669',
+    marginTop: 2,
   },
   workerTop: {
     flexDirection: 'row',

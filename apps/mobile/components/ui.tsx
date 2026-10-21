@@ -18,35 +18,40 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 export const colors = {
-  bg: '#f4f4f5',
+  // Modern medical palette (Task 6): teal primary, sky accent, slate surfaces,
+  // with distinct semantic colors for severe / pending / cleared states.
+  bg: '#f8fafc',
   surface: '#ffffff',
-  surfaceSubtle: '#fafafa',
-  surfaceActive: '#f4f4f5',
-  border: '#e4e4e7',
-  borderStrong: '#a1a1aa',
-  text: '#18181b',
-  textSecondary: '#52525b',
-  textMuted: '#71717a',
+  surfaceSubtle: '#f8fafc',
+  surfaceActive: '#f1f5f9',
+  cardBorder: '#e2e8f0',
+  border: '#e2e8f0',
+  borderStrong: '#94a3b8',
+  text: '#1e293b',
+  textSecondary: '#475569',
+  textMuted: '#64748b',
   textInverse: '#ffffff',
-  primary: '#18181b',
-  primaryHover: '#27272a',
-  // Single restrained blue accent for primary actions, active nav, links,
-  // focus states and progress indicators (design standard: monochrome + blue).
-  accent: '#1d4ed8',
-  accentHover: '#1e40af',
-  accentBg: '#eff6ff',
-  accentBorder: '#bfdbfe',
-  danger: '#991b1b',
-  dangerBg: '#fef2f2',
-  dangerBorder: '#fecaca',
-  warning: '#854d0e',
-  warningBg: '#fefce8',
-  warningBorder: '#fef08a',
-  success: '#166534',
-  successBg: '#f0fdf4',
-  successBorder: '#bbf7d0',
-  disabledBg: '#d4d4d8',
-  disabledText: '#71717a',
+  primary: '#0f766e',
+  primaryHover: '#115e59',
+  accent: '#0284c7',
+  accentHover: '#0369a1',
+  accentBg: '#f0f9ff',
+  accentBorder: '#bae6fd',
+  danger: '#e11d48',
+  dangerBg: '#fff1f2',
+  dangerBorder: '#fecdd3',
+  warning: '#d97706',
+  warningBg: '#fffbeb',
+  warningBorder: '#fde68a',
+  success: '#059669',
+  successBg: '#ecfdf5',
+  successBorder: '#a7f3d0',
+  disabledBg: '#e2e8f0',
+  disabledText: '#94a3b8',
+  // Semantic status colors (Task 6 spec).
+  positiveSevere: '#e11d48',
+  pendingReview: '#d97706',
+  negativeCleared: '#059669',
 }
 
 interface ButtonProps {
@@ -90,7 +95,7 @@ export function Button({
       {loading ? (
         <ActivityIndicator
           size="small"
-          color={variant === 'primary' || variant === 'danger' ? '#ffffff' : '#18181b'}
+          color={variant === 'primary' || variant === 'danger' ? '#ffffff' : colors.text}
         />
       ) : typeof children === 'string' || typeof children === 'number' || (Array.isArray(children) && children.every(c => typeof c === 'string' || typeof c === 'number')) ? (
         <Text
@@ -518,7 +523,7 @@ export function EmptyState({
 export function LoadingSpinner({ message }: { message?: string }) {
   return (
     <View style={s.loadingSpinner}>
-      <ActivityIndicator size="large" color="#18181b" />
+      <ActivityIndicator size="large" color={colors.primary} />
       {message && <Text style={s.loadingSpinnerText}>{message}</Text>}
     </View>
   )
@@ -646,8 +651,9 @@ export function FormShell({ children, footer, contentContainerStyle, style, scro
 
 const s = StyleSheet.create({
   // Button
+  // Task 6: radius 12 and increased padding for better touch accessibility.
   btnBase: {
-    borderRadius: 10,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
@@ -656,19 +662,19 @@ const s = StyleSheet.create({
     width: '100%',
   },
   btnSize_sm: {
-    minHeight: 38,
-    paddingVertical: 8,
-    paddingHorizontal: 14,
+    minHeight: 40,
+    paddingVertical: 9,
+    paddingHorizontal: 16,
   },
   btnSize_md: {
-    minHeight: 48,
-    paddingVertical: 12,
-    paddingHorizontal: 18,
+    minHeight: 50,
+    paddingVertical: 13,
+    paddingHorizontal: 20,
   },
   btnSize_lg: {
-    minHeight: 54,
-    paddingVertical: 15,
-    paddingHorizontal: 22,
+    minHeight: 56,
+    paddingVertical: 16,
+    paddingHorizontal: 24,
   },
   btn_primary: {
     backgroundColor: colors.accent,
@@ -679,12 +685,12 @@ const s = StyleSheet.create({
     backgroundColor: colors.accentHover,
   },
   btn_secondary: {
-    backgroundColor: '#f4f4f5',
+    backgroundColor: '#f1f5f9',
     borderWidth: 1,
-    borderColor: '#e4e4e7',
+    borderColor: '#e2e8f0',
   },
   btnPressed_secondary: {
-    backgroundColor: '#e4e4e7',
+    backgroundColor: '#e2e8f0',
   },
   btn_outline: {
     backgroundColor: 'transparent',
@@ -692,25 +698,25 @@ const s = StyleSheet.create({
     borderColor: '#d4d4d8',
   },
   btnPressed_outline: {
-    backgroundColor: '#f4f4f5',
+    backgroundColor: '#f1f5f9',
   },
   btn_ghost: {
     backgroundColor: 'transparent',
   },
   btnPressed_ghost: {
-    backgroundColor: '#f4f4f5',
+    backgroundColor: '#f1f5f9',
   },
   btn_danger: {
-    backgroundColor: '#991b1b',
+    backgroundColor: '#e11d48',
     borderWidth: 1,
-    borderColor: '#991b1b',
+    borderColor: '#e11d48',
   },
   btnPressed_danger: {
-    backgroundColor: '#7f1d1d',
+    backgroundColor: '#be123c',
   },
   btnDisabled: {
-    backgroundColor: '#e4e4e7',
-    borderColor: '#e4e4e7',
+    backgroundColor: '#e2e8f0',
+    borderColor: '#e2e8f0',
   },
   btnTextBase: {
     fontWeight: '600',
@@ -785,7 +791,7 @@ const s = StyleSheet.create({
     paddingTop: 10,
   },
   fieldInputDisabled: {
-    backgroundColor: '#f4f4f5',
+    backgroundColor: '#f1f5f9',
     color: '#71717a',
   },
   fieldErrorText: {
@@ -803,7 +809,7 @@ const s = StyleSheet.create({
   card: {
     backgroundColor: '#ffffff',
     borderWidth: 1,
-    borderColor: '#e4e4e7',
+    borderColor: '#e2e8f0',
     borderRadius: 14,
     padding: 16,
     gap: 10,
@@ -852,11 +858,11 @@ const s = StyleSheet.create({
   },
   chipUnselected: {
     backgroundColor: '#ffffff',
-    borderColor: '#e4e4e7',
+    borderColor: '#e2e8f0',
   },
   chipDisabled: {
-    backgroundColor: '#f4f4f5',
-    borderColor: '#e4e4e7',
+    backgroundColor: '#f1f5f9',
+    borderColor: '#e2e8f0',
   },
   chipPressed: {
     opacity: 0.85,
@@ -900,8 +906,8 @@ const s = StyleSheet.create({
     textTransform: 'uppercase',
   },
   badge_neutral: {
-    backgroundColor: '#f4f4f5',
-    borderColor: '#e4e4e7',
+    backgroundColor: '#f1f5f9',
+    borderColor: '#e2e8f0',
   },
   badgeText_neutral: {
     color: '#3f3f46',
@@ -944,7 +950,7 @@ const s = StyleSheet.create({
   },
   noticeInfo: {
     backgroundColor: '#fafafa',
-    borderColor: '#e4e4e7',
+    borderColor: '#e2e8f0',
   },
   noticeInfoText: {
     color: '#3f3f46',
@@ -998,7 +1004,7 @@ const s = StyleSheet.create({
     backgroundColor: colors.accent,
   },
   stepBarInactive: {
-    backgroundColor: '#e4e4e7',
+    backgroundColor: '#e2e8f0',
   },
   stepLabelRow: {
     flexDirection: 'row',
@@ -1033,7 +1039,7 @@ const s = StyleSheet.create({
   // FormShell
   shell: {
     flex: 1,
-    backgroundColor: '#f4f4f5',
+    backgroundColor: '#f8fafc',
   },
   shellContent: {
     padding: 18,
@@ -1045,7 +1051,7 @@ const s = StyleSheet.create({
     paddingHorizontal: 18,
     backgroundColor: '#ffffff',
     borderTopWidth: 1,
-    borderTopColor: '#e4e4e7',
+    borderTopColor: '#e2e8f0',
     gap: 10,
   },
   emptyState: {
@@ -1054,7 +1060,7 @@ const s = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#ffffff',
     borderWidth: 1,
-    borderColor: '#e4e4e7',
+    borderColor: '#e2e8f0',
     borderRadius: 14,
     gap: 6,
   },

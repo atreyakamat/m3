@@ -1,6 +1,11 @@
 import * as SQLite from 'expo-sqlite'
 import { Platform } from 'react-native'
-export type CachedWorker = { id: string; patient_code: string; display_name?: string; age_years?: number; gender?: string; occupation?: string; consent_status?: string; initial_symptoms?: string[]; updated_at?: string }
+export type CachedWorker = {
+  id: string; patient_code: string; display_name?: string; age_years?: number; gender?: string; occupation?: string
+  consent_status?: string; initial_symptoms?: string[]; updated_at?: string
+  // Task 4/5: searchable identity attributes + single-screening state.
+  phone_e164?: string; nativity?: string; screening_completed?: boolean; screened_at?: string | null
+}
 
 // ---------------------------------------------------------------------------
 // Storage backend dispatch. expo-sqlite sync APIs are NOT supported on web
@@ -202,6 +207,33 @@ export function initCache() {
     CREATE TABLE IF NOT EXISTS cached_workers (owner_id TEXT NOT NULL, id TEXT NOT NULL, json TEXT NOT NULL, PRIMARY KEY(owner_id,id));
     CREATE TABLE IF NOT EXISTS local_drafts (owner_id TEXT PRIMARY KEY NOT NULL, json TEXT NOT NULL, updated_at TEXT NOT NULL);
   `)
+}
+
+// --- Generic synchronous key/value meta store (Task 1/3: server URL, tour flag) ---
+// Backed by cache_meta: SQLite on native, localStorage on web. Both remain
+// readable synchronously, so the API base URL can be resolved at module load.
+// Wrapped in try/catch: before initCache() runs (or when storage degrades) the
+// helpers no-op instead of crashing module imports.
+
+export function readMeta(key: string): string | null {
+  try {
+    if (!db) return null
+    return db.getFirstSync<{ value: string }>('SELECT value FROM cache_meta WHERE key=?', [key])?.value ?? null
+  } catch {
+    return null
+  }
+}
+
+export function writeMeta(key: string, value: string) {
+  try {
+    db.runSync('INSERT OR REPLACE INTO cache_meta(key,value) VALUES(?,?)', [key, value])
+  } catch { /* storage outage: value not retained */ }
+}
+
+export function deleteMeta(key: string) {
+  try {
+    db.runSync('DELETE FROM cache_meta WHERE key=?', [key])
+  } catch { /* storage outage: noop */ }
 }
 
 export function readWorkers(ownerId: string) {

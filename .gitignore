@@ -12,6 +12,10 @@ coverage/
 *.sqlite
 backups/
 android/
+# Task 2: keep the Expo prebuild native project (single-ABI + R8 disabled
+# paths) versioned so the size-optimized APK build is reproducible.
+!apps/mobile/android/
+android/app/build/
 ios/
 /.m3/
 /logs/
