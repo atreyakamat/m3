@@ -3,6 +3,8 @@ export type Language = 'en' | 'hi'
 const en = {
   appName: 'M3 Surveillance',
   signIn: 'Sign in',
+  signUp: 'Register / Sign up',
+  fullName: 'Full name',
   phone: 'Phone number',
   pin: 'PIN',
   demo: 'Use synthetic demo data without signing in',
@@ -107,6 +109,8 @@ export type TranslationKey = keyof typeof en
 const hi: Record<TranslationKey, string> = {
   appName: 'एम3 निगरानी',
   signIn: 'साइन इन',
+  signUp: 'नया खाता बनाएं / पंजीकरण',
+  fullName: 'पूरा नाम',
   phone: 'फ़ोन नंबर',
   pin: 'पिन',
   demo: 'बिना साइन इन के सिंथेटिक डेमो डेटा देखें',

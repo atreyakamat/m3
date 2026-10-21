@@ -14,18 +14,42 @@ M3 is a synthetic-data prototype for malaria surveillance coordination among mig
 
 ## Quick start
 
+### One-Command Unified Startup (`m3s` & `m3i`)
+
+From the `m3` repository directory (or anywhere on your machine), run:
+
+```bash
+# Start all background services (FastAPI on 8001, Vite on 5173, Expo on 8081)
+m3s
+
+# Inspect and stream real-time logs from all services with color-coded tags
+m3i
+
+# Additional commands:
+m3s status       # Check health and ports of all background services
+m3s restart      # Restart all services
+m3s stop         # Shut down all background services
+m3i api          # Stream only Backend API logs
+m3i web          # Stream only Web Console logs
+m3i mobile       # Stream only Mobile Expo logs
+```
+
+---
+
+### Manual / Containerized Start
+
 Prerequisites: Docker Compose, Python 3.12 for local API tests, Node 20+ / npm, and an Android phone with Expo Go for device testing. Commands marked **not executed in this environment** must be run on the office host.
 
 ```sh
 cp .env.example .env
-# Edit .env: replace all CHANGE_ME values and OFFICE_LAN_IP (e.g., 192.168.1.122).
+# Edit .env: replace all CHANGE_ME values and OFFICE_LAN_IP (prefer the host's Tailscale IP from `tailscale ip -4`; see docs/EXPO_GO.md).
 # Note: On hosts where port 8000 is occupied by an existing daemon (e.g., portainer),
 # use port 8001 for the FastAPI service:
-# API_BASE_URL=http://192.168.1.122:8001/api/v1
+# API_BASE_URL=http://<HOST_IP>:8001/api/v1
 docker compose up -d --build
 # Or run with the local virtual environment:
 # cd services/api && .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8001
-curl http://192.168.1.122:8001/health
+curl http://<HOST_IP>:8001/health
 ```
 
 Compose automatically runs `alembic upgrade head` before API startup. To run it explicitly:
@@ -34,7 +58,7 @@ Compose automatically runs `alembic upgrade head` before API startup. To run it 
 docker compose run --rm api alembic upgrade head
 ```
 
-The synthetic seed command prints the development-only demo accounts (`+919000000001`–`+919000000006`, PIN `2468`). Do not use those accounts or PIN in any non-synthetic setting. For a first non-seed account, generate a bootstrap secret in `.env`, then call the internal `/api/v1/bootstrap/users` endpoint with that secret in `X-Bootstrap-Secret`; examples appear in OpenAPI `/docs`. Do not put the secret in a mobile or web client.
+The synthetic seed command prints the development-only demo accounts (`+919000000001`–`+919000000007`, PIN `2468`), covering all seven PRD roles (`worker`, `clinician`, `pathologist`, `health_worker`, `research_lab`, `contractor`, `admin`). Do not use those accounts or PIN in any non-synthetic setting. For a first non-seed account, generate a bootstrap secret in `.env`, then call the internal `/api/v1/bootstrap/users` endpoint with that secret in `X-Bootstrap-Secret`; examples appear in OpenAPI `/docs`. Do not put the secret in a mobile or web client.
 
 ### Web console
 
@@ -43,10 +67,10 @@ cd apps/web
 npm install
 npm run lint
 npm run build
-VITE_API_BASE_URL=http://192.168.1.122:8001/api/v1 npm run dev -- --host 0.0.0.0 --port 5173
+VITE_API_BASE_URL=http://<HOST_IP>:8001/api/v1 npm run dev -- --host 0.0.0.0 --port 5173
 ```
 
-Open `http://192.168.1.122:5173` from an approved LAN device. It signs in against the API and shows only authorized data.
+Open `http://<HOST_IP>:5173` from an approved LAN device. It signs in against the API and shows only authorized data.
 
 ### Mobile in Expo Go
 
@@ -56,7 +80,7 @@ npm install
 npx expo install --check
 npx expo-doctor
 npm run typecheck
-REACT_NATIVE_PACKAGER_HOSTNAME=192.168.1.122 EXPO_PUBLIC_API_BASE_URL=http://192.168.1.122:8001/api/v1 npx expo start --lan
+REACT_NATIVE_PACKAGER_HOSTNAME=<HOST_IP> EXPO_PUBLIC_API_BASE_URL=http://<HOST_IP>:8001/api/v1 npx expo start --lan
 ```
 
 Scan the QR code in Expo Go. Never use `localhost` as the mobile API address: it would target the phone. The first screen also supports synthetic demo launch without an API, and includes full read-only cached worker browsing when offline. See [Expo Go setup](docs/EXPO_GO.md) and [LAN setup](docs/LAN_SETUP.md).
@@ -64,14 +88,17 @@ Scan the QR code in Expo Go. Never use `localhost` as the mobile API address: it
 ### Automated verification suites
 
 ```sh
-# Backend authorization tests
-cd services/api && .venv/bin/python -m pytest -v
+# Backend authorization, RBAC, screening, questionnaire and workflow tests (44 passed)
+cd services/api && PYTHONPATH=. .venv/bin/pytest tests/ -v
 
-# Full LAN API and Core Flow Verification
+# Full LAN API and Core Flow Verification across all 7 PRD roles
 python3 scripts/verify_e2e_lan.py
 
-# Offline Caching Spec Verification
+# Offline Caching & Draft Retention Spec Verification
 python3 scripts/verify_offline_cache.py
+
+# Mobile client TypeScript compilation
+cd apps/mobile && npm run typecheck
 ```
 
 ### Database backup and restore

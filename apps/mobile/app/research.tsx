@@ -1,247 +1,131 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState, useCallback } from 'react'
 import {
-  Alert,
-  KeyboardAvoidingView,
-  Platform,
   ScrollView,
   StyleSheet,
   Text,
   View,
 } from 'react-native'
-import { router } from 'expo-router'
-import { useForm, Controller } from 'react-hook-form'
-import { z } from 'zod'
-import { zodResolver } from '@hookform/resolvers/zod'
 import { api } from '@/src/api'
 import { t } from '@/src/i18n'
 import { useAppStore } from '@/src/store'
 import {
-  Button,
-  Field,
   Card,
+  StatusBadge,
   NoticeBanner,
-  ChipPicker,
+  LoadingSpinner,
+  EmptyState,
+  colors,
 } from '@/components/ui'
 
-const statusEnum = z.enum([
-  'not_tested',
-  'pending',
-  'inconclusive',
-  'detected',
-  'not_detected',
-])
-
-type LabStatus = z.infer<typeof statusEnum>
-
-const schema = z.object({
-  sample_id: z.string().min(1, 'Sample ID or Sample Code is required'),
-  pcr_status: statusEnum,
-  gametocyte_presence: statusEnum,
-  pfhrp2_status: statusEnum,
-  pfhrp3_status: statusEnum,
-  parasite_density: z.coerce.number().min(0).optional(),
-  parasite_density_unit: z.string().optional(),
-})
-
-type FormValues = z.infer<typeof schema>
+interface ResearchResult {
+  id: string
+  sample_id: string
+  pcr_status: string
+  species_confirmation?: string | null
+  parasite_density?: number | null
+  parasite_density_unit?: string | null
+  gametocyte_presence: string
+  pfhrp2_status: string
+  pfhrp3_status: string
+}
 
 export default function Research() {
   const { language, session, online } = useAppStore()
-  const tr = (k: Parameters<typeof t>[1]) => t(language, k)
+  const tr = useCallback((k: Parameters<typeof t>[1]) => t(language, k), [language])
 
-  const [pending, setPending] = useState(false)
-  const disabled = !online || !session?.token || session?.demo
+  const [results, setResults] = useState<ResearchResult[] | null>(null)
+  const [error, setError] = useState('')
 
-  const {
-    control,
-    handleSubmit,
-    setValue,
-    watch,
-    formState: { errors },
-  } = useForm<FormValues>({
-    resolver: zodResolver(schema),
-    defaultValues: {
-      sample_id: '',
-      pcr_status: 'pending',
-      gametocyte_presence: 'not_tested',
-      pfhrp2_status: 'not_tested',
-      pfhrp3_status: 'not_tested',
-      parasite_density_unit: 'parasites/µL',
-    },
-  })
-
-  const currentPcr = watch('pcr_status')
-  const currentGametocyte = watch('gametocyte_presence')
-  const currentPfhrp2 = watch('pfhrp2_status')
-  const currentPfhrp3 = watch('pfhrp3_status')
-
-  async function submit(values: FormValues) {
-    if (disabled) {
-      Alert.alert(tr('needsOnline'), tr('connectivityRequired'))
+  const load = useCallback(async () => {
+    if (!session?.token || !online || session?.demo) {
+      setError('')
+      setResults([])
       return
     }
-
-    setPending(true)
     try {
-      await api('/research-results', session.token, {
-        method: 'POST',
-        body: JSON.stringify(values),
-      })
-
-      Alert.alert(
-        tr('saved'),
-        'Molecular research result logged successfully.',
-        [
-          {
-            text: 'OK',
-            onPress: () => router.replace('/dashboard'),
-          },
-        ]
-      )
+      const res = await api<{ items: ResearchResult[] }>('/research-results', session.token)
+      setResults(res.items || [])
+      setError('')
     } catch (e) {
-      Alert.alert(tr('error'), e instanceof Error ? e.message : tr('error'))
-    } finally {
-      setPending(false)
+      setError(e instanceof Error ? e.message : tr('error'))
     }
+  }, [session?.token, online, session?.demo, tr])
+
+  useEffect(() => {
+    load()
+  }, [session?.token, online, session?.demo])
+
+  const statusVariant = (status: string): 'success' | 'neutral' | 'warning' => {
+    if (status === 'detected' || status === 'positive') return 'success'
+    if (status === 'not_detected') return 'neutral'
+    if (status === 'inconclusive') return 'warning'
+    return 'neutral'
   }
 
-  const labStatusOptions: { label: string; value: LabStatus }[] = [
-    { label: 'Not Tested', value: 'not_tested' },
-    { label: 'Pending', value: 'pending' },
-    { label: 'Detected', value: 'detected' },
-    { label: 'Not Detected', value: 'not_detected' },
-    { label: 'Inconclusive', value: 'inconclusive' },
-  ]
-
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      style={s.container}
-    >
-      <ScrollView
-        contentContainerStyle={s.scrollContent}
-        keyboardShouldPersistTaps="handled"
-      >
-        <View style={s.header}>
-          <Text style={s.eyebrow}>EPIDEMIOLOGY & MOLECULAR LAB</Text>
-          <Text style={s.title}>{tr('research')}</Text>
-        </View>
+    <ScrollView contentContainerStyle={s.container}>
+      <View style={s.header}>
+        <Text style={s.eyebrow}>RESEARCH LABORATORY · READ-ONLY</Text>
+        <Text style={s.title}>{tr('research')}</Text>
+      </View>
 
+      <NoticeBanner
+        type="info"
+        title="Read-only throughout the initial release"
+        message="Research Lab accounts have no create, edit or delete capability in the initial release (PRD sections 3 and 9). Results are de-identified and linked to opaque Worker IDs and sample codes only."
+      />
+
+      {!online && (
         <NoticeBanner
-          type="info"
-          title="Research Data Isolation"
-          message="Research lab findings are segregated from immediate clinical point-of-care decisions. Deletion markers and submicroscopic gametocyte detection support longitudinal molecular surveillance."
+          type="offline"
+          title={tr('offline')}
+          message="Connect to the LAN API to view the approved molecular dataset."
         />
+      )}
 
-        {!online && (
-          <NoticeBanner
-            type="offline"
-            title={tr('offline')}
-            message={tr('connectivityRequired')}
-          />
-        )}
+      {error ? <NoticeBanner type="error" title="Error" message={error} /> : null}
 
-        <Card title="Molecular Assay Logging">
-          <Controller
-            control={control}
-            name="sample_id"
-            render={({ field: { onChange, value } }) => (
-              <Field
-                label={tr('sampleId')}
-                placeholder="e.g. M3-S-58D58D60 or Sample UUID"
-                value={value}
-                onChangeText={onChange}
-                hint="Identifier of diagnostic sample collected by pathology"
-                error={errors.sample_id?.message}
-                required
-              />
-            )}
-          />
-
-          <ChipPicker<LabStatus>
-            label={tr('pcrStatus')}
-            options={labStatusOptions}
-            value={currentPcr}
-            onChange={(val) => setValue('pcr_status', val)}
-          />
-
-          <ChipPicker<LabStatus>
-            label={tr('gametocyte')}
-            options={labStatusOptions}
-            value={currentGametocyte}
-            onChange={(val) => setValue('gametocyte_presence', val)}
-          />
-
-          <ChipPicker<LabStatus>
-            label={tr('pfhrp2')}
-            options={labStatusOptions}
-            value={currentPfhrp2}
-            onChange={(val) => setValue('pfhrp2_status', val)}
-          />
-
-          <ChipPicker<LabStatus>
-            label={tr('pfhrp3')}
-            options={labStatusOptions}
-            value={currentPfhrp3}
-            onChange={(val) => setValue('pfhrp3_status', val)}
-          />
-
-          <View style={s.rowFields}>
-            <View style={{ flex: 1.5 }}>
-              <Controller
-                control={control}
-                name="parasite_density"
-                render={({ field: { onChange, value } }) => (
-                  <Field
-                    label={tr('parasiteDensity')}
-                    placeholder="e.g. 12500"
-                    value={value !== undefined ? String(value) : ''}
-                    onChangeText={onChange}
-                    keyboardType="numeric"
-                    error={errors.parasite_density?.message}
-                  />
-                )}
-              />
+      {results === null ? (
+        <LoadingSpinner message="Loading approved molecular dataset..." />
+      ) : results.length === 0 ? (
+        <EmptyState
+          title={tr('noRecords')}
+          message="No molecular research results are available in the approved scope yet."
+        />
+      ) : (
+        results.map((result) => (
+          <Card key={result.id} title={`Sample ${result.sample_id.slice(0, 8)}`}>
+            <View style={s.rowBetween}>
+              <StatusBadge label={result.pcr_status.toUpperCase()} variant={statusVariant(result.pcr_status)} />
+              <Text style={s.metaText}>PCR</Text>
             </View>
-            <View style={{ flex: 1 }}>
-              <Controller
-                control={control}
-                name="parasite_density_unit"
-                render={({ field: { onChange, value } }) => (
-                  <Field
-                    label="Unit"
-                    value={value}
-                    onChangeText={onChange}
-                  />
-                )}
-              />
+            <View style={s.statusRow}>
+              <Text style={s.labelText}>Species confirmation</Text>
+              <Text style={s.valueText}>{result.species_confirmation || 'not recorded'}</Text>
             </View>
-          </View>
-
-          <View style={s.submitAction}>
-            <Button
-              variant="primary"
-              size="lg"
-              fullWidth
-              loading={pending}
-              disabled={disabled || pending}
-              onPress={handleSubmit(submit)}
-            >
-              {tr('submit')}
-            </Button>
-          </View>
-        </Card>
-      </ScrollView>
-    </KeyboardAvoidingView>
+            <View style={s.statusRow}>
+              <Text style={s.labelText}>Parasite density</Text>
+              <Text style={s.valueText}>
+                {result.parasite_density != null ? `${result.parasite_density} ${result.parasite_density_unit || 'parasites/µL'}` : 'not recorded'}
+              </Text>
+            </View>
+            <View style={s.statusRow}>
+              <Text style={s.labelText}>Gametocytes</Text>
+              <Text style={s.valueText}>{result.gametocyte_presence}</Text>
+            </View>
+            <View style={s.statusRow}>
+              <Text style={s.labelText}>pfhrp2 / pfhrp3</Text>
+              <Text style={s.valueText}>{result.pfhrp2_status} / {result.pfhrp3_status}</Text>
+            </View>
+          </Card>
+        ))
+      )}
+    </ScrollView>
   )
 }
 
 const s = StyleSheet.create({
   container: {
-    flex: 1,
-    backgroundColor: '#f4f4f5',
-  },
-  scrollContent: {
     padding: 18,
     paddingTop: 16,
     paddingBottom: 40,
@@ -262,11 +146,32 @@ const s = StyleSheet.create({
     color: '#18181b',
     letterSpacing: -0.5,
   },
-  rowFields: {
+  rowBetween: {
     flexDirection: 'row',
-    gap: 12,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
   },
-  submitAction: {
-    marginTop: 8,
+  statusRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  labelText: {
+    fontSize: 13,
+    color: '#71717a',
+  },
+  valueText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#18181b',
+  },
+  metaText: {
+    fontSize: 11,
+    letterSpacing: 0.8,
+    fontWeight: '700',
+    color: '#71717a',
   },
 })

@@ -6,7 +6,7 @@
   "scripts": {
     "start": "expo start",
     "android": "expo start --android",
-    "lint": "expo lint",
+    "lint": "eslint --config eslint.config.mjs .",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -38,6 +38,8 @@
   },
   "devDependencies": {
     "@types/react": "~19.2.4",
+    "eslint": "^9.0.0",
+    "eslint-config-expo": "~57.0.2",
     "typescript": "~6.0.3"
   }
 }

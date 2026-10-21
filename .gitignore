@@ -13,3 +13,8 @@ coverage/
 backups/
 android/
 ios/
+/.m3/
+/logs/
+/m3s
+/m3i
+*.tsbuildinfo

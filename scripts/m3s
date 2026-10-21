@@ -1,0 +1,318 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# M3 Malaria Surveillance Platform — Unified Service Manager (m3s)
+# Starts, stops, restarts, and monitors all background M3 services:
+#   1. FastAPI Backend API        (:8001)
+#   2. Web Surveillance Console   (:5173)
+#   3. Mobile Expo Server         (:8081)
+# ==============================================================================
+
+set -e
+
+# Detect repository root
+if [ -n "$M3_DIR" ] && [ -f "$M3_DIR/services/api/app/main.py" ]; then
+    M3_ROOT="$M3_DIR"
+elif [ -f "./services/api/app/main.py" ] && [ -d "./apps/web" ]; then
+    M3_ROOT="$(pwd)"
+elif [ -f "$(git rev-parse --show-toplevel 2>/dev/null)/services/api/app/main.py" ]; then
+    M3_ROOT="$(git rev-parse --show-toplevel)"
+elif [ -f "/home/atreya/Projects/m3/services/api/app/main.py" ]; then
+    M3_ROOT="/home/atreya/Projects/m3"
+else
+    echo "Error: Could not locate M3 repository root." >&2
+    exit 1
+fi
+
+RUN_DIR="${M3_ROOT}/.m3/run"
+LOG_DIR="${M3_ROOT}/.m3/logs"
+mkdir -p "$RUN_DIR" "$LOG_DIR"
+
+# Colors for terminal output
+BOLD="\033[1m"
+GREEN="\033[32m"
+BLUE="\033[34m"
+YELLOW="\033[33m"
+RED="\033[31m"
+CYAN="\033[36m"
+RESET="\033[0m"
+
+# Detect primary LAN IP
+get_lan_ip() {
+    local ip
+    ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $7}' | tr -d '[:space:]')
+    if [ -z "$ip" ]; then
+        ip=$(hostname -I 2>/dev/null | awk '{print $1}' | tr -d '[:space:]')
+    fi
+    echo "${ip:-127.0.0.1}"
+}
+
+# Detect Tailscale IPv4 address
+get_tailscale_ip() {
+    tailscale ip -4 2>/dev/null | head -n1 || true
+}
+
+LAN_IP=$(get_lan_ip)
+TS_IP=$(get_tailscale_ip)
+
+# Choose active host IP: prefer Tailscale if present for mobile reachability
+if [ -n "$M3_HOST_IP" ]; then
+    HOST_IP="$M3_HOST_IP"
+elif [ -n "$TS_IP" ]; then
+    HOST_IP="$TS_IP"
+else
+    HOST_IP="$LAN_IP"
+fi
+
+# Helper: Get PID listening on port
+get_listen_pid() {
+    local port=$1
+    lsof -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | head -n1 || true
+}
+
+# Helper: Kill process on port
+kill_port() {
+    local port=$1
+    local pids
+    pids=$(lsof -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null || true)
+    if [ -n "$pids" ]; then
+        for pid in $pids; do
+            kill -15 "$pid" 2>/dev/null || true
+        done
+        sleep 0.5
+        pids=$(lsof -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null || true)
+        if [ -n "$pids" ]; then
+            for pid in $pids; do
+                kill -9 "$pid" 2>/dev/null || true
+            done
+        fi
+    fi
+}
+
+# Helper: Kill PID from file
+kill_pidfile() {
+    local file=$1
+    if [ -f "$file" ]; then
+        local pid
+        pid=$(cat "$file" 2>/dev/null || true)
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            kill -15 "$pid" 2>/dev/null || true
+            sleep 0.5
+            kill -9 "$pid" 2>/dev/null || true
+        fi
+        rm -f "$file"
+    fi
+}
+
+# Stop all services
+do_stop() {
+    echo -e "${YELLOW}Stopping all M3 background services...${RESET}"
+    kill_pidfile "${RUN_DIR}/api.pid"
+    kill_pidfile "${RUN_DIR}/web.pid"
+    kill_pidfile "${RUN_DIR}/mobile.pid"
+    kill_port 8001
+    kill_port 5173
+    kill_port 8081
+    echo -e "${GREEN}✓ All M3 services stopped.${RESET}"
+}
+
+# Check service status
+do_status() {
+    echo -e "\n${BOLD}================================================================${RESET}"
+    echo -e "${BOLD}       M3 Malaria Surveillance Platform — Service Status        ${RESET}"
+    echo -e "${BOLD}================================================================${RESET}"
+    echo -e "Primary Bind IP  : ${CYAN}${HOST_IP}${RESET}"
+    echo -e "Local WiFi / LAN : ${CYAN}${LAN_IP}${RESET}"
+    if [ -n "$TS_IP" ]; then
+        echo -e "Tailscale IPv4   : ${CYAN}${TS_IP}${RESET}"
+    fi
+    echo ""
+
+    # API
+    local api_status="${RED}STOPPED${RESET}"
+    local api_pid=""
+    if curl -s "http://127.0.0.1:8001/health" >/dev/null 2>&1; then
+        api_status="${GREEN}HEALTHY (HTTP 200)${RESET}"
+        api_pid=$(get_listen_pid 8001)
+    fi
+    printf "  %-22s : %-30b (Port 8001, PID: %s)\n" "Backend API" "$api_status" "${api_pid:-none}"
+    printf "  %-22s   Local:     http://localhost:8001\n" ""
+    printf "  %-22s   LAN:       http://%s:8001\n" "" "$LAN_IP"
+    if [ -n "$TS_IP" ]; then
+        printf "  %-22s   Tailscale: http://%s:8001\n" "" "$TS_IP"
+    fi
+    echo ""
+
+    # Web
+    local web_status="${RED}STOPPED${RESET}"
+    local web_pid=""
+    if curl -sI "http://127.0.0.1:5173" >/dev/null 2>&1; then
+        web_status="${GREEN}ONLINE (HTTP 200)${RESET}"
+        web_pid=$(get_listen_pid 5173)
+    fi
+    printf "  %-22s : %-30b (Port 5173, PID: %s)\n" "Web Console" "$web_status" "${web_pid:-none}"
+    printf "  %-22s   Local:     http://localhost:5173\n" ""
+    printf "  %-22s   LAN:       http://%s:5173\n" "" "$LAN_IP"
+    if [ -n "$TS_IP" ]; then
+        printf "  %-22s   Tailscale: http://%s:5173\n" "" "$TS_IP"
+    fi
+    echo ""
+
+    # Mobile
+    local mobile_status="${RED}STOPPED${RESET}"
+    local mobile_pid=""
+    if curl -sI "http://127.0.0.1:8081" >/dev/null 2>&1; then
+        mobile_status="${GREEN}ONLINE (Metro 200)${RESET}"
+        mobile_pid=$(get_listen_pid 8081)
+    fi
+    printf "  %-22s : %-30b (Port 8081, PID: %s)\n" "Mobile Expo App" "$mobile_status" "${mobile_pid:-none}"
+    printf "  %-22s   Active URL: exp://%s:8081\n" "" "$HOST_IP"
+    printf "  %-22s   Metro Web : http://%s:8081\n" "" "$HOST_IP"
+    if [ -n "$TS_IP" ]; then
+        printf "  %-22s   Tailscale : exp://%s:8081\n" "" "$TS_IP"
+    fi
+    printf "  %-22s   LAN       : exp://%s:8081\n" "" "$LAN_IP"
+
+    echo -e "\n${BOLD}----------------------------------------------------------------${RESET}"
+    echo -e "Logs: ${CYAN}${LOG_DIR}/${RESET}"
+    echo -e "• Run ${BOLD}m3s qr${RESET} to display the Expo Go QR code"
+    echo -e "• Run ${BOLD}m3i${RESET} to stream all service logs"
+    echo -e "• Run ${BOLD}m3s stop${RESET} to terminate all background services"
+    echo -e "• Run ${BOLD}m3s restart${RESET} to reboot all background services"
+    echo -e "${BOLD}================================================================${RESET}\n"
+}
+
+# Display QR code for Expo Go
+do_qr() {
+    local target_ip="${TS_IP:-$HOST_IP}"
+    local expo_url="exp://${target_ip}:8081"
+    echo -e "\n${BOLD}${BLUE}================================================================${RESET}"
+    echo -e "${BOLD}         Expo Go Connection QR Code (Tailscale Network)         ${RESET}"
+    echo -e "${BOLD}================================================================${RESET}"
+    echo -e "Target URL: ${CYAN}${BOLD}${expo_url}${RESET}\n"
+    if command -v qrencode >/dev/null 2>&1; then
+        qrencode -t ANSIUTF8 "${expo_url}"
+    else
+        echo "Notice: 'qrencode' not found; enter the URL manually in Expo Go: ${expo_url}"
+    fi
+    echo -e "\n${BOLD}Android Phone Instructions:${RESET}"
+    echo -e "1. Ensure Tailscale is connected on your Android device (Device: cmf-by-nothing-phone-2-pro)."
+    echo -e "2. Open the ${BOLD}Expo Go${RESET} app."
+    echo -e "3. Either scan the QR code above, or tap ${CYAN}'Enter URL manually'${RESET} and enter:"
+    echo -e "   ${BOLD}${expo_url}${RESET}"
+    echo -e "${BOLD}================================================================${RESET}\n"
+}
+
+# Start all services
+do_start() {
+    echo -e "\n${BOLD}${BLUE}Starting M3 Malaria Surveillance Platform...${RESET}"
+    echo -e "Detected Host IP: ${CYAN}${HOST_IP}${RESET}"
+    echo -e "Detected LAN IP : ${CYAN}${LAN_IP}${RESET}"
+    if [ -n "$TS_IP" ]; then
+        echo -e "Tailscale IPv4  : ${CYAN}${TS_IP}${RESET}"
+    fi
+
+    # Stop any conflicting or stale processes
+    kill_port 8001
+    kill_port 5173
+    kill_port 8081
+
+    # 1. Start Backend API
+    echo -e "→ Launching Backend API (FastAPI on port 8001)..."
+    (
+        cd "${M3_ROOT}/services/api"
+        export API_CORS_ORIGINS="http://localhost:5173,http://127.0.0.1:5173,http://${LAN_IP}:5173,http://${TS_IP}:5173,http://atreya-2:5173"
+        export API_BASE_URL="http://${HOST_IP}:8001/api/v1"
+        export PYTHONPATH=.
+        setsid "${M3_ROOT}/services/api/.venv/bin/uvicorn" app.main:app \
+            --host 0.0.0.0 \
+            --port 8001 \
+            --reload </dev/null >> "${LOG_DIR}/api.log" 2>&1 &
+    )
+
+    # 2. Start Web Surveillance Console
+    echo -e "→ Launching Web Console (Vite on port 5173)..."
+    (
+        cd "${M3_ROOT}/apps/web"
+        export VITE_API_BASE_URL="http://${HOST_IP}:8001/api/v1"
+        setsid npm run dev -- --host 0.0.0.0 --port 5173 </dev/null >> "${LOG_DIR}/web.log" 2>&1 &
+    )
+
+    # 3. Start Mobile Expo Server
+    echo -e "→ Launching Mobile App (Expo Metro on port 8081)..."
+    (
+        cd "${M3_ROOT}/apps/mobile"
+        export REACT_NATIVE_PACKAGER_HOSTNAME="${HOST_IP}"
+        export EXPO_PUBLIC_API_BASE_URL="http://${HOST_IP}:8001/api/v1"
+        export CI=1
+        setsid npx expo start --host lan --port 8081 </dev/null >> "${LOG_DIR}/mobile.log" 2>&1 &
+    )
+
+    # Generate QR code PNG
+    if command -v qrencode >/dev/null 2>&1; then
+        qrencode -o "${M3_ROOT}/apps/mobile/expo-qr.png" -s 10 "exp://${HOST_IP}:8081" 2>/dev/null || true
+    fi
+
+    # Health check wait loop
+    echo -n "Waiting for services to become healthy"
+    local max_wait=15
+    local waited=0
+    local api_ready=false
+    local web_ready=false
+    local mobile_ready=false
+
+    while [ $waited -lt $max_wait ]; do
+        sleep 1
+        echo -n "."
+        waited=$((waited + 1))
+
+        if [ "$api_ready" = false ] && curl -s "http://127.0.0.1:8001/health" >/dev/null 2>&1; then
+            api_ready=true
+            lsof -ti :8001 | head -n1 > "${RUN_DIR}/api.pid" 2>/dev/null || true
+        fi
+        if [ "$web_ready" = false ] && curl -sI "http://127.0.0.1:5173" >/dev/null 2>&1; then
+            web_ready=true
+            lsof -ti :5173 | head -n1 > "${RUN_DIR}/web.pid" 2>/dev/null || true
+        fi
+        if [ "$mobile_ready" = false ] && curl -sI "http://127.0.0.1:8081" >/dev/null 2>&1; then
+            mobile_ready=true
+            lsof -ti :8081 | head -n1 > "${RUN_DIR}/mobile.pid" 2>/dev/null || true
+        fi
+
+        if [ "$api_ready" = true ] && [ "$web_ready" = true ] && [ "$mobile_ready" = true ]; then
+            break
+        fi
+    done
+    echo ""
+
+    # Ensure PIDs are written
+    lsof -ti :8001 | head -n1 > "${RUN_DIR}/api.pid" 2>/dev/null || true
+    lsof -ti :5173 | head -n1 > "${RUN_DIR}/web.pid" 2>/dev/null || true
+    lsof -ti :8081 | head -n1 > "${RUN_DIR}/mobile.pid" 2>/dev/null || true
+
+    do_status
+}
+
+# Dispatch command
+case "${1:-start}" in
+    start)
+        do_start
+        ;;
+    stop)
+        do_stop
+        ;;
+    restart)
+        do_stop
+        sleep 1
+        do_start
+        ;;
+    status)
+        do_status
+        ;;
+    qr)
+        do_qr
+        ;;
+    *)
+        echo "Usage: m3s [start|stop|restart|status|qr]"
+        exit 1
+        ;;
+esac

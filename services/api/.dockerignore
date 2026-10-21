@@ -1,3 +1,7 @@
 __pycache__
 .pytest_cache
-test-m3.db
+*.pyc
+.venv
+*.db
+*.db*
+.m3

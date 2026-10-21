@@ -33,6 +33,8 @@ export default function Layout() {
       <Stack.Screen name="followup" options={{ title: 'Follow-up' }} />
       <Stack.Screen name="research" options={{ title: 'Research lab' }} />
       <Stack.Screen name="sites" options={{ title: 'Construction sites' }} />
+      <Stack.Screen name="symptom" options={{ title: 'Health report' }} />
+      <Stack.Screen name="mycases" options={{ title: 'My cases' }} />
     </Stack>
   )
 }

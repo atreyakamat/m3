@@ -17,7 +17,8 @@
       "typedRoutes": true
     },
     "android": {
-      "package": "org.m3.surveillance"
+      "package": "org.m3.surveillance",
+      "softwareKeyboardLayoutMode": "resize"
     }
   }
 }

@@ -37,8 +37,19 @@ def create_token(user: User, db: Session):
     return token, expires
 
 def get_current_user(credentials: HTTPAuthorizationCredentials | None = Depends(bearer), db: Session = Depends(get_db)) -> User:
-    if not credentials:
+    session, user = _authenticate(credentials, db)
+    if not session or not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+    return user
+
+def current_session(credentials: HTTPAuthorizationCredentials | None = Depends(bearer), db: Session = Depends(get_db)):
+    """Returns the (session, user) behind the presented token or raises 401."""
+    return _authenticate(credentials, db)
+
+def _authenticate(credentials, db):
+    if not credentials:
+        return None, None
+    payload = None
     try:
         payload = jwt.decode(credentials.credentials, get_settings().jwt_secret, algorithms=["HS256"])
         session = db.get(DbSession, payload.get("sid"))
@@ -50,8 +61,15 @@ def get_current_user(credentials: HTTPAuthorizationCredentials | None = Depends(
     if expires_at and expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
     if not session or session.revoked_at or not expires_at or expires_at < now() or not user or not user.active:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
-    return user
+        return None, None
+    return session, user
+
+def revoke_session(db: Session, session_id: str):
+    """Server-side logout (P2): the presented token stops granting access immediately."""
+    session = db.get(DbSession, session_id)
+    if session and session.revoked_at is None:
+        session.revoked_at = now()
+        db.add(session)
 
 def active_roles(user: User, db: Session) -> set[str]:
     return set(db.scalars(select(RoleAssignment.role).where(RoleAssignment.user_id == user.id, RoleAssignment.revoked_at.is_(None))).all())

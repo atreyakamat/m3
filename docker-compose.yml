@@ -1,39 +1,48 @@
 services:
   db:
     image: postgres:16-alpine
+    container_name: m3-compose-postgres
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${COMPOSE_POSTGRES_DB:-m3_compose_dev}
+      POSTGRES_USER: ${COMPOSE_POSTGRES_USER:-m3_compose_user}
+      POSTGRES_PASSWORD: ${COMPOSE_POSTGRES_PASSWORD:-m3_compose_dev_secret}
     volumes:
-      - m3-postgres:/var/lib/postgresql/data
+      - m3-compose-postgres-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 5s
       retries: 12
     restart: unless-stopped
-    networks: [private]
+    networks:
+      - private
 
   api:
     build: ./services/api
-    env_file: .env
+    container_name: m3-compose-api
     depends_on:
       db:
         condition: service_healthy
     ports:
-      - "8000:8000"
-    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+      - "${COMPOSE_API_PORT:-8003}:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg://${COMPOSE_POSTGRES_USER:-m3_compose_user}:${COMPOSE_POSTGRES_PASSWORD:-m3_compose_dev_secret}@db:5432/${COMPOSE_POSTGRES_DB:-m3_compose_dev}
+      JWT_SECRET: ${JWT_SECRET:-m3-compose-jwt-secret-dev-only}
+      BOOTSTRAP_SECRET: ${BOOTSTRAP_SECRET:-m3-compose-bootstrap-secret}
+      API_CORS_ORIGINS: ${API_CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      PORT: 8000
+    command: sh -c "alembic upgrade head && python -m app.seed && uvicorn app.main:app --host 0.0.0.0 --port 8000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 15s
       timeout: 5s
       retries: 5
     restart: unless-stopped
-    networks: [private]
+    networks:
+      - private
 
 volumes:
-  m3-postgres:
+  m3-compose-postgres-data:
 
 networks:
   private:

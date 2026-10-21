@@ -1,6 +1,9 @@
-import React, { ReactNode, useState } from 'react'
+import React, { ReactNode, createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -12,6 +15,7 @@ import {
   ViewStyle,
   TextStyle,
 } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 export const colors = {
   bg: '#f4f4f5',
@@ -26,6 +30,12 @@ export const colors = {
   textInverse: '#ffffff',
   primary: '#18181b',
   primaryHover: '#27272a',
+  // Single restrained blue accent for primary actions, active nav, links,
+  // focus states and progress indicators (design standard: monochrome + blue).
+  accent: '#1d4ed8',
+  accentHover: '#1e40af',
+  accentBg: '#eff6ff',
+  accentBorder: '#bfdbfe',
   danger: '#991b1b',
   dangerBg: '#fef2f2',
   dangerBorder: '#fecaca',
@@ -82,7 +92,7 @@ export function Button({
           size="small"
           color={variant === 'primary' || variant === 'danger' ? '#ffffff' : '#18181b'}
         />
-      ) : typeof children === 'string' ? (
+      ) : typeof children === 'string' || typeof children === 'number' || (Array.isArray(children) && children.every(c => typeof c === 'string' || typeof c === 'number')) ? (
         <Text
           style={[
             s.btnTextBase,
@@ -106,6 +116,9 @@ interface FieldProps extends TextInputProps {
   hint?: string
   required?: boolean
   containerStyle?: ViewStyle
+  /** Registers this field under a validation-error key so the form shell can
+   * scroll it into view when validation fails (and when it gains focus). */
+  errorKey?: string
 }
 
 export function Field({
@@ -114,13 +127,27 @@ export function Field({
   hint,
   required = false,
   containerStyle,
+  errorKey,
   style,
   ...props
 }: FieldProps) {
   const [isFocused, setIsFocused] = useState(false)
+  const containerRef = useRef<View>(null)
+  const scrollApi = useContext(FormScrollContext)
+
+  // Expose the container for scroll-to-first-error.
+  useEffect(() => {
+    if (!errorKey || !scrollApi) return
+    return scrollApi.registerField(errorKey, containerRef.current)
+  }, [errorKey, scrollApi])
+
+  const revealOnFocus = () => {
+    setIsFocused(true)
+    if (scrollApi && containerRef.current) scrollApi.revealNode(containerRef.current)
+  }
 
   return (
-    <View style={[s.fieldContainer, containerStyle]}>
+    <View ref={containerRef} style={[s.fieldContainer, containerStyle]} collapsable={false}>
       <View style={s.fieldLabelRow}>
         <Text style={s.fieldLabel}>
           {label}
@@ -138,7 +165,7 @@ export function Field({
         ]}
         placeholderTextColor="#a1a1aa"
         onFocus={(e) => {
-          setIsFocused(true)
+          revealOnFocus()
           props.onFocus?.(e)
         }}
         onBlur={(e) => {
@@ -196,6 +223,8 @@ interface ChipPickerProps<T = string> {
   hint?: string
   disabled?: boolean
   horizontal?: boolean
+  /** Validation-error key for scroll-into-view registration. */
+  errorKey?: string
 }
 
 export function ChipPicker<T extends string = string>({
@@ -207,9 +236,18 @@ export function ChipPicker<T extends string = string>({
   hint,
   disabled = false,
   horizontal = true,
+  errorKey,
 }: ChipPickerProps<T>) {
+  const containerRef = useRef<View>(null)
+  const scrollApi = useContext(FormScrollContext)
+
+  useEffect(() => {
+    if (!errorKey || !scrollApi) return
+    return scrollApi.registerField(errorKey, containerRef.current)
+  }, [errorKey, scrollApi])
+
   return (
-    <View style={s.fieldContainer}>
+    <View ref={containerRef} style={s.fieldContainer} collapsable={false}>
       {label && <Text style={s.fieldLabel}>{label}</Text>}
       <View style={[s.chipContainer, !horizontal && s.chipContainerVertical]}>
         {options.map((opt) => {
@@ -259,6 +297,91 @@ export function ChipPicker<T extends string = string>({
     </View>
   )
 }
+
+interface MultiChipPickerProps<T = string> {
+  label?: string
+  options: ChipOption<T>[]
+  values: T[]
+  onToggle: (val: T) => void
+  error?: string
+  hint?: string
+  disabled?: boolean
+  horizontal?: boolean
+  /** Validation-error key for scroll-into-view registration. */
+  errorKey?: string
+}
+
+export function MultiChipPicker<T extends string = string>({
+  label,
+  options,
+  values,
+  onToggle,
+  error,
+  hint,
+  disabled = false,
+  horizontal = true,
+  errorKey,
+}: MultiChipPickerProps<T>) {
+  const containerRef = useRef<View>(null)
+  const scrollApi = useContext(FormScrollContext)
+
+  useEffect(() => {
+    if (!errorKey || !scrollApi) return
+    return scrollApi.registerField(errorKey, containerRef.current)
+  }, [errorKey, scrollApi])
+
+  return (
+    <View ref={containerRef} style={s.fieldContainer} collapsable={false}>
+      {label && <Text style={s.fieldLabel}>{label}</Text>}
+      <View style={[s.chipContainer, !horizontal && s.chipContainerVertical]}>
+        {options.map((opt) => {
+          const isSelected = values.includes(opt.value)
+          return (
+            <Pressable
+              key={opt.value}
+              disabled={disabled}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: isSelected }}
+              onPress={() => onToggle(opt.value)}
+              style={({ pressed }) => [
+                s.chip,
+                isSelected ? s.chipSelected : s.chipUnselected,
+                disabled && s.chipDisabled,
+                pressed && !disabled && s.chipPressed,
+              ]}
+            >
+              <Text
+                style={[
+                  s.chipText,
+                  isSelected ? s.chipTextSelected : s.chipTextUnselected,
+                  disabled && s.chipTextDisabled,
+                ]}
+              >
+                {isSelected ? '✓ ' : ''}{opt.label}
+              </Text>
+              {opt.caption && (
+                <Text
+                  style={[
+                    s.chipCaption,
+                    isSelected ? s.chipCaptionSelected : s.chipCaptionUnselected,
+                  ]}
+                >
+                  {opt.caption}
+                </Text>
+              )}
+            </Pressable>
+          )
+        })}
+      </View>
+      {error ? (
+        <Text style={s.fieldErrorText}>{error}</Text>
+      ) : hint ? (
+        <Text style={s.fieldHintText}>{hint}</Text>
+      ) : null}
+    </View>
+  )
+}
+
 
 interface StatusBadgeProps {
   label: string
@@ -394,10 +517,130 @@ export function EmptyState({
 
 export function LoadingSpinner({ message }: { message?: string }) {
   return (
-    <View style={s.loadingContainer}>
+    <View style={s.loadingSpinner}>
       <ActivityIndicator size="large" color="#18181b" />
-      {message && <Text style={s.loadingText}>{message}</Text>}
+      {message && <Text style={s.loadingSpinnerText}>{message}</Text>}
     </View>
+  )
+}
+
+/* ---------------------------------------------------------------------------
+ * FormShell: keyboard-safe scrollable form container.
+ *
+ * - KeyboardAvoidingView pads on iOS; on Android we rely on the window
+ *   resize mode (app.json android.softwareKeyboardLayoutMode: "resize"), so
+ *   the scroll area and the sticky footer compress above the keyboard.
+ * - The optional `footer` renders OUTSIDE the ScrollView (sticky bottom bar),
+ *   keeping Previous/Next/Submit reachable even with the keyboard open.
+ * - Exposes a FormScrollApi through context: focus-aware scrolling
+ *   (revealNode), scroll-to-first-error (registered via errorKey props),
+ *   and scrollToTop. Inputs registered with errorKey get `collapsable={false}`
+ *   so they stay measurable in the native hierarchy on Android.
+ * ------------------------------------------------------------------------- */
+
+export interface FormScrollApi {
+  registerField: (key: string, node: View | null) => () => void
+  revealNode: (node: View | null) => void
+  scrollToError: (key: string) => void
+  scrollToTop: () => void
+}
+
+const FormScrollContext = createContext<FormScrollApi | null>(null)
+
+export function useFormScroll(): FormScrollApi | null {
+  return useContext(FormScrollContext)
+}
+
+interface FormShellProps {
+  children: ReactNode
+  /** Sticky bottom controls (navigation/submit); rendered above the keyboard. */
+  footer?: ReactNode
+  contentContainerStyle?: StyleProp<ViewStyle>
+  style?: StyleProp<ViewStyle>
+  /** If provided, receives the FormScrollApi so a screen-level handler
+   * (which sits OUTSIDE the context provider) can scroll to errors. */
+  scrollApiRef?: { current: FormScrollApi | null }
+}
+
+export function FormShell({ children, footer, contentContainerStyle, style, scrollApiRef }: FormShellProps) {
+  const insets = useSafeAreaInsets()
+  const scrollViewRef = useRef<ScrollView>(null)
+  const fieldsRef = useRef(new Map<string, View>())
+
+  const api = useMemo<FormScrollApi>(() => ({
+    registerField(key, node) {
+      if (!node) return () => {}
+      fieldsRef.current.set(key, node)
+      return () => {
+        if (fieldsRef.current.get(key) === node) fieldsRef.current.delete(key)
+      }
+    },
+    revealNode(node) {
+      const sv = scrollViewRef.current
+      if (!sv || !node) return
+      // Preferred: RN's ScrollResponder helper computes visibility against
+      // the keyboard and scrolls only when the node would be obscured.
+      const responder = (sv as any).getScrollResponder?.bind
+        ? (sv as any).getScrollResponder()
+        : null
+      if (responder?.scrollResponderScrollNativeHandleToKeyboard) {
+        try {
+          responder.scrollResponderScrollNativeHandleToKeyboard(node, 90, true)
+          return
+        } catch {
+          /* fall through to manual measurement */
+        }
+      }
+      // Fallback: measure relative to the scroll content and scroll manually.
+      const inner: any = typeof (sv as any).getInnerViewNode === 'function'
+        ? (sv as any).getInnerViewNode()
+        : sv
+      try {
+        node.measureLayout(inner, (_x, y) => {
+          if (typeof y !== 'number' || y < 0) return
+          sv.scrollTo({ y: Math.max(0, y - 88), animated: true })
+        }, () => { /* not laid out yet */ })
+      } catch {
+        /* node unmounted between registration and call */
+      }
+    },
+    scrollToError(key) {
+      const node = fieldsRef.current.get(key)
+      if (node) api.revealNode(node)
+      else scrollViewRef.current?.scrollTo({ y: 0, animated: true })
+    },
+    scrollToTop() {
+      scrollViewRef.current?.scrollTo({ y: 0, animated: true })
+    },
+  }), [])
+
+  // Publish the api to the parent screen (hook context only reaches
+  // descendants, and screen-level handlers render FormShell itself).
+  useEffect(() => {
+    if (scrollApiRef) scrollApiRef.current = api
+  }, [api, scrollApiRef])
+
+  return (
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      style={[s.shell, style]}
+    >
+      <FormScrollContext.Provider value={api}>
+        <ScrollView
+          ref={scrollViewRef}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          contentContainerStyle={[s.shellContent, { paddingBottom: (insets.bottom || 0) + 24 }, contentContainerStyle]}
+        >
+          {children}
+        </ScrollView>
+        {footer ? (
+          <View style={[s.shellFooter, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+            {footer}
+          </View>
+        ) : null}
+      </FormScrollContext.Provider>
+    </KeyboardAvoidingView>
   )
 }
 
@@ -428,12 +671,12 @@ const s = StyleSheet.create({
     paddingHorizontal: 22,
   },
   btn_primary: {
-    backgroundColor: '#18181b',
+    backgroundColor: colors.accent,
     borderWidth: 1,
-    borderColor: '#18181b',
+    borderColor: colors.accent,
   },
   btnPressed_primary: {
-    backgroundColor: '#27272a',
+    backgroundColor: colors.accentHover,
   },
   btn_secondary: {
     backgroundColor: '#f4f4f5',
@@ -752,7 +995,7 @@ const s = StyleSheet.create({
     borderRadius: 2,
   },
   stepBarActive: {
-    backgroundColor: '#18181b',
+    backgroundColor: colors.accent,
   },
   stepBarInactive: {
     backgroundColor: '#e4e4e7',
@@ -776,6 +1019,35 @@ const s = StyleSheet.create({
   },
 
   // EmptyState
+  // LoadingSpinner
+  loadingSpinner: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 32,
+    gap: 10,
+  },
+  loadingSpinnerText: {
+    fontSize: 14,
+    color: '#71717a',
+  },
+  // FormShell
+  shell: {
+    flex: 1,
+    backgroundColor: '#f4f4f5',
+  },
+  shellContent: {
+    padding: 18,
+    paddingTop: 16,
+    gap: 16,
+  },
+  shellFooter: {
+    paddingTop: 10,
+    paddingHorizontal: 18,
+    backgroundColor: '#ffffff',
+    borderTopWidth: 1,
+    borderTopColor: '#e4e4e7',
+    gap: 10,
+  },
   emptyState: {
     padding: 24,
     alignItems: 'center',

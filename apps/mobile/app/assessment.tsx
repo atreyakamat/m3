@@ -1,9 +1,6 @@
 import React, { useState } from 'react'
 import {
   Alert,
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -19,6 +16,7 @@ import {
   Button,
   Field,
   Card,
+  FormShell,
   NoticeBanner,
   ChipPicker,
 } from '@/components/ui'
@@ -30,6 +28,11 @@ const schema = z.object({
   symptoms: z.string().optional(),
   notes: z.string().max(4000).optional(),
   treatment_documentation: z.string().max(2000).optional(),
+  admission_status: z.enum(['outpatient', 'admitted']).default('outpatient'),
+  admission_severity: z.enum(['mild', 'severe']).optional(),
+  treatment_completed: z.enum(['yes', 'no', 'not_applicable']).default('not_applicable'),
+  treatment_incomplete_reason: z.string().max(500).optional(),
+  discharge_date: z.string().optional(),
 })
 
 type FormValues = z.infer<typeof schema>
@@ -44,7 +47,8 @@ export default function Assessment() {
   const [pending, setPending] = useState(false)
   const [selectedSymptoms, setSelectedSymptoms] = useState<string[]>([])
 
-  const disabled = !online || !session?.token || session?.demo
+  const isClinician = session?.user?.roles?.includes('clinician')
+  const disabled = !online || !session?.token || session?.demo || !isClinician
 
   const {
     control,
@@ -61,10 +65,17 @@ export default function Assessment() {
       symptoms: '',
       notes: '',
       treatment_documentation: '',
+      admission_status: 'outpatient',
+      admission_severity: undefined,
+      treatment_completed: 'not_applicable',
+      treatment_incomplete_reason: '',
+      discharge_date: '',
     },
   })
 
-  const currentPatientId = watch('patient_id')
+  const currentAdmission = watch('admission_status')
+  const currentSeverity = watch('admission_severity')
+  const currentTreatmentCompleted = watch('treatment_completed')
 
   function toggleSymptom(sym: string) {
     const next = selectedSymptoms.includes(sym)
@@ -80,6 +91,16 @@ export default function Assessment() {
       return
     }
 
+    if (values.admission_status === 'admitted' && !values.admission_severity) {
+      Alert.alert('Severity Required', 'Please specify clinical severity (mild or severe) for admitted workers.')
+      return
+    }
+
+    if (values.treatment_completed === 'no' && !values.treatment_incomplete_reason?.trim()) {
+      Alert.alert('Reason Required', 'Please specify the reason why treatment was not completed.')
+      return
+    }
+
     setPending(true)
     try {
       const allSymptoms = (values.symptoms || '')
@@ -87,13 +108,24 @@ export default function Assessment() {
         .map((s) => s.trim())
         .filter(Boolean)
 
-      const payload = {
+      const payload: Record<string, any> = {
         patient_id: values.patient_id.trim(),
         temperature_c: values.temperature_c,
         fever_duration_days: values.fever_duration_days,
         symptoms: allSymptoms,
         notes: values.notes || undefined,
         treatment_documentation: values.treatment_documentation || undefined,
+        admission_status: values.admission_status,
+        treatment_completed: values.treatment_completed,
+      }
+
+      if (values.admission_status === 'admitted') {
+        payload.admission_severity = values.admission_severity
+        if (values.discharge_date?.trim()) payload.discharge_date = values.discharge_date.trim()
+      }
+
+      if (values.treatment_completed === 'no') {
+        payload.treatment_incomplete_reason = values.treatment_incomplete_reason?.trim()
       }
 
       await api('/assessments', session.token, {
@@ -119,23 +151,16 @@ export default function Assessment() {
   }
 
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      style={s.container}
-    >
-      <ScrollView
-        contentContainerStyle={s.scrollContent}
-        keyboardShouldPersistTaps="handled"
-      >
+    <FormShell contentContainerStyle={s.scrollContent}>
         <View style={s.header}>
-          <Text style={s.eyebrow}>CLINICAL OBSERVATION</Text>
+          <Text style={s.eyebrow}>MEDICAL ENCOUNTER</Text>
           <Text style={s.title}>{tr('clinical')}</Text>
         </View>
 
         <NoticeBanner
           type="info"
-          title="Clinical Scope Notice"
-          message="Entries document observations only. The platform makes no automated diagnosis or treatment recommendations; all clinical decisions rest with the attending clinician."
+          title="Clinician Clinical Scope"
+          message="Document objective clinical observations, admissions, and treatment course adherence. Automated clinical decision support or treatment prescribing algorithms are not permitted."
         />
 
         {!online && (
@@ -146,7 +171,7 @@ export default function Assessment() {
           />
         )}
 
-        <Card title="Assessment Details">
+        <Card title="Clinical Observation Assessment">
           <Controller
             control={control}
             name="patient_id"
@@ -241,6 +266,74 @@ export default function Assessment() {
             />
           </View>
 
+          {/* Admission Flow */}
+          <ChipPicker
+            label="Encounter / Admission Status"
+            options={[
+              { label: 'Outpatient Encounter', value: 'outpatient' },
+              { label: 'Inpatient Hospital Admission', value: 'admitted' },
+            ]}
+            value={currentAdmission}
+            onChange={(val) => setValue('admission_status', val as any)}
+          />
+
+          {currentAdmission === 'admitted' && (
+            <View style={s.admissionBox}>
+              <Text style={s.admissionTitle}>Inpatient Admission Details</Text>
+              <ChipPicker
+                label="Admission Clinical Severity"
+                options={[
+                  { label: 'Mild / Moderate', value: 'mild' },
+                  { label: 'Severe / Complicated', value: 'severe' },
+                ]}
+                value={currentSeverity || 'mild'}
+                onChange={(val) => setValue('admission_severity', val as any)}
+                hint="Severity classification required when admitted"
+              />
+
+              <Controller
+                control={control}
+                name="discharge_date"
+                render={({ field: { onChange, value } }) => (
+                  <Field
+                    label="Discharge Date (YYYY-MM-DD)"
+                    placeholder="e.g. 2026-10-25"
+                    value={value}
+                    onChangeText={onChange}
+                  />
+                )}
+              />
+            </View>
+          )}
+
+          {/* Treatment Completion */}
+          <ChipPicker
+            label="Treatment Course Completion Status"
+            options={[
+              { label: 'Not Applicable / Pending', value: 'not_applicable' },
+              { label: 'Course Completed', value: 'yes' },
+              { label: 'Course Incomplete', value: 'no' },
+            ]}
+            value={currentTreatmentCompleted}
+            onChange={(val) => setValue('treatment_completed', val as any)}
+          />
+
+          {currentTreatmentCompleted === 'no' && (
+            <Controller
+              control={control}
+              name="treatment_incomplete_reason"
+              render={({ field: { onChange, value } }) => (
+                <Field
+                  label="Reason Course Incomplete"
+                  placeholder="e.g. Migrated, side effects, lost to follow-up..."
+                  value={value}
+                  onChangeText={onChange}
+                  required
+                />
+              )}
+            />
+          )}
+
           <Controller
             control={control}
             name="notes"
@@ -287,8 +380,7 @@ export default function Assessment() {
             </Button>
           </View>
         </Card>
-      </ScrollView>
-    </KeyboardAvoidingView>
+    </FormShell>
   )
 }
 
@@ -334,6 +426,20 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
+  },
+  admissionBox: {
+    padding: 12,
+    backgroundColor: '#fafafa',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e4e4e7',
+    gap: 8,
+  },
+  admissionTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#18181b',
+    textTransform: 'uppercase',
   },
   submitAction: {
     marginTop: 8,
