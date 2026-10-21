@@ -5,22 +5,23 @@ function getBaseUrl(): string {
     if (envUrl) {
       try {
         const parsed = new URL(envUrl)
-        // If loaded via localhost/127.0.0.1 and env is a stale LAN IP, prefer current hostname on port 8001
+        const targetPort = parsed.port || '8003'
+        // If loaded via localhost/127.0.0.1, use current hostname with configured API port
         if ((host === 'localhost' || host === '127.0.0.1') && parsed.hostname !== host) {
-          return `http://${host}:${parsed.port || '8001'}${parsed.pathname}`
+          return `http://${host}:${targetPort}${parsed.pathname}`
         }
-        // If loaded via active LAN IP and env points to a different IP, adapt to active host
+        // If loaded via active LAN IP, adapt to active hostname with configured API port
         if (host && parsed.hostname !== host && !['localhost', '127.0.0.1'].includes(parsed.hostname)) {
-          return `${parsed.protocol}//${host}:${parsed.port || '8001'}${parsed.pathname}`
+          return `${parsed.protocol}//${host}:${targetPort}${parsed.pathname}`
         }
         return envUrl
       } catch {
         return envUrl
       }
     }
-    return `${window.location.protocol}//${host}:8001/api/v1`
+    return `${window.location.protocol}//${host}:8003/api/v1`
   }
-  return 'http://localhost:8001/api/v1'
+  return 'http://localhost:8003/api/v1'
 }
 
 export class ApiError extends Error {

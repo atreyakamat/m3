@@ -18,7 +18,8 @@
     },
     "android": {
       "package": "org.m3.surveillance",
-      "softwareKeyboardLayoutMode": "resize"
+      "softwareKeyboardLayoutMode": "resize",
+      "usesCleartextTraffic": true
     }
   }
 }

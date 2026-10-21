@@ -26,8 +26,8 @@ import urllib.parse
 import urllib.request
 import uuid
 
-BASE = os.environ.get("M3_E2E_BASE_URL", "http://127.0.0.1:8001/api/v1").rstrip("/")
-SECRET = os.environ.get("M3_BOOTSTRAP_SECRET", "")
+BASE = (os.environ.get("M3_E2E_BASE_URL") or os.environ.get("API_BASE_URL") or "http://127.0.0.1:8003/api/v1").rstrip("/")
+SECRET = os.environ.get("M3_BOOTSTRAP_SECRET") or os.environ.get("BOOTSTRAP_SECRET") or "m3_bootstrap_secret_development_only"
 PIN = "2468"
 RUN = uuid.uuid4().hex[:8]
 SYMPTOM_MARKER = f"SYMPTOMTEXT-{RUN}"

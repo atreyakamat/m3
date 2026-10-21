@@ -1,6 +1,28 @@
 import * as SecureStore from 'expo-secure-store'
 import { Platform } from 'react-native'
-const base = process.env.EXPO_PUBLIC_API_BASE_URL || 'http://10.0.2.2:8000/api/v1'
+function resolveMobileBaseUrl(): string {
+  const envUrl = process.env.EXPO_PUBLIC_API_BASE_URL
+  if (envUrl) {
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location) {
+      try {
+        const parsed = new URL(envUrl)
+        const host = window.location.hostname
+        if ((host === 'localhost' || host === '127.0.0.1') && parsed.hostname !== host) {
+          return `http://${host}:${parsed.port || '8003'}${parsed.pathname}`
+        }
+      } catch {
+        // use envUrl
+      }
+    }
+    return envUrl
+  }
+  if (Platform.OS === 'android') {
+    return 'http://10.0.2.2:8003/api/v1'
+  }
+  return 'http://127.0.0.1:8003/api/v1'
+}
+
+const base = resolveMobileBaseUrl()
 export const baseUrl = base
 
 // Token persistence: native platforms use the OS keystore (SecureStore).

@@ -19,37 +19,39 @@ M3 is a synthetic-data prototype for malaria surveillance coordination among mig
 From the `m3` repository directory (or anywhere on your machine), run:
 
 ```bash
-# Start all background services (FastAPI on 8001, Vite on 5173, Expo on 8081)
-m3s
+# Start all background services (Docker API on 8003, PostgreSQL internal, Vite on 5173, Expo on 8081)
+./scripts/m3s start
 
 # Inspect and stream real-time logs from all services with color-coded tags
-m3i
+./scripts/m3i
 
 # Additional commands:
-m3s status       # Check health and ports of all background services
-m3s restart      # Restart all services
-m3s stop         # Shut down all background services
-m3i api          # Stream only Backend API logs
-m3i web          # Stream only Web Console logs
-m3i mobile       # Stream only Mobile Expo logs
+./scripts/m3s status       # Check health and ports of all background services
+./scripts/m3s qr           # Display Expo Go QR code for physical Android phone
+./scripts/m3s restart      # Restart all services (re-discovers current LAN IP)
+./scripts/m3s stop         # Shut down host background services
+./scripts/m3s docker-logs  # Stream Docker API and PostgreSQL logs
+./scripts/m3s docker-down  # Stop Docker containers
+./scripts/m3i api          # Stream only Backend API logs
+./scripts/m3i web          # Stream only Web Console logs
+./scripts/m3i mobile       # Stream only Mobile Expo logs
 ```
 
 ---
 
 ### Manual / Containerized Start
 
-Prerequisites: Docker Compose, Python 3.12 for local API tests, Node 20+ / npm, and an Android phone with Expo Go for device testing. Commands marked **not executed in this environment** must be run on the office host.
+Prerequisites: Docker Compose, Python 3.12 for local API tests, Node 20+ / npm, and an Android phone with Expo Go for device testing. See [LAN setup](docs/LAN_SETUP.md) for detailed networking instructions.
 
 ```sh
 cp .env.example .env
-# Edit .env: replace all CHANGE_ME values and OFFICE_LAN_IP (prefer the host's Tailscale IP from `tailscale ip -4`; see docs/EXPO_GO.md).
-# Note: On hosts where port 8000 is occupied by an existing daemon (e.g., portainer),
-# use port 8001 for the FastAPI service:
-# API_BASE_URL=http://<HOST_IP>:8001/api/v1
+# Edit .env: replace all CHANGE_ME values and OFFICE_LAN_IP with your host LAN IP.
+# Docker Compose publishes the FastAPI service on port 8003:
+# API_BASE_URL=http://<HOST_LAN_IP>:8003/api/v1
 docker compose up -d --build
-# Or run with the local virtual environment:
+# Or run with the local virtual environment (port 8001):
 # cd services/api && .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8001
-curl http://<HOST_IP>:8001/health
+curl http://<HOST_LAN_IP>:8003/health
 ```
 
 Compose automatically runs `alembic upgrade head` before API startup. To run it explicitly:
@@ -80,7 +82,7 @@ npm install
 npx expo install --check
 npx expo-doctor
 npm run typecheck
-REACT_NATIVE_PACKAGER_HOSTNAME=<HOST_IP> EXPO_PUBLIC_API_BASE_URL=http://<HOST_IP>:8001/api/v1 npx expo start --lan
+REACT_NATIVE_PACKAGER_HOSTNAME=<HOST_IP> EXPO_PUBLIC_API_BASE_URL=http://<HOST_IP>:8003/api/v1 npx expo start --lan
 ```
 
 Scan the QR code in Expo Go. Never use `localhost` as the mobile API address: it would target the phone. The first screen also supports synthetic demo launch without an API, and includes full read-only cached worker browsing when offline. See [Expo Go setup](docs/EXPO_GO.md) and [LAN setup](docs/LAN_SETUP.md).

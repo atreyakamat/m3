@@ -24,7 +24,7 @@ def get_lan_ip():
         return "127.0.0.1"
 
 HOST = get_lan_ip()
-BASE_URL = os.environ.get("M3_E2E_BASE_URL", f"http://{HOST}:8001/api/v1")
+BASE_URL = os.environ.get("M3_E2E_BASE_URL") or os.environ.get("API_BASE_URL") or f"http://{HOST}:8003/api/v1"
 HEALTH_URL = BASE_URL.replace("/api/v1", "/health")
 DEMO_PIN = "2468"
 
@@ -253,11 +253,26 @@ def main():
     print(f"PASS: Pathologist recorded Day 7 slide follow-up (reason: {slide_res['not_received_reason']})")
 
     # Step H: Contractor links worker to site and records reported health status
+    # Ensure contractor uses a site they manage (create one if necessary)
+    site_suffix = f"LAN{int(datetime.now().timestamp()) % 10000}"
+    status, new_site = req("/sites", method="POST", body={
+        "name": f"Contractor Build {site_suffix}",
+        "code": f"SITE-{site_suffix}",
+        "district": "North Goa",
+        "area": "Panaji"
+    }, token=tokens["contractor"])
+    if status == 201:
+        contractor_site_id = new_site["id"]
+        contractor_site_code = new_site["code"]
+    else:
+        contractor_site_id = site_id
+        contractor_site_code = site_code
+
     status, membership = req(f"/workers/{patient_id}/membership", method="POST", body={
-        "site_id": site_id,
+        "site_id": contractor_site_id,
     }, token=tokens["contractor"])
     assert status == 201, f"Contractor membership failed: {status} {membership}"
-    print(f"PASS: Contractor linked worker to site {site_code}: Membership ID={membership['id']}")
+    print(f"PASS: Contractor linked worker to site {contractor_site_code}: Membership ID={membership['id']}")
 
     status, status_res = req(f"/workers/{patient_id}/reported-status", method="PUT", body={
         "malaria_status": "pv",

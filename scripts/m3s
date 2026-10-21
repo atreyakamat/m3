@@ -54,13 +54,23 @@ get_tailscale_ip() {
 LAN_IP=$(get_lan_ip)
 TS_IP=$(get_tailscale_ip)
 
-# Choose active host IP: prefer Tailscale if present for mobile reachability
+# Choose active host IP: default to primary local WiFi / LAN IPv4 address for local network development.
+# Only use Tailscale if explicitly requested via M3_USE_TAILSCALE=1.
 if [ -n "$M3_HOST_IP" ]; then
     HOST_IP="$M3_HOST_IP"
-elif [ -n "$TS_IP" ]; then
+elif [ "${M3_USE_TAILSCALE:-0}" = "1" ] && [ -n "$TS_IP" ]; then
     HOST_IP="$TS_IP"
 else
     HOST_IP="$LAN_IP"
+fi
+
+# Determine active API port: 8003 for Docker Compose API, 8001 for host standalone API
+if [ -n "$M3_API_PORT" ]; then
+    API_PORT="$M3_API_PORT"
+elif curl -s "http://127.0.0.1:8003/health" >/dev/null 2>&1; then
+    API_PORT="8003"
+else
+    API_PORT="8003"
 fi
 
 # Helper: Get PID listening on port
@@ -112,6 +122,10 @@ do_stop() {
     kill_port 8001
     kill_port 5173
     kill_port 8081
+    if [ "${STOP_DOCKER:-0}" = "1" ]; then
+        echo -e "${YELLOW}Stopping Docker Compose containers...${RESET}"
+        docker compose stop 2>/dev/null || true
+    fi
     echo -e "${GREEN}✓ All M3 services stopped.${RESET}"
 }
 
@@ -127,22 +141,45 @@ do_status() {
     fi
     echo ""
 
-    # API
-    local api_status="${RED}STOPPED${RESET}"
-    local api_pid=""
-    if curl -s "http://127.0.0.1:8001/health" >/dev/null 2>&1; then
-        api_status="${GREEN}HEALTHY (HTTP 200)${RESET}"
-        api_pid=$(get_listen_pid 8001)
+    # Docker Postgres DB
+    local db_status="${RED}STOPPED${RESET}"
+    if docker ps --filter "name=m3-compose-postgres" --filter "status=running" -q 2>/dev/null | grep -q .; then
+        if docker ps --filter "name=m3-compose-postgres" | grep -q "healthy"; then
+            db_status="${GREEN}HEALTHY (PostgreSQL 16)${RESET}"
+        else
+            db_status="${YELLOW}STARTING (PostgreSQL 16)${RESET}"
+        fi
     fi
-    printf "  %-22s : %-30b (Port 8001, PID: %s)\n" "Backend API" "$api_status" "${api_pid:-none}"
-    printf "  %-22s   Local:     http://localhost:8001\n" ""
-    printf "  %-22s   LAN:       http://%s:8001\n" "" "$LAN_IP"
+    printf "  %-22s : %-30b (Internal Docker Port 5432)\n" "Docker PostgreSQL" "$db_status"
+    printf "  %-22s   Storage:   m3-compose-postgres-data (Volume preserved)\n" ""
+    printf "  %-22s   Exposure:  Internal Docker network only (LAN blocked)\n" ""
+    echo ""
+
+    # Docker API (Port 8003)
+    local docker_api_status="${RED}STOPPED${RESET}"
+    if curl -s "http://127.0.0.1:8003/health" >/dev/null 2>&1; then
+        docker_api_status="${GREEN}HEALTHY (HTTP 200)${RESET}"
+    fi
+    printf "  %-22s : %-30b (Port 8003, Docker container)\n" "Docker FastAPI" "$docker_api_status"
+    printf "  %-22s   Local:     http://localhost:8003\n" ""
+    printf "  %-22s   LAN:       http://%s:8003\n" "" "$LAN_IP"
     if [ -n "$TS_IP" ]; then
-        printf "  %-22s   Tailscale: http://%s:8001\n" "" "$TS_IP"
+        printf "  %-22s   Tailscale: http://%s:8003\n" "" "$TS_IP"
     fi
     echo ""
 
-    # Web
+    # Host Standalone API (Port 8001) if running
+    local host_api_status="${RED}STOPPED${RESET}"
+    local host_api_pid=""
+    if curl -s "http://127.0.0.1:8001/health" >/dev/null 2>&1; then
+        host_api_status="${GREEN}ONLINE (HTTP 200)${RESET}"
+        host_api_pid=$(get_listen_pid 8001)
+        printf "  %-22s : %-30b (Port 8001, Host PID: %s)\n" "Host Standalone API" "$host_api_status" "${host_api_pid:-none}"
+        printf "  %-22s   LAN:       http://%s:8001\n" "" "$LAN_IP"
+        echo ""
+    fi
+
+    # Web Console (Port 5173)
     local web_status="${RED}STOPPED${RESET}"
     local web_pid=""
     if curl -sI "http://127.0.0.1:5173" >/dev/null 2>&1; then
@@ -157,7 +194,7 @@ do_status() {
     fi
     echo ""
 
-    # Mobile
+    # Mobile Expo Server (Port 8081)
     local mobile_status="${RED}STOPPED${RESET}"
     local mobile_pid=""
     if curl -sI "http://127.0.0.1:8081" >/dev/null 2>&1; then
@@ -165,37 +202,36 @@ do_status() {
         mobile_pid=$(get_listen_pid 8081)
     fi
     printf "  %-22s : %-30b (Port 8081, PID: %s)\n" "Mobile Expo App" "$mobile_status" "${mobile_pid:-none}"
-    printf "  %-22s   Active URL: exp://%s:8081\n" "" "$HOST_IP"
-    printf "  %-22s   Metro Web : http://%s:8081\n" "" "$HOST_IP"
-    if [ -n "$TS_IP" ]; then
-        printf "  %-22s   Tailscale : exp://%s:8081\n" "" "$TS_IP"
-    fi
-    printf "  %-22s   LAN       : exp://%s:8081\n" "" "$LAN_IP"
+    printf "  %-22s   Expo Go URL: exp://%s:8081\n" "" "$HOST_IP"
+    printf "  %-22s   Metro Web  : http://%s:8081\n" "" "$HOST_IP"
+    printf "  %-22s   API Target : http://%s:%s/api/v1\n" "" "$HOST_IP" "$API_PORT"
 
     echo -e "\n${BOLD}----------------------------------------------------------------${RESET}"
     echo -e "Logs: ${CYAN}${LOG_DIR}/${RESET}"
-    echo -e "• Run ${BOLD}m3s qr${RESET} to display the Expo Go QR code"
-    echo -e "• Run ${BOLD}m3i${RESET} to stream all service logs"
-    echo -e "• Run ${BOLD}m3s stop${RESET} to terminate all background services"
+    echo -e "• Run ${BOLD}m3s qr${RESET} to display the Expo Go QR code for physical Android"
+    echo -e "• Run ${BOLD}m3s docker-logs${RESET} to stream Docker container logs"
+    echo -e "• Run ${BOLD}m3s stop${RESET} to terminate web and mobile background services"
     echo -e "• Run ${BOLD}m3s restart${RESET} to reboot all background services"
     echo -e "${BOLD}================================================================${RESET}\n"
 }
 
 # Display QR code for Expo Go
 do_qr() {
-    local target_ip="${TS_IP:-$HOST_IP}"
+    local target_ip="${HOST_IP}"
     local expo_url="exp://${target_ip}:8081"
     echo -e "\n${BOLD}${BLUE}================================================================${RESET}"
-    echo -e "${BOLD}         Expo Go Connection QR Code (Tailscale Network)         ${RESET}"
+    echo -e "${BOLD}         Expo Go Connection QR Code (Local WiFi / LAN)          ${RESET}"
     echo -e "${BOLD}================================================================${RESET}"
-    echo -e "Target URL: ${CYAN}${BOLD}${expo_url}${RESET}\n"
+    echo -e "Target URL    : ${CYAN}${BOLD}${expo_url}${RESET}"
+    echo -e "Local LAN IPv4: ${CYAN}${BOLD}${LAN_IP}${RESET}"
+    echo -e "API Target    : ${CYAN}${BOLD}http://${target_ip}:${API_PORT}/api/v1${RESET}\n"
     if command -v qrencode >/dev/null 2>&1; then
         qrencode -t ANSIUTF8 "${expo_url}"
     else
         echo "Notice: 'qrencode' not found; enter the URL manually in Expo Go: ${expo_url}"
     fi
-    echo -e "\n${BOLD}Android Phone Instructions:${RESET}"
-    echo -e "1. Ensure Tailscale is connected on your Android device (Device: cmf-by-nothing-phone-2-pro)."
+    echo -e "\n${BOLD}Physical Android Phone Instructions:${RESET}"
+    echo -e "1. Connect your Android device to the SAME local Wi-Fi / LAN network."
     echo -e "2. Open the ${BOLD}Expo Go${RESET} app."
     echo -e "3. Either scan the QR code above, or tap ${CYAN}'Enter URL manually'${RESET} and enter:"
     echo -e "   ${BOLD}${expo_url}${RESET}"
@@ -205,35 +241,38 @@ do_qr() {
 # Start all services
 do_start() {
     echo -e "\n${BOLD}${BLUE}Starting M3 Malaria Surveillance Platform...${RESET}"
-    echo -e "Detected Host IP: ${CYAN}${HOST_IP}${RESET}"
     echo -e "Detected LAN IP : ${CYAN}${LAN_IP}${RESET}"
-    if [ -n "$TS_IP" ]; then
-        echo -e "Tailscale IPv4  : ${CYAN}${TS_IP}${RESET}"
-    fi
+    echo -e "Active Host IP  : ${CYAN}${HOST_IP}${RESET}"
+    echo -e "Target API Port : ${CYAN}${API_PORT}${RESET}"
 
-    # Stop any conflicting or stale processes
-    kill_port 8001
+    # Stop any conflicting web or mobile processes
     kill_port 5173
     kill_port 8081
 
-    # 1. Start Backend API
-    echo -e "→ Launching Backend API (FastAPI on port 8001)..."
-    (
-        cd "${M3_ROOT}/services/api"
-        export API_CORS_ORIGINS="http://localhost:5173,http://127.0.0.1:5173,http://${LAN_IP}:5173,http://${TS_IP}:5173,http://atreya-2:5173"
-        export API_BASE_URL="http://${HOST_IP}:8001/api/v1"
-        export PYTHONPATH=.
-        setsid "${M3_ROOT}/services/api/.venv/bin/uvicorn" app.main:app \
-            --host 0.0.0.0 \
-            --port 8001 \
-            --reload </dev/null >> "${LOG_DIR}/api.log" 2>&1 &
-    )
+    # 1. Start Docker Backend (PostgreSQL + FastAPI on port 8003) if Docker enabled
+    if [ "${M3_USE_DOCKER:-1}" = "1" ]; then
+        echo -e "→ Ensuring Docker Compose services (Postgres + FastAPI :8003) are running..."
+        docker compose up -d
+    else
+        echo -e "→ Launching Host Backend API (FastAPI on port 8001)..."
+        kill_port 8001
+        (
+            cd "${M3_ROOT}/services/api"
+            export API_CORS_ORIGINS="http://localhost:5173,http://127.0.0.1:5173,http://${LAN_IP}:5173,http://${LAN_IP}:8081"
+            export API_BASE_URL="http://${HOST_IP}:8001/api/v1"
+            export PYTHONPATH=.
+            setsid "${M3_ROOT}/services/api/.venv/bin/uvicorn" app.main:app \
+                --host 0.0.0.0 \
+                --port 8001 \
+                --reload </dev/null >> "${LOG_DIR}/api.log" 2>&1 &
+        )
+    fi
 
     # 2. Start Web Surveillance Console
     echo -e "→ Launching Web Console (Vite on port 5173)..."
     (
         cd "${M3_ROOT}/apps/web"
-        export VITE_API_BASE_URL="http://${HOST_IP}:8001/api/v1"
+        export VITE_API_BASE_URL="http://${HOST_IP}:${API_PORT}/api/v1"
         setsid npm run dev -- --host 0.0.0.0 --port 5173 </dev/null >> "${LOG_DIR}/web.log" 2>&1 &
     )
 
@@ -242,7 +281,7 @@ do_start() {
     (
         cd "${M3_ROOT}/apps/mobile"
         export REACT_NATIVE_PACKAGER_HOSTNAME="${HOST_IP}"
-        export EXPO_PUBLIC_API_BASE_URL="http://${HOST_IP}:8001/api/v1"
+        export EXPO_PUBLIC_API_BASE_URL="http://${HOST_IP}:${API_PORT}/api/v1"
         export CI=1
         setsid npx expo start --host lan --port 8081 </dev/null >> "${LOG_DIR}/mobile.log" 2>&1 &
     )
@@ -254,7 +293,7 @@ do_start() {
 
     # Health check wait loop
     echo -n "Waiting for services to become healthy"
-    local max_wait=15
+    local max_wait=20
     local waited=0
     local api_ready=false
     local web_ready=false
@@ -265,9 +304,8 @@ do_start() {
         echo -n "."
         waited=$((waited + 1))
 
-        if [ "$api_ready" = false ] && curl -s "http://127.0.0.1:8001/health" >/dev/null 2>&1; then
+        if [ "$api_ready" = false ] && curl -s "http://127.0.0.1:${API_PORT}/health" >/dev/null 2>&1; then
             api_ready=true
-            lsof -ti :8001 | head -n1 > "${RUN_DIR}/api.pid" 2>/dev/null || true
         fi
         if [ "$web_ready" = false ] && curl -sI "http://127.0.0.1:5173" >/dev/null 2>&1; then
             web_ready=true
@@ -285,7 +323,6 @@ do_start() {
     echo ""
 
     # Ensure PIDs are written
-    lsof -ti :8001 | head -n1 > "${RUN_DIR}/api.pid" 2>/dev/null || true
     lsof -ti :5173 | head -n1 > "${RUN_DIR}/web.pid" 2>/dev/null || true
     lsof -ti :8081 | head -n1 > "${RUN_DIR}/mobile.pid" 2>/dev/null || true
 
@@ -311,8 +348,23 @@ case "${1:-start}" in
     qr)
         do_qr
         ;;
+    docker-up)
+        echo -e "${BLUE}Starting Docker Compose services (Postgres + FastAPI :8003)...${RESET}"
+        docker compose up -d
+        ;;
+    docker-down)
+        echo -e "${YELLOW}Stopping Docker Compose services (preserving volumes)...${RESET}"
+        docker compose stop
+        ;;
+    docker-restart)
+        echo -e "${YELLOW}Restarting Docker Compose services...${RESET}"
+        docker compose restart
+        ;;
+    docker-logs)
+        docker compose logs -f
+        ;;
     *)
-        echo "Usage: m3s [start|stop|restart|status|qr]"
+        echo "Usage: m3s [start|stop|restart|status|qr|docker-up|docker-down|docker-restart|docker-logs]"
         exit 1
         ;;
 esac
