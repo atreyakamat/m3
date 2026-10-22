@@ -46,7 +46,8 @@ def req(path, method="GET", body=None, token=None, headers=None):
         return e.code, parsed
 
 def query_pg(sql):
-    cmd = ["docker", "compose", "exec", "-T", "db", "psql", "-U", "m3_compose_user", "-d", "m3_compose_dev", "-tAc", sql]
+    cmd = ["docker", "compose", "exec", "-T", "db", "psql", "-U", "m3_compose_user", "-d",
+           os.environ.get("M3_PSQL_DB", "m3_compose_dev"), "-tAc", sql]
     res = subprocess.run(cmd, capture_output=True, text=True, check=True)
     return res.stdout.strip()
 

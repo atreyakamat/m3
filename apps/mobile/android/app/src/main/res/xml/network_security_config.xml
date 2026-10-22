@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  M3 Network Security Policy.
+
+  - Base configuration permits cleartext HTTP traffic so the release app can connect
+    to dynamic local area network (LAN) development servers or custom development
+    IPs entered at runtime via the Server Configuration screen without needing native rebuilds.
+  - Standard Android trust anchors (system CAs and user-installed CAs) are preserved
+    for TLS connections, ensuring strict HTTPS/TLS certificate verification remains intact.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
+

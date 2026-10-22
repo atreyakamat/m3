@@ -59,6 +59,10 @@ services:
       - "${COMPOSE_API_PORT:-8003}:8000"
     environment:
       DATABASE_URL: postgresql+psycopg://${COMPOSE_POSTGRES_USER:-m3_compose_user}:${COMPOSE_POSTGRES_PASSWORD:-m3_compose_dev_secret}@db:5432/${COMPOSE_POSTGRES_DB:-m3_compose_dev}
+      # Required explicit database mode (postgres | sqlite | none). Compose
+      # defaults to postgres so the stack keeps using ONLY the DATABASE_URL
+      # above; the app itself never picks a database silently.
+      M3_DATABASE_MODE: ${M3_DATABASE_MODE:-postgres}
       JWT_SECRET: ${JWT_SECRET:-m3-compose-jwt-secret-dev-only}
       BOOTSTRAP_SECRET: ${BOOTSTRAP_SECRET:-m3-compose-bootstrap-secret}
       API_CORS_ORIGINS: ${API_CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://localhost:8081,http://127.0.0.1:8081,http://192.168.1.116:5173,http://192.168.1.116:8081}

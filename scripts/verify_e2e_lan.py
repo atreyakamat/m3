@@ -210,6 +210,9 @@ def main():
         "admission_severity": "mild",
         "admission_species": "pv",
         "treatment_completed": "yes",
+        # Single-screening rule: intake (Step C) already stamped the worker as
+        # screened, so this clinician encounter is a re-screen and needs a reason.
+        "re_screening_reason": "Clinical review after routine intake screening",
         "notes": "Patient admitted for clinical monitoring and RDT confirmation",
         "treatment_documentation": "Initiated standard oral chloroquine protocol",
     }, token=tokens["clinician"])

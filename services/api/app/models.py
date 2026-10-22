@@ -183,13 +183,17 @@ class ClinicalAssessment(Timestamped, Base):
     treatment_documentation: Mapped[str | None] = mapped_column(Text, nullable=True)
     admission_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
     admission_species: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    admission_species_other_note: Mapped[str | None] = mapped_column(String(200), nullable=True)
     admission_symptoms: Mapped[list | None] = mapped_column(JSON, nullable=True)
     admission_severity: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    symptoms_other_note: Mapped[str | None] = mapped_column(String(200), nullable=True)
     treatment_completed: Mapped[str | None] = mapped_column(String(30), nullable=True)
     treatment_incomplete_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
     discharge_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
     outcome: Mapped[str | None] = mapped_column(String(100), nullable=True)
     remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
+    treatment_given: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    follow_up_assigned: Mapped[str | None] = mapped_column(String(10), nullable=True)
     # Authorization trail for a re-screen: required when the worker already
     # completed an initial screening and an authorized clinician/health_worker
     # records a new encounter.

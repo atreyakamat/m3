@@ -15,7 +15,7 @@ from starlette.responses import JSONResponse
 from . import permissions, questionnaire as questionnaire_schema
 from .analytics import router as analytics_router
 from .config import get_settings
-from .database import get_db
+from .database import get_db, DATABASE_MODE, DB_DISABLED_DETAIL, database_enabled, engine
 from . import kafka_producer
 from .models import (AuditEvent, Case, CaseEvent, ClinicalAssessment, DiagnosticTest, Facility, FollowUp,
                      MolecularResult, Notification, Patient, QuestionnaireSubmission, RoleAssignment, Sample, Session,
@@ -44,6 +44,39 @@ app.add_middleware(CORSMiddleware, allow_origins=get_settings().cors_list, allow
 app.include_router(analytics_router)
 
 @app.on_event("startup")
+def _verify_database_configuration():
+    """Startup safety checks per database mode.
+
+    - postgres / sqlite: verify configuration and connectivity with a trivial
+      query; a configuration or connectivity problem must FAIL THE STARTUP with
+      a clear error instead of limping until the first request. Error messages
+      never include the configured URL or credentials.
+    - none: log the validation-only banner. No connection is attempted, no
+      migration runs, no table is created, no seed data is installed.
+    """
+    if DATABASE_MODE == "none":
+        logger.warning(
+            "VALIDATION-ONLY MODE: running with M3_DATABASE_MODE=none. "
+            "No database engine exists; no migrations, table creation, or seed "
+            "data run; database-dependent endpoints return 503 database_disabled."
+        )
+        return
+    logger.info("Database mode: %s (strict, from M3_DATABASE_MODE); verifying connectivity...", DATABASE_MODE)
+    assert database_enabled() and engine is not None
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception as exc:  # noqa: BLE001 — any failure must stop startup
+        logger.error("Startup database connectivity check failed (mode=%s): %s", DATABASE_MODE, type(exc).__name__)
+        raise RuntimeError(
+            f"The configured database could not be reached (M3_DATABASE_MODE={DATABASE_MODE}). "
+            "The server refuses to start rather than falling back to another database. "
+            "Fix DATABASE_URL / M3_DATABASE_MODE and restart. "
+            f"Underlying error: {type(exc).__name__}"
+        ) from exc
+    logger.info("Database connectivity verified at startup (mode=%s).", DATABASE_MODE)
+
+@app.on_event("startup")
 async def _start_event_hub():
     """Best-effort Kafka event hub (Task 7): a background drain task publishes
     surveillance events to topic `malaria.events` when KAFKA_ENABLED=true;
@@ -61,6 +94,29 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         content={"detail": "An internal server error occurred.", "request_id": req_id},
         headers={"X-Request-ID": req_id}
     )
+
+@app.post("/api/v1/validate-questionnaire", tags=["operations"])
+def validate_questionnaire(body: QuestionnaireSubmitIn):
+    """Database-free request validation (all modes, including `none`).
+
+    Runs the SAME validation the worker questionnaire submission performs
+    (schema plus the pure questionnaire rules), but NEVER persists, never
+    touches the database, and never reports a submission as accepted. The
+    response always states `"persisted": false` so a caller cannot mistake
+    schema validity for a stored record. Deliberately unauthenticated: it can
+    only return rule errors for the submitted payload — it has no access to
+    stored data — so it can serve request-shape validation in validation-only
+    mode without weakening any authorization boundary.
+    """
+    errors = questionnaire_schema.validate(body.data)
+    return {
+        "valid": not errors,
+        "errors": errors,
+        "schema_version": questionnaire_schema.SCHEMA_VERSION,
+        "database_mode": DATABASE_MODE,
+        "persisted": False,
+        "note": "Validation only — nothing was stored.",
+    }
 
 def page(items, total, offset, limit): return {"items": items, "total": total, "offset": offset, "limit": limit}
 
@@ -189,14 +245,26 @@ def _assert_not_stale(base_updated_at, current_updated_at):
 
 @app.get("/health", tags=["operations"])
 @app.get("/api/v1/health", tags=["operations"])
-def health(db: Session = Depends(get_db)):
-    """Liveness probe: verifies the API process is alive and responsive."""
-    return {"status": "ok", "service": "m3-api", "time": now()}
+def health():
+    """Liveness probe: verifies the API process is alive and responsive.
+
+    Deliberately database-independent (works in every mode). Reports the active
+    database mode (postgres | sqlite | none) but never connection strings,
+    credentials, or hosts.
+    """
+    return {"status": "ok", "service": "m3-api", "time": now(),
+            "database_mode": DATABASE_MODE,
+            "database": "disabled" if DATABASE_MODE == "none" else "enabled",
+            "validation_only": DATABASE_MODE == "none"}
 
 @app.get("/ready", tags=["operations"])
 @app.get("/api/v1/ready", tags=["operations"])
 def readiness(db: Session = Depends(get_db)):
     """Readiness probe: validates database connectivity and transaction capability."""
+    if DATABASE_MODE == "none":
+        # Intentional 503: readiness means "database ready", and there is
+        # deliberately no database in validation-only mode.
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=DB_DISABLED_DETAIL)
     try:
         db.execute(select(1))
         return {
@@ -213,6 +281,8 @@ def readiness(db: Session = Depends(get_db)):
 @app.get("/api/v1/diagnostics", tags=["operations"])
 def diagnostics(db: Session = Depends(get_db)):
     """Operational diagnostics and self-healing report (Section 4.1/4.4)."""
+    if DATABASE_MODE == "none":
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=DB_DISABLED_DETAIL)
     db_ready = True
     db_error = None
     try:
@@ -700,6 +770,14 @@ def create_worker(body: WorkerCreate, response: Response = None, user: User = De
             raise HTTPException(status_code=409, detail="A worker profile with this mobile already exists",
                 headers={"X-Duplicate-Candidates": ",".join(d.patient_code for d in duplicates[:10])})
     dob = date.fromisoformat(body.dob) if body.dob else None
+    if dob is not None:
+        # Same runtime-side DOB range as the questionnaire (questionnaire.py):
+        # today..today-90 calendar years, computed at request time.
+        from .questionnaire import dob_boundaries
+        min_dob, max_dob = dob_boundaries()
+        if not (min_dob <= body.dob <= max_dob):
+            raise HTTPException(422, "Date of birth must fall between "
+                                f"{min_dob} (90 years ago) and {max_dob} (today)")
     derived_age = body.age_years
     age_flagged = False
     if dob:
@@ -907,6 +985,18 @@ def add_travel(patient_id: str, body: TravelEpisodeCreate, user: User = Depends(
         if user.patient_id != patient.id: _die_forbidden_write()
     else:
         require_patient_scope(user, db, patient_id)
+    # Planned travel looks forward and describes a concrete trip: the client
+    # workflow (sites.tsx travel modal) requires both the departure date and
+    # the destination, so the server mirrors that requiredness. Historical
+    # episodes (planned=False, e.g. arrival into Goa) stay unrestricted.
+    if body.planned:
+        if not body.departure_date:
+            raise HTTPException(422, "Departure date is required for planned travel")
+        if not str(body.destination or "").strip():
+            raise HTTPException(422, "Destination is required for planned travel")
+        from .questionnaire import today_iso
+        if body.departure_date < today_iso():
+            raise HTTPException(422, "Planned departure date cannot be in the past")
     if body.departure_date and body.return_date and body.return_date < body.departure_date:
         raise HTTPException(422, "Return date cannot precede departure date")
     event = TravelEvent(patient_id=patient.id, origin=body.origin, destination=body.destination,
@@ -1037,6 +1127,13 @@ def list_questionnaires(patient_id: str, user: User = Depends(get_current_user),
 
 # ---------------- Clinical ----------------
 
+def _treatment_incomplete(completed_code: str | None) -> bool:
+    """True for every source-questionnaire code meaning the course was not
+    fully completed during admission (No - still on treatment, No - stopped
+    early, legacy plain `no`)."""
+    return completed_code in ("no", "no_still_on_treatment", "no_stopped_early")
+
+
 @app.get("/api/v1/assessments", tags=["clinical"])
 def assessments(patient_id: str, user: User = Depends(require_roles("clinician", "admin")), db: Session = Depends(get_db)):
     patient = require_patient_scope(user, db, patient_id)
@@ -1053,9 +1150,12 @@ def assessments(patient_id: str, user: User = Depends(require_roles("clinician",
                         comorbidities=x.comorbidities, systolic_bp=x.systolic_bp, diastolic_bp=x.diastolic_bp,
                         can_attend_testing=x.can_attend_testing, notes=x.notes, treatment_documentation=x.treatment_documentation,
                         admission_species=x.admission_species, admission_symptoms=x.admission_symptoms,
+                        admission_species_other_note=x.admission_species_other_note,
+                        symptoms_other_note=x.symptoms_other_note,
                         admission_severity=x.admission_severity, treatment_completed=x.treatment_completed,
                         treatment_incomplete_reason=x.treatment_incomplete_reason, discharge_date=x.discharge_date,
-                        outcome=x.outcome, remarks=x.remarks)
+                        outcome=x.outcome, remarks=x.remarks,
+                        treatment_given=x.treatment_given, follow_up_assigned=x.follow_up_assigned)
         items.append(item)
     audit(db, user, "assessment.list_viewed", "worker", patient.id); db.commit()
     return {"items": items}
@@ -1069,7 +1169,9 @@ def create_assessment(body: AssessmentCreate, user: User = Depends(get_current_u
     RE-SCREEN, permitted only for the `clinician` and `health_worker` roles and
     only with a recorded reason. Everyone else is rejected with 403. The reason
     is stored on the assessment row and journaled in the audit log."""
-    patient = db.get(Patient, body.patient_id)
+    # Patient identity resolution: accept the patient_code used by the UI as
+    # well as the UUID (same resolution contract as /travel and /samples).
+    patient = resolve_patient(db, body.patient_id)
     roles = effective(user, db)
     if patient is None:
         # Preserve the original role matrix: non-clinicians get 403 on this
@@ -1091,7 +1193,7 @@ def create_assessment(body: AssessmentCreate, user: User = Depends(get_current_u
         reason = (body.re_screening_reason or "").strip()
         if not reason:
             raise HTTPException(422, "A re-screening reason is required because this worker has already completed screening")
-        if body.treatment_completed == "no" and not str(body.treatment_incomplete_reason or "").strip():
+        if _treatment_incomplete(body.treatment_completed) and not str(body.treatment_incomplete_reason or "").strip():
             raise HTTPException(422, "Reason is required when treatment was not completed")
         if body.admission_status and body.admission_status.lower() == "admitted" and not body.admission_severity:
             raise HTTPException(422, "Severity is required when the worker is admitted")
@@ -1100,7 +1202,7 @@ def create_assessment(body: AssessmentCreate, user: User = Depends(get_current_u
     else:
         if body.facility_id and not db.get(Facility, body.facility_id):
             raise HTTPException(422, "Unknown facility reference")
-        if body.treatment_completed == "no" and not str(body.treatment_incomplete_reason or "").strip():
+        if _treatment_incomplete(body.treatment_completed) and not str(body.treatment_incomplete_reason or "").strip():
             raise HTTPException(422, "Reason is required when treatment was not completed")
         if body.admission_status and body.admission_status.lower() == "admitted" and not body.admission_severity:
             raise HTTPException(422, "Severity is required when the worker is admitted")
@@ -1163,8 +1265,15 @@ def create_sample(body: SampleCreate, user: User = Depends(require_roles("pathol
         raise HTTPException(422, "Description is required for Other test method")
     if body.species == "other" and not str(body.species_other_note or "").strip():
         raise HTTPException(422, "Description is required for Other species")
-    if body.smear_type and body.smear_type != "not_applicable" and body.method != "microscopy":
+    if body.smear_type and body.smear_type != "not_applicable" and body.method not in ("microscopy", "smp"):
+        # Source questionnaire: "Type of Smear read" is asked for slide-based
+        # methods (microscopy and the source's "SMP" option), so both accept a
+        # smear type. The client requires it for exactly these methods.
         raise HTTPException(422, "Smear type applies only to microscopy or smear tests")
+    # The UI requires a species for a positive result; mirror that server-side
+    # so API-only callers cannot record an unattributed positive.
+    if body.result_status == "positive" and not body.species:
+        raise HTTPException(422, "Species is required when the result is positive")
     sample = Sample(sample_code="M3-S-" + secrets.token_hex(4).upper(), patient_id=patient.id,
                     facility_id=body.facility_id, specimen_type=body.specimen_type, status=body.result_status)
     db.add(sample); db.flush()

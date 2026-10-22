@@ -10,6 +10,8 @@ import {
 import { api, ApiError } from '@/src/api'
 import { useAppStore } from '@/src/store'
 import { readWorkers, CachedWorker } from '@/src/cache'
+import { CalendarDatePickerField } from '@/components/CalendarDatePickerField'
+import { todayISO } from '@/src/dateFields'
 import { t } from '@/src/i18n'
 import {
   Button,
@@ -85,6 +87,14 @@ export default function Sites() {
   const [statusWorker, setStatusWorker] = useState<WorkerRosterItem | null>(null)
   const [reportedMalaria, setReportedMalaria] = useState<'not_reported' | 'pv' | 'pf' | 'pv_pf' | 'other' | 'none' | 'unknown'>('not_reported')
   const [reportedTreatment, setReportedTreatment] = useState<'not_reported' | 'treated' | 'untreated' | 'unknown'>('not_reported')
+  // Contractor-recorded planned travel of a roster worker (source page 6,
+  // "Travel details of worker in and outside of Goa").
+  const [travelWorker, setTravelWorker] = useState<WorkerRosterItem | null>(null)
+  const [travelDeparture, setTravelDeparture] = useState('')
+  const [travelReturn, setTravelReturn] = useState('')
+  const [travelPlace, setTravelPlace] = useState('')
+  const [travelSubmitting, setTravelSubmitting] = useState(false)
+  const [travelNotice, setTravelNotice] = useState('')
   const [savingStatus, setSavingStatus] = useState(false)
   const [statusSuccess, setStatusSuccess] = useState('')
 
@@ -314,6 +324,51 @@ export default function Sites() {
       }
     } finally {
       setAddingWorker(false)
+    }
+  }
+
+  // Record a planned travel episode for a roster worker (source page 6).
+  async function handleSaveTravel() {
+    if (!travelWorker) return
+    if (!travelDeparture) {
+      Alert.alert('Departure Date Required', 'Pick the planned date of leaving Goa.')
+      return
+    }
+    // Planned travel looks forward: mirror the server rule (planned departure
+    // can be today or later) before sending the request.
+    if (travelDeparture < todayISO()) {
+      Alert.alert('Date Order', 'Planned departure cannot be in the past. Pick today or a future date.')
+      return
+    }
+    if (travelReturn && travelReturn < travelDeparture) {
+      Alert.alert('Date Order', 'The return date cannot be earlier than the departure date.')
+      return
+    }
+    if (!travelPlace.trim()) {
+      Alert.alert('Destination Required', 'Enter the place or state the worker plans to visit.')
+      return
+    }
+    setTravelSubmitting(true)
+    setTravelNotice('')
+    try {
+      await api(`/workers/${travelWorker.id}/travel`, session?.token, {
+        method: 'POST',
+        body: JSON.stringify({
+          origin: 'Goa',
+          destination: travelPlace.trim(),
+          departure_date: travelDeparture,
+          return_date: travelReturn || undefined,
+          planned: true,
+        }),
+      })
+      setTravelNotice('Planned travel episode recorded for this worker.')
+      Alert.alert('Travel Recorded', 'The worker\'s planned travel dates were recorded.')
+      setTravelWorker(null)
+      setTravelDeparture(''); setTravelReturn(''); setTravelPlace('')
+    } catch (e) {
+      Alert.alert(tr('error'), e instanceof Error ? e.message : tr('error'))
+    } finally {
+      setTravelSubmitting(false)
     }
   }
 
@@ -667,17 +722,32 @@ export default function Sites() {
                     </View>
 
                     {isContractor && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onPress={() => {
-                          setStatusWorker(w)
-                          setReportedMalaria((w.reported_malaria_status as any) || 'not_reported')
-                          setReportedTreatment((w.reported_treatment_status as any) || 'not_reported')
-                        }}
-                      >
-                        Update Status
-                      </Button>
+                      <View style={{ gap: 4 }}>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onPress={() => {
+                            setStatusWorker(w)
+                            setReportedMalaria((w.reported_malaria_status as any) || 'not_reported')
+                            setReportedTreatment((w.reported_treatment_status as any) || 'not_reported')
+                          }}
+                        >
+                          Update Status
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onPress={() => {
+                            setTravelWorker(w)
+                            setTravelDeparture('')
+                            setTravelReturn('')
+                            setTravelPlace('')
+                            setTravelNotice('')
+                          }}
+                        >
+                          Record Travel
+                        </Button>
+                      </View>
                     )}
                   </View>
                 </Card>
@@ -778,6 +848,101 @@ export default function Sites() {
         </FormShell>
       </Modal>
 
+      {/* MODAL 3: CONTRACTOR-RECORDED PLANNED TRAVEL (source page 6) */}
+      <Modal
+        visible={Boolean(travelWorker)}
+        animationType="slide"
+        transparent={false}
+        onRequestClose={() => setTravelWorker(null)}
+      >
+        <FormShell contentContainerStyle={s.modalContainer}>
+          <View style={s.modalHeader}>
+            <View style={{ flex: 1 }}>
+              <Text style={s.eyebrow}>TRAVEL DETAILS — IN AND OUTSIDE GOA</Text>
+              <Text style={s.title}>Planned Travel of Worker</Text>
+              <Text style={s.modalSub}>
+                Worker: {travelWorker?.patient_code} ({travelWorker?.display_name || 'Worker'})
+              </Text>
+            </View>
+            <Button variant="ghost" size="sm" onPress={() => setTravelWorker(null)}>
+              Close
+            </Button>
+          </View>
+
+          {travelNotice ? <NoticeBanner type="info" title="Saved" message={travelNotice} /> : null}
+
+          <Card title="General & Administrative" subtitle="Source questionnaire page 6">
+            <Field
+              label="Contractor"
+              value={session?.user?.display_name || ''}
+              editable={false}
+              hint="Recorded from your signed-in account."
+            />
+            <Field
+              label="Construction Site"
+              value={`${selectedSite?.name || ''}${selectedSite?.district ? ` — ${selectedSite.district}` : ''}${selectedSite?.area ? `, ${selectedSite.area}` : ''}`}
+              editable={false}
+            />
+            <Field
+              label="Worker Name / ID"
+              value={`${travelWorker?.display_name || 'Worker'} (${travelWorker?.patient_code})`}
+              editable={false}
+              hint="Linked worker identity from this site's roster."
+            />
+          </Card>
+
+          <Card title="Travel Details" subtitle="Departure out of Goa and return into Goa">
+            <CalendarDatePickerField
+              label="Date of leaving Goa (departure)"
+              value={travelDeparture}
+              onChange={setTravelDeparture}
+              errorKey="contractor_travel_departure"
+              minISO={todayISO()}
+              hint="Planned departure — today or later"
+              required
+            />
+            <CalendarDatePickerField
+              label="Date of return into Goa"
+              value={travelReturn}
+              onChange={setTravelReturn}
+              errorKey="contractor_travel_return"
+              minISO={travelDeparture || todayISO()}
+              hint={travelDeparture ? 'Not earlier than departure' : 'Pick the departure date first'}
+              optional
+            />
+            <Field
+              label="Place(s) / state(s) to be visited"
+              placeholder="e.g. Murshidabad, West Bengal"
+              value={travelPlace}
+              onChangeText={setTravelPlace}
+              required
+            />
+          </Card>
+
+          <View style={{ flexDirection: 'row', gap: 10 }}>
+            <Button
+              variant="outline"
+              size="md"
+              style={{ flex: 1 }}
+              disabled={travelSubmitting}
+              onPress={() => setTravelWorker(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              size="md"
+              style={{ flex: 1 }}
+              loading={travelSubmitting}
+              disabled={travelSubmitting}
+              onPress={handleSaveTravel}
+            >
+              Record Travel
+            </Button>
+          </View>
+        </FormShell>
+      </Modal>
+
       {/* MODAL 2: UPDATE REPORTED HEALTH STATUS */}
       <Modal
         visible={Boolean(statusWorker)}
@@ -808,6 +973,9 @@ export default function Sites() {
           ) : null}
 
           <Card title="Record Health Status">
+            <Text style={s.statusDisclaimer}>
+              This status is contractor-reported and self-declared. It is not a laboratory-confirmed result and remains pending confirmation by a pathologist.
+            </Text>
             <ChipPicker
               label="Reported Malaria Status"
               options={[
@@ -891,6 +1059,16 @@ const s = StyleSheet.create({
     fontSize: 13,
     color: '#52525b',
     marginTop: 2,
+  },
+  statusDisclaimer: {
+    fontSize: 12,
+    color: '#a16207',
+    backgroundColor: '#fefce8',
+    borderWidth: 1,
+    borderColor: '#fde68a',
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
   },
   eyebrow: {
     fontSize: 11,

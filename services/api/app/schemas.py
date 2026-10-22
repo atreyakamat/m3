@@ -90,6 +90,8 @@ class AssessmentCreate(BaseModel):
     fever_duration_category: str | None = Field(default=None, pattern=r"^(<24h|1_3_days|4_7_days|>7_days)$")
     onset_date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
     symptoms: list[str] = Field(default_factory=list, max_length=20)
+    symptoms_other_note: str | None = Field(default=None, max_length=200,
+        description="Source questionnaire 'Others (specify)' free text for encounter symptoms")
     red_flags: list[str] = Field(default_factory=list, max_length=10)
     comorbidities: str | None = Field(default=None, max_length=2000)
     comorbidities_list: list[str] = Field(default_factory=list, max_length=20)
@@ -101,13 +103,23 @@ class AssessmentCreate(BaseModel):
     treatment_documentation: str | None = Field(default=None, max_length=2000, description="Documented plan only; no treatment decision support")
     admission_status: str | None = Field(default=None, max_length=40)
     admission_species: str | None = None
+    admission_species_other_note: str | None = Field(default=None, max_length=200,
+        description="Source questionnaire 'Other' species free text at admission")
     admission_symptoms: list[str] = Field(default_factory=list, max_length=20)
     admission_severity: str | None = Field(default=None, pattern=r"^(mild|severe)$")
-    treatment_completed: str | None = Field(default=None, pattern=r"^(yes|no|not_applicable)$")
+    # Source questionnaire: Yes (full course) / No (still on treatment) /
+    # No (stopped early) / Referred to District or GMC.  Legacy codes
+    # yes|no|not_applicable remain valid for backward compatibility.
+    treatment_completed: str | None = Field(
+        default=None, pattern=r"^(yes|no|not_applicable|no_still_on_treatment|no_stopped_early|referred_district_gmc)$")
     treatment_incomplete_reason: str | None = Field(default=None, max_length=500)
     discharge_date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
     outcome: str | None = Field(default=None, max_length=100)
     remarks: str | None = Field(default=None, max_length=4000)
+    # Source questionnaire page 5, "IF ADMITTED = NO": treatment given and
+    # health-worker follow-up assignment are recorded as explicit flags.
+    treatment_given: str | None = Field(default=None, max_length=10, pattern=r"^(yes|no)$")
+    follow_up_assigned: str | None = Field(default=None, max_length=10, pattern=r"^(yes|no)$")
     re_screening_reason: str | None = Field(default=None, max_length=1000,
         description="Required when the worker has already completed routine screening")
 

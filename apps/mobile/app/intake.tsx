@@ -38,15 +38,17 @@ import {
   FormShell,
   FormScrollApi,
 } from '@/components/ui'
-
-const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/
-
-function isValidDateStr(d: string): boolean {
-  if (!DATE_REGEX.test(d)) return false
-  const [y, m, day] = d.split('-').map(Number)
-  const dt = new Date(y, m - 1, day)
-  return dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === day
-}
+import { CalendarDatePickerField } from '@/components/CalendarDatePickerField'
+import {
+  addCalendarYears,
+  ageInCompletedYears,
+  dobMaxISO,
+  dobMinISO,
+  todayISO,
+  validateDobISO,
+  validatePastEventDate,
+  validatePlannedTravelDates,
+} from '@/src/dateFields'
 
 interface TravelEpisodeState {
   departure_date: string
@@ -63,7 +65,8 @@ interface QuestionnaireFormData {
   personal: {
     full_name: string
     dob: string
-    age_years: string
+    dob_unknown: 'yes' | 'no' // local fallback when the worker does not know DOB
+    age_years: string // manual fallback age (only when dob_unknown === 'yes')
     gender: 'male' | 'female' | ''
     mobile: string
     alternate_contact: string
@@ -85,6 +88,11 @@ interface QuestionnaireFormData {
     test_method: 'rdt' | 'microscopy' | 'not_sure' | ''
     medication_period: 'days_3' | 'days_14' | 'followup_28' | 'not_informed' | 'dont_know' | ''
     full_course_completed: 'yes' | 'no' | 'not_sure' | ''
+    // Source questionnaire page 2, recorded alongside Section II.
+    repellent_use: 'yes' | 'no' | ''
+    mosquito_net_use: 'yes' | 'no' | ''
+    mobile_brand: string
+    qualification: string
   }
   present_clinical: {
     fever_today: 'yes' | 'no' | 'not_sure' | ''
@@ -114,6 +122,7 @@ const INITIAL_FORM: QuestionnaireFormData = {
   personal: {
     full_name: '',
     dob: '',
+    dob_unknown: 'no',
     age_years: '',
     gender: 'male',
     mobile: '',
@@ -136,6 +145,10 @@ const INITIAL_FORM: QuestionnaireFormData = {
     test_method: '',
     medication_period: '',
     full_course_completed: '',
+    repellent_use: '',
+    mosquito_net_use: '',
+    mobile_brand: '',
+    qualification: '',
   },
   present_clinical: {
     fever_today: 'no',
@@ -182,6 +195,8 @@ export default function Intake() {
   const [formData, setFormData] = useState<QuestionnaireFormData>(INITIAL_FORM)
   const [sites, setSites] = useState<{ id: string; code: string; name: string; area: string }[]>([])
   const [loadingSites, setLoadingSites] = useState(false)
+  // Draft state for the visible saved-draft indicator
+  const [lastDraftAt, setLastDraftAt] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [draftSavedMsg, setDraftSavedMsg] = useState('')
@@ -345,6 +360,7 @@ export default function Intake() {
     async (showFeedback = true) => {
       saveDraft(owner, formData)
       const nowStr = new Date().toLocaleTimeString()
+      setLastDraftAt(nowStr)
       let feedback = `Draft saved locally (${nowStr})`
 
       if (online && session?.token && isWorker && !session?.demo) {
@@ -366,6 +382,34 @@ export default function Intake() {
     },
     [owner, formData, online, session?.token, isWorker, session?.demo]
   )
+
+  // Deliberate draft discard: asks for confirmation, then clears the local
+  // draft, its pending offline request id and resets the form state. The
+  // matching server draft is simply overwritten by the next save.
+  function handleDiscardDraft() {
+    Alert.alert(
+      'Discard draft?',
+      'All answers on this device will be cleared. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Discard',
+          style: 'destructive',
+          onPress: () => {
+            deleteDraft(owner)
+            clearPendingRequestId(owner)
+            setFormData(INITIAL_FORM)
+            setErrors({})
+            setLastDraftAt('')
+            setStep(1)
+            scrollApiRef.current?.scrollToTop()
+            setDraftSavedMsg('Draft discarded. The form has been cleared.')
+            setTimeout(() => setDraftSavedMsg(''), 4000)
+          },
+        },
+      ]
+    )
+  }
 
   // Helper setters
   function updatePersonal<K extends keyof QuestionnaireFormData['personal']>(
@@ -528,16 +572,18 @@ export default function Intake() {
       if (!p.full_name || p.full_name.trim().length < 2) {
         errs['personal.full_name'] = 'Full name is required (min 2 characters)'
       }
-      if (!p.dob && !p.age_years) {
-        errs['personal.dob'] = 'Either Date of Birth or Completed Age is required'
-      }
-      if (p.dob && !isValidDateStr(p.dob)) {
-        errs['personal.dob'] = 'Must be a valid date in YYYY-MM-DD format'
-      }
-      if (p.age_years) {
+      if (p.dob_unknown === 'yes') {
+        // Fallback: the worker does not know their DOB — manual age only.
         const a = parseInt(p.age_years, 10)
         if (isNaN(a) || a < 0 || a > 120) {
           errs['personal.age_years'] = 'Completed age must be between 0 and 120'
+        }
+      } else {
+        const dobErr = validateDobISO(p.dob)
+        if (!p.dob) {
+          errs['personal.dob'] = 'Date of birth is required (tap the field to pick it)'
+        } else if (dobErr) {
+          errs['personal.dob'] = dobErr
         }
       }
       if (!p.mobile || p.mobile.replace(/\D/g, '').length < 8) {
@@ -600,6 +646,7 @@ export default function Intake() {
       if (!c.fever_today) {
         errs['present_clinical.fever_today'] = 'Specify current fever status'
       }
+      const hasSpecific = c.symptoms.some((s) => s !== 'no_other_symptoms')
       if (['yes', 'not_sure'].includes(c.fever_today) && !c.fever_duration) {
         errs['present_clinical.fever_duration'] = 'Fever duration is required'
       }
@@ -609,13 +656,14 @@ export default function Intake() {
           errs['present_clinical.temperature_c'] = 'Temperature must be between 30.0 and 45.0 °C'
         }
       }
-      const hasSpecific = c.symptoms.some((s) => s !== 'no_other_symptoms')
-      if (hasSpecific) {
-        if (!c.onset_date) {
-          errs['present_clinical.onset_date'] = 'Onset date is required when symptoms are present'
-        } else if (!isValidDateStr(c.onset_date)) {
-          errs['present_clinical.onset_date'] = 'Onset date must be in YYYY-MM-DD format'
-        }
+      // Onset of the current illness: required with fever or specific
+      // symptoms, never in the future (past-event field).
+      const needsOnset = c.fever_today === 'yes' || hasSpecific
+      if (needsOnset && !c.onset_date) {
+        errs['present_clinical.onset_date'] = 'Onset date of the current illness is required'
+      } else if (c.onset_date) {
+        const onsetErr = validatePastEventDate(c.onset_date, 'Onset date')
+        if (onsetErr) errs['present_clinical.onset_date'] = onsetErr
       }
       if (!c.breathing_difficulty) {
         errs['present_clinical.breathing_difficulty'] = 'Required'
@@ -662,18 +710,16 @@ export default function Intake() {
           errs['planned_travel.episodes'] = 'Add at least one travel episode'
         }
         t.episodes.forEach((ep, idx) => {
-          if (!ep.departure_date || !isValidDateStr(ep.departure_date)) {
-            errs[`episode.${idx}.departure_date`] = 'Valid departure date (YYYY-MM-DD) required'
+          const dateErrs = validatePlannedTravelDates(ep.departure_date, ep.return_date)
+          if (!ep.departure_date) {
+            errs[`episode.${idx}.departure_date`] = 'Departure date is required (tap the field to pick it)'
+          } else if (dateErrs.departure) {
+            errs[`episode.${idx}.departure_date`] = dateErrs.departure
           }
-          if (!ep.return_date || !isValidDateStr(ep.return_date)) {
-            errs[`episode.${idx}.return_date`] = 'Valid return date (YYYY-MM-DD) required'
-          }
-          if (
-            isValidDateStr(ep.departure_date) &&
-            isValidDateStr(ep.return_date) &&
-            ep.return_date < ep.departure_date
-          ) {
-            errs[`episode.${idx}.return_date`] = 'Return date cannot precede departure date'
+          if (!ep.return_date) {
+            errs[`episode.${idx}.return_date`] = 'Return date is required (tap the field to pick it)'
+          } else if (dateErrs.return) {
+            errs[`episode.${idx}.return_date`] = dateErrs.return
           }
           if (!ep.place_state.trim()) {
             errs[`episode.${idx}.place_state`] = 'Destination place/state required'
@@ -802,8 +848,13 @@ export default function Intake() {
       preferred_language: p.preferred_language,
     }
     if (p.dob) {
+      // DOB is the source of truth; send it together with its auto-calculated
+      // age in completed years (server validates the pairing).
       personalPayload.dob = p.dob
-    } else if (p.age_years) {
+      const age = ageInCompletedYears(p.dob)
+      if (age !== null) personalPayload.age_years = age
+    } else if (p.dob_unknown === 'yes' && p.age_years) {
+      // Fallback: worker does not know their DOB; completed age only.
       personalPayload.age_years = parseInt(p.age_years, 10)
     }
     if (p.alternate_contact.trim()) personalPayload.alternate_contact = p.alternate_contact.trim()
@@ -830,6 +881,11 @@ export default function Intake() {
         }
       }
     }
+    // Source page 2 add-ons (optional).
+    if (h.repellent_use) pastPayload.repellent_use = h.repellent_use
+    if (h.mosquito_net_use) pastPayload.mosquito_net_use = h.mosquito_net_use
+    if (h.mobile_brand.trim()) pastPayload.mobile_brand = h.mobile_brand.trim()
+    if (h.qualification.trim()) pastPayload.qualification = h.qualification.trim()
 
     const clinicalPayload: Record<string, any> = {
       fever_today: c.fever_today,
@@ -841,7 +897,12 @@ export default function Intake() {
     }
     if (c.temperature_c) clinicalPayload.temperature_c = parseFloat(c.temperature_c)
     if (['yes', 'not_sure'].includes(c.fever_today)) clinicalPayload.fever_duration = c.fever_duration
-    if (c.symptoms.some((s) => s !== 'no_other_symptoms')) clinicalPayload.onset_date = c.onset_date
+    // Onset of the current illness: sent when fever is reported or specific
+    // symptoms were selected, matching the server-side requirement.
+    const clinicalHasSpecific = c.symptoms.some((s) => s !== 'no_other_symptoms')
+    if (c.fever_today === 'yes' || clinicalHasSpecific) {
+      clinicalPayload.onset_date = c.onset_date
+    }
 
     const migrationPayload: Record<string, any> = {
       time_in_goa: m.time_in_goa,
@@ -953,7 +1014,13 @@ export default function Intake() {
     } | null = needsProfile ? {
       display_name: formData.personal.full_name,
       dob: formData.personal.dob || undefined,
-      age_years: formData.personal.age_years ? parseInt(formData.personal.age_years, 10) : undefined,
+      // Auto-calculated age in completed years from DOB, or the manual
+      // fallback when the worker does not know their date of birth.
+      age_years: formData.personal.dob
+        ? (ageInCompletedYears(formData.personal.dob) ?? undefined)
+        : (formData.personal.dob_unknown === 'yes' && formData.personal.age_years
+            ? parseInt(formData.personal.age_years, 10)
+            : undefined),
       gender: formData.personal.gender,
       mobile: formData.personal.mobile,
       alternate_contact: formData.personal.alternate_contact || undefined,
@@ -1127,14 +1194,29 @@ export default function Intake() {
             <Text style={s.eyebrow}>M3 SURVEILLANCE PLATFORM</Text>
             <Text style={s.title}>Worker Screening</Text>
           </View>
-          <Button
-            variant="outline"
-            size="sm"
-            onPress={() => handleSaveDraft(true)}
-          >
-            Save Draft
-          </Button>
+          <View style={s.headerActions}>
+            <Button
+              variant="outline"
+              size="sm"
+              onPress={() => handleSaveDraft(true)}
+            >
+              Save Draft
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onPress={handleDiscardDraft}
+            >
+              Discard
+            </Button>
+          </View>
         </View>
+        {/* Explicit saved-draft indicator (timestamp of the last save) */}
+        {lastDraftAt ? (
+          <StatusBadge label={`Draft saved ${lastDraftAt}`} variant="success" />
+        ) : (
+          <StatusBadge label="Draft: not saved yet" variant="warning" />
+        )}
       </View>
 
       {/* Step Indicator */}
@@ -1170,28 +1252,45 @@ export default function Intake() {
               required
             />
 
-            <View style={s.rowTwo}>
+            <CalendarDatePickerField
+              label="Date of Birth"
+              value={formData.personal.dob}
+              onChange={(v) => updatePersonal('dob', v)}
+              error={errors['personal.dob']}
+              errorKey='personal.dob'
+              minISO={dobMinISO()}
+              maxISO={dobMaxISO()}
+              required
+            />
+            {formData.personal.dob ? (
+              <Text style={s.ageComputedText}>
+                Age (in completed years): {ageInCompletedYears(formData.personal.dob) ?? '—'}
+              </Text>
+            ) : null}
+
+            <ChipPicker
+              label="Do you know your date of birth?"
+              options={[
+                { label: 'Yes — picked above', value: 'no' },
+                { label: "No — enter age only", value: 'yes' },
+              ]}
+              value={formData.personal.dob_unknown || 'no'}
+              onChange={(v) => updatePersonal('dob_unknown', v as any)}
+              hint="Age fallback for workers without documented birth dates."
+            />
+
+            {formData.personal.dob_unknown === 'yes' && (
               <Field
-                containerStyle={{ flex: 1 }}
-                label="Date of Birth"
-                placeholder="YYYY-MM-DD"
-                value={formData.personal.dob}
-                onChangeText={(v) => updatePersonal('dob', v)}
-                error={errors['personal.dob']}
-                errorKey='personal.dob'
-                hint="e.g. 1995-05-15"
-              />
-              <Field
-                containerStyle={{ flex: 1 }}
-                label="Completed Age"
+                label="Completed Age (years)"
                 placeholder="Years (0-120)"
                 keyboardType="numeric"
                 value={formData.personal.age_years}
                 onChangeText={(v) => updatePersonal('age_years', v)}
                 error={errors['personal.age_years']}
                 errorKey='personal.age_years'
+                required
               />
-            </View>
+            )}
 
             <ChipPicker
               label="Gender"
@@ -1437,6 +1536,49 @@ export default function Intake() {
               </View>
             )}
 
+            {/* Source questionnaire page 2, survey add-ons (optional). */}
+            <View style={s.dangerSignsBox}>
+              <Text style={s.dangerSignsTitle}>Protection & Profile (Optional)</Text>
+              <ChipPicker
+                label="Do you use mosquito repellent?"
+                options={[
+                  { label: 'Yes', value: 'yes' },
+                  { label: 'No', value: 'no' },
+                ]}
+                value={formData.past_history.repellent_use}
+                onChange={(v) => updatePastHistory('repellent_use', v as any)}
+                error={errors['past_history.repellent_use']}
+                errorKey='past_history.repellent_use'
+              />
+              <ChipPicker
+                label="Do you sleep under a mosquito net?"
+                options={[
+                  { label: 'Yes', value: 'yes' },
+                  { label: 'No', value: 'no' },
+                ]}
+                value={formData.past_history.mosquito_net_use}
+                onChange={(v) => updatePastHistory('mosquito_net_use', v as any)}
+                error={errors['past_history.mosquito_net_use']}
+                errorKey='past_history.mosquito_net_use'
+              />
+              <Field
+                label="Mobile Brand"
+                placeholder="e.g. Samsung (optional)"
+                value={formData.past_history.mobile_brand}
+                onChangeText={(v) => updatePastHistory('mobile_brand', v)}
+                error={errors['past_history.mobile_brand']}
+                errorKey='past_history.mobile_brand'
+              />
+              <Field
+                label="Qualification"
+                placeholder="e.g. Class 10 (optional)"
+                value={formData.past_history.qualification}
+                onChangeText={(v) => updatePastHistory('qualification', v)}
+                error={errors['past_history.qualification']}
+                errorKey='past_history.qualification'
+              />
+            </View>
+
           </Card>
         )}
 
@@ -1457,30 +1599,32 @@ export default function Intake() {
             />
 
             {['yes', 'not_sure'].includes(formData.present_clinical.fever_today) && (
-              <ChipPicker
-                label="Fever Duration"
-                options={[
-                  { label: '< 24 Hours', value: 'within_24h' },
-                  { label: '1 - 3 Days', value: '1_3_days' },
-                  { label: '> 3 Days', value: 'more_3_days' },
-                  { label: 'Not required', value: 'not_required' },
-                ]}
-                value={formData.present_clinical.fever_duration}
-                onChange={(v) => updatePresentClinical('fever_duration', v as any)}
-                error={errors['present_clinical.fever_duration']}
-                errorKey='present_clinical.fever_duration'
-              />
-            )}
+              <>
+                <ChipPicker
+                  label="Fever Duration"
+                  options={[
+                    { label: '< 24 Hours', value: 'within_24h' },
+                    { label: '1 - 3 Days', value: '1_3_days' },
+                    { label: '> 3 Days', value: 'more_3_days' },
+                    { label: 'Not required', value: 'not_required' },
+                  ]}
+                  value={formData.present_clinical.fever_duration}
+                  onChange={(v) => updatePresentClinical('fever_duration', v as any)}
+                  error={errors['present_clinical.fever_duration']}
+                  errorKey='present_clinical.fever_duration'
+                />
 
-            <Field
-              label="Measured Body Temperature (°C)"
-              placeholder="e.g. 37.5 (optional)"
-              keyboardType="numeric"
-              value={formData.present_clinical.temperature_c}
-              onChangeText={(v) => updatePresentClinical('temperature_c', v)}
-              error={errors['present_clinical.temperature_c']}
-              errorKey='present_clinical.temperature_c'
-            />
+                <Field
+                  label="Measured Body Temperature (°C)"
+                  placeholder="e.g. 37.5 (if known)"
+                  keyboardType="numeric"
+                  value={formData.present_clinical.temperature_c}
+                  onChangeText={(v) => updatePresentClinical('temperature_c', v)}
+                  error={errors['present_clinical.temperature_c']}
+                  errorKey='present_clinical.temperature_c'
+                />
+              </>
+            )}
 
             <MultiChipPicker
               label="Reported Symptoms"
@@ -1490,15 +1634,16 @@ export default function Intake() {
               hint="'No other symptoms' is mutually exclusive with specific symptoms."
             />
 
-            {formData.present_clinical.symptoms.some((s) => s !== 'no_other_symptoms') && (
-              <Field
-                label="Symptom Onset Date"
-                placeholder="YYYY-MM-DD"
+            {(formData.present_clinical.fever_today === 'yes' ||
+              formData.present_clinical.symptoms.some((s) => s !== 'no_other_symptoms')) && (
+              <CalendarDatePickerField
+                label="Onset Date of Current Illness"
                 value={formData.present_clinical.onset_date}
-                onChangeText={(v) => updatePresentClinical('onset_date', v)}
+                onChange={(v) => updatePresentClinical('onset_date', v)}
                 error={errors['present_clinical.onset_date']}
                 errorKey='present_clinical.onset_date'
-                hint="When did the first symptoms start?"
+                maxISO={todayISO()}
+                hint="When today's illness first started (no future dates)"
                 required
               />
             )}
@@ -1671,28 +1816,26 @@ export default function Intake() {
                       )}
                     </View>
 
-                    <View style={s.rowTwo}>
-                      <Field
-                        containerStyle={{ flex: 1 }}
-                        label="Departure Date"
-                        placeholder="YYYY-MM-DD"
-                        value={ep.departure_date}
-                        onChangeText={(v) => updateEpisode(idx, { departure_date: v })}
-                        error={errors[`episode.${idx}.departure_date`]}
-                        errorKey={`episode.${idx}.departure_date`}
-                        required
-                      />
-                      <Field
-                        containerStyle={{ flex: 1 }}
-                        label="Expected Return"
-                        placeholder="YYYY-MM-DD"
-                        value={ep.return_date}
-                        onChangeText={(v) => updateEpisode(idx, { return_date: v })}
-                        error={errors[`episode.${idx}.return_date`]}
-                        errorKey={`episode.${idx}.return_date`}
-                        required
-                      />
-                    </View>
+                    <CalendarDatePickerField
+                      label="Departure Date (out of Goa)"
+                      value={ep.departure_date}
+                      onChange={(v) => updateEpisode(idx, { departure_date: v })}
+                      error={errors[`episode.${idx}.departure_date`]}
+                      errorKey={`episode.${idx}.departure_date`}
+                      minISO={todayISO()}
+                      hint="Planned departure — today or later"
+                      required
+                    />
+                    <CalendarDatePickerField
+                      label="Return Date (back into Goa)"
+                      value={ep.return_date}
+                      onChange={(v) => updateEpisode(idx, { return_date: v })}
+                      error={errors[`episode.${idx}.return_date`]}
+                      errorKey={`episode.${idx}.return_date`}
+                      minISO={ep.departure_date || todayISO()}
+                      hint={ep.departure_date ? 'Not earlier than the departure date' : 'Pick departure date first'}
+                      required
+                    />
 
                     <Field
                       label="Destination (State / District)"
@@ -1833,7 +1976,13 @@ export default function Intake() {
               </Text>
               <Text style={s.summaryItem}>
                 <Text style={s.summaryLabel}>DOB / Age: </Text>
-                {formData.personal.dob || '—'} ({formData.personal.age_years || '—'} yrs)
+                {formData.personal.dob
+                  ? `${formData.personal.dob} (${
+                      ageInCompletedYears(formData.personal.dob) ?? '—'
+                    } yrs, completed)`
+                  : formData.personal.age_years
+                    ? `DOB not known — ${formData.personal.age_years} yrs (completed)`
+                    : '—'}
               </Text>
               <Text style={s.summaryItem}>
                 <Text style={s.summaryLabel}>Gender: </Text>
@@ -1963,6 +2112,17 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  ageComputedText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#0f766e',
+    marginTop: 6,
   },
   eyebrow: {
     fontSize: 11,

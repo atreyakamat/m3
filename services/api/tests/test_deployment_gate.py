@@ -10,7 +10,11 @@ API = ROOT / "services" / "api"
 
 
 def _run(args, db_url, cwd):
-    return subprocess.run(args, cwd=cwd, capture_output=True, text=True, env={**os.environ, "DATABASE_URL": db_url})
+    # The app (imported by alembic/env.py) requires an explicit database mode.
+    # These alembic/gate subprocesses always use a disposable SQLite file, so
+    # the mode is set to match the URL (no silent defaults, no fallback).
+    return subprocess.run(args, cwd=cwd, capture_output=True, text=True,
+                          env={**os.environ, "DATABASE_URL": db_url, "M3_DATABASE_MODE": "sqlite"})
 
 
 def test_gate_passes_on_migrated_db_and_fails_when_uniqueness_missing(tmp_path):

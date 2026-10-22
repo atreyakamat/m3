@@ -1,4 +1,17 @@
 """Synthetic-only fixture command: python -m app.seed."""
+# CLI configuration shim (docs/DATABASE_MODES.md): M3_DATABASE_MODE is required
+# by the server, so the seed command resolves it explicitly from the URL the
+# runner already configured (honoring any value the caller set). This must run
+# before app.database is imported — i.e. before the imports below.
+import os as _os
+import sys as _sys
+if _os.path.basename(_sys.argv[0] or "") == "seed.py":
+    from .config import get_settings as _get_settings
+    _url = (_get_settings().database_url or "").strip()
+    _os.environ.setdefault(
+        "M3_DATABASE_MODE",
+        "postgres" if _url.startswith(("postgresql://", "postgresql+psycopg://", "postgres://")) else "sqlite",
+    )
 from datetime import timedelta
 from sqlalchemy import select
 from .database import SessionLocal

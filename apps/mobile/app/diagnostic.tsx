@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import {
   Alert,
   StyleSheet,
@@ -19,15 +19,22 @@ import {
   FormShell,
   NoticeBanner,
   ChipPicker,
+  StatusBadge,
 } from '@/components/ui'
+import { CalendarDatePickerField } from '@/components/CalendarDatePickerField'
+import { WorkerLookupField } from '@/components/WorkerLookupField'
 
 const sampleSchema = z.object({
   patient_id: z.string().min(1, 'Patient ID or Code is required'),
+  // Source page 3: "Malaria Diagnosis test done? RDT / SMP / Other" — the
+  // microscopy result block is a second selectable test (covers source §2-§3
+  // fields: result + species + smear type). See SMP note in the change report.
   method: z.enum(['rdt', 'microscopy', 'smp', 'other']),
   result_status: z.enum(['pending', 'positive', 'negative', 'indeterminate', 'cancelled']),
   species: z.enum(['pf', 'pv', 'mixed', 'other', 'undetermined']).optional(),
   species_other_note: z.string().max(200).optional(),
-  smear_type: z.string().optional(),
+  smear_type: z.enum(['thick', 'thin', 'both']).optional(),
+  other_method_note: z.string().max(500).optional(),
 })
 
 type SampleFormValues = z.infer<typeof sampleSchema>
@@ -37,6 +44,7 @@ export default function Diagnostic() {
   const tr = (k: Parameters<typeof t>[1]) => t(language, k)
   const params = useLocalSearchParams<{ patientId?: string }>()
 
+  const pathologistName = session?.user?.display_name || ''
   const isPathologist = session?.user?.roles?.some((r: string) =>
     ['pathologist', 'pathology'].includes(r)
   )
@@ -44,6 +52,8 @@ export default function Diagnostic() {
 
   const [pending, setPending] = useState(false)
   const [activeTab, setActiveTab] = useState<'sample' | 'slide_followup'>('sample')
+  const [facilities, setFacilities] = useState<{ id: string; name: string; district: string }[]>([])
+  const [selectedFacilityId, setSelectedFacilityId] = useState('')
 
   // Slide follow-up state
   const [slideSampleId, setSlideSampleId] = useState('')
@@ -64,6 +74,23 @@ export default function Diagnostic() {
   const [slideSubmitting, setSlideSubmitting] = useState(false)
   const [slideSuccessMsg, setSlideSuccessMsg] = useState('')
 
+  // Linked patient demographic fields (recorded for the sample notes trail)
+  const [patientName, setPatientName] = useState('')
+  const [patientMobile, setPatientMobile] = useState('')
+
+  useEffect(() => {
+    async function loadFacilities() {
+      if (!session?.token || session?.demo || !online) return
+      try {
+        const res = await api<{ items: any[] }>('/facilities', session.token)
+        setFacilities(res.items || [])
+      } catch {
+        // Optional dropdown; leave empty when unavailable.
+      }
+    }
+    loadFacilities()
+  }, [session?.token, session?.demo, online])
+
   const {
     control,
     handleSubmit,
@@ -78,17 +105,40 @@ export default function Diagnostic() {
       result_status: 'pending',
       species: undefined,
       species_other_note: '',
-      smear_type: '',
+      smear_type: undefined,
+      other_method_note: '',
     },
   })
 
   const currentMethod = watch('method')
   const currentResultStatus = watch('result_status')
   const currentSpecies = watch('species')
+  const currentSmear = watch('smear_type')
+  const watchedPatientId = watch('patient_id')
+  const selectedFacility = facilities.find((f) => f.id === selectedFacilityId) || null
 
   async function submitSample(values: SampleFormValues) {
     if (disabled) {
       Alert.alert(tr('needsOnline'), tr('connectivityRequired'))
+      return
+    }
+
+    // Conditional validation mirroring the source questionnaire: result fields
+    // and species depend on the selected test.
+    if (values.method === 'other' && !(values.other_method_note || '').trim()) {
+      Alert.alert('Test Note Required', 'Describe the Other diagnostic test performed.')
+      return
+    }
+    if (values.result_status === 'positive' && !values.species) {
+      Alert.alert('Species Required', 'Select the identified species for a positive result.')
+      return
+    }
+    if (currentSpecies === 'other' && !(values.species_other_note || '').trim()) {
+      Alert.alert('Species Note Required', 'Describe the other species identified.')
+      return
+    }
+    if (['microscopy', 'smp'].includes(values.method) && !values.smear_type) {
+      Alert.alert('Smear Type Required', 'Select the type of smear read (Thick / Thin / Both).')
       return
     }
 
@@ -98,6 +148,7 @@ export default function Diagnostic() {
         patient_id: values.patient_id.trim(),
         method: values.method,
         result_status: values.result_status,
+        facility_id: selectedFacilityId || undefined,
       }
 
       if (values.result_status === 'positive') {
@@ -107,9 +158,18 @@ export default function Diagnostic() {
         }
       }
 
-      if (values.method === 'microscopy') {
+      if (['microscopy', 'smp'].includes(values.method)) {
         payload.smear_type = values.smear_type || 'both'
       }
+      if (values.method === 'other' && (values.other_method_note || '').trim()) {
+        payload.other_method_note = (values.other_method_note || '').trim()
+      }
+      // Patient identity linkage (name/mobile) is appended to the lab notes;
+      // the authoritative demographic link is patient_id itself.
+      const identityNote = `Recorded by ${pathologistName || 'pathologist'}; patient: ${
+        patientName.trim() || '(name not provided)'
+      }, mobile: ${patientMobile.trim() || '(not provided)'}`
+      payload.notes = identityNote
 
       const res = await api<any>('/samples', session.token, {
         method: 'POST',
@@ -233,9 +293,10 @@ export default function Diagnostic() {
   }
 
   const methodOptions = [
-    { label: 'Rapid Test (RDT)', value: 'rdt' as const },
-    { label: 'Microscopy Smear', value: 'microscopy' as const },
-    { label: 'SMP Slide', value: 'smp' as const },
+    { label: 'RDT (rapid test)', value: 'rdt' as const },
+    { label: 'Microscopy smear', value: 'microscopy' as const },
+    { label: 'SMP', value: 'smp' as const },
+    { label: 'Other', value: 'other' as const },
   ]
 
   const resultOptions = [
@@ -296,48 +357,70 @@ export default function Diagnostic() {
 
         {/* TAB 1: DIAGNOSTIC SAMPLE */}
         {activeTab === 'sample' && (
-          <Card title="Diagnostic Sample Entry" subtitle="Initial specimen registration and microscopy">
-            <Controller
-              control={control}
-              name="patient_id"
-              render={({ field: { onChange, value } }) => (
-                <Field
-                  label={tr('selectWorker')}
-                  placeholder="e.g. M3-6A817D7C or UUID"
-                  value={value}
-                  onChangeText={onChange}
-                  hint="Patient code or UUID"
-                  error={errors.patient_id?.message}
-                  required
-                />
-              )}
+          <Card title="Diagnostic Sample Entry" subtitle="Source questionnaire page 3 — laboratory investigation">
+            {/* Pathologist name & linked facility */}
+            <Field
+              label="Pathologist (recorded from your sign-in)"
+              value={pathologistName}
+              editable={false}
+              hint="Operator identity is also attached to the record server-side."
+            />
+            {facilities.length > 0 && (
+              <ChipPicker
+                label="Facility (dropdown)"
+                horizontal={false}
+                options={facilities.map((f) => ({ label: f.name, value: f.id, caption: f.district }))}
+                value={selectedFacilityId}
+                onChange={setSelectedFacilityId}
+              />
+            )}
+            {selectedFacility && (
+              <StatusBadge label={`Linked facility address: ${selectedFacility.district}`} variant="neutral" />
+            )}
+
+            {/* Linked patient identity + demographics (source: Patient Name /
+                Mobile Number / Demographic Details: linked to Mobile Number).
+                Search prefers the mobile number, then the name. */}
+            <WorkerLookupField
+              workerLabel="Patient"
+              value={watchedPatientId || ''}
+              onChangeText={(patientId) => setValue('patient_id', patientId)}
+              token={session?.token}
+              disabled={disabled}
+              required
+              error={errors.patient_id?.message}
+              onIdentityChange={({ name, mobile }) => {
+                setPatientName(name.length > 0 ? name : patientName)
+                setPatientMobile(mobile.length > 0 ? mobile : patientMobile)
+              }}
             />
 
             <ChipPicker
-              label={tr('method')}
+              label="1. Malaria Diagnosis Test Done"
               options={methodOptions}
               value={currentMethod}
               onChange={(val) => setValue('method', val)}
             />
 
-            {currentMethod === 'microscopy' && (
+            {currentMethod === 'other' && (
               <Controller
                 control={control}
-                name="smear_type"
+                name="other_method_note"
                 render={({ field: { onChange, value } }) => (
                   <Field
-                    label="Smear Type"
-                    placeholder="thick, thin, or both"
+                    label="Other Test — Specify"
+                    placeholder="Describe the diagnostic test performed"
                     value={value}
                     onChangeText={onChange}
-                    hint="Slide preparation method"
+                    required
                   />
                 )}
               />
             )}
 
+            {/* Result + species conditional on the selected test. */}
             <ChipPicker
-              label={tr('resultStatus')}
+              label="Result"
               options={resultOptions}
               value={currentResultStatus}
               onChange={(val) => setValue('result_status', val)}
@@ -370,6 +453,20 @@ export default function Diagnostic() {
                   />
                 )}
               </>
+            )}
+
+            {/* Smear type conditional on smear-based tests (microscopy / SMP). */}
+            {['microscopy', 'smp'].includes(currentMethod) && (
+              <ChipPicker
+                label="4. Type of Smear Read"
+                options={[
+                  { label: 'Thick', value: 'thick' as const },
+                  { label: 'Thin', value: 'thin' as const },
+                  { label: 'Both', value: 'both' as const },
+                ]}
+                value={currentSmear || 'both'}
+                onChange={(val) => setValue('smear_type', val)}
+              />
             )}
 
             <View style={s.submitAction}>
@@ -415,11 +512,13 @@ export default function Diagnostic() {
               onChange={setScheduledDay}
             />
 
-            <Field
-              label="Due Date (YYYY-MM-DD)"
-              placeholder="e.g. 2026-10-25"
+            <CalendarDatePickerField
+              label="Due Date"
               value={slideDueDate}
-              onChangeText={setSlideDueDate}
+              onChange={setSlideDueDate}
+              errorKey="slide_due_date"
+              optional
+              hint="Scheduled slide submission date (optional)"
             />
 
             <ChipPicker

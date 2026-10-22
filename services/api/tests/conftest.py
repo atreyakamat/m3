@@ -14,6 +14,11 @@ import db_policy
 _resolved_url, _resolved_kind = db_policy.resolve_candidate_url(
     os.environ.get("M3_TEST_DATABASE_URL") or os.environ.get("DATABASE_URL"))
 os.environ["DATABASE_URL"] = _resolved_url
+# The server requires an explicit database mode (M3_DATABASE_MODE); the test
+# harness sets it deterministically from the URL it has already resolved, so
+# every mode rule (scheme lock, no implicit default) applies to tests too.
+os.environ["M3_DATABASE_MODE"] = (
+    "postgres" if _resolved_kind == "postgresql" else "sqlite")
 
 os.environ["JWT_SECRET"] = "test-secret-not-for-deployment"
 os.environ["BOOTSTRAP_SECRET"] = "bootstrap-test"

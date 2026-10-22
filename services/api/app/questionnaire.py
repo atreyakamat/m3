@@ -7,8 +7,17 @@ sure" and "not required" are distinct stored values.  Clinical thresholds and
 escalation rules are deliberately NOT implemented here (PRD DEC-13).
 """
 
+import calendar
+import datetime
+import re
+
 SCHEMA_VERSION = 1
 SECTIONS = ("personal", "past_history", "present_clinical", "migration_history", "planned_travel")
+
+# Source questionnaire (01 Sept 2026): date of birth spans at most the current
+# date back to 90 calendar years before today. Boundaries are computed at
+# runtime so they never become stale hard-coded dates.
+DOBPAST_YEARS = 90
 
 YES_NO = ("yes", "no")
 YES_NO_UNSURE = ("yes", "no", "dont_know")
@@ -20,16 +29,58 @@ TREATMENT_PLACES = ("uhc_phc", "private_clinic", "govt_hospital", "pharmacy", "o
 DATE_RE = r"^\d{4}-\d{2}-\d{2}$"
 
 def _is_date(value):
-    import re
     if not isinstance(value, str) or not re.fullmatch(DATE_RE, value):
         return False
     year, month, day = (int(part) for part in value.split("-"))
-    import datetime
     try:
         datetime.date(year, month, day)
     except ValueError:
         return False
     return True
+
+
+def today_iso():
+    return datetime.date.today().isoformat()
+
+
+def add_calendar_years(base, years):
+    """Shift a date whole calendar years, clamping Feb 29 to Feb 28 in
+    non-leap target years (month-end safety for 29 Feb dates)."""
+    target_year = base.year + years
+    day = base.day
+    if base.month == 2 and day == 29 and not calendar.isleap(target_year):
+        day = 28
+    return datetime.date(target_year, base.month, day)
+
+
+def dob_boundaries(today=None):
+    """Return (earliest_selectable, latest_selectable) ISO strings for DOB."""
+    ref = today or datetime.date.today()
+    return add_calendar_years(ref, -DOBPAST_YEARS).isoformat(), ref.isoformat()
+
+
+def age_in_completed_years(dob_iso, ref=None):
+    """Completed years between DOB and ref (default: today), or None if invalid."""
+    if not _is_date(dob_iso):
+        return None
+    y, m, d = (int(part) for part in dob_iso.split("-"))
+    ref = ref or datetime.date.today()
+    age = ref.year - y
+    if (ref.month, ref.day) < (m, d):
+        age -= 1
+    return age
+
+
+def _reject_future_date(value, path, label, errors, required=False):
+    """Past-event field: optional input must parse and must not lie in the future."""
+    if value in (None, ""):
+        if required:
+            errors.append(_err(path, f"{label} is required"))
+        return
+    if not _is_date(value):
+        errors.append(_err(path, f"{label} must be a valid date (YYYY-MM-DD)"))
+    elif value > today_iso():
+        errors.append(_err(path, f"{label} cannot be in the future"))
 
 def _phone_shape_ok(raw):
     """Loose format check; one global format is not assumed (PRD §5 page 1)."""
@@ -80,10 +131,23 @@ def _validate_personal(section, errors):
         errors.append(_err("personal.full_name", "Full name is required (2-120 chars)"))
     if get("dob") in (None, "") and get("age_years") in (None, ""):
         errors.append(_err("personal.dob", "Date of birth or completed age is required"))
+    min_dob, max_dob = dob_boundaries()
     if get("dob") not in (None, ""):
         _date_field(get("dob"), "personal.dob", errors, "Date of birth")
-        if get("age_years") not in (None, ""):
-            errors.append(_err("personal.age_years", "Age conflicts with DOB; provide completed age only or confirm both"))
+        if _is_date(str(get("dob"))):
+            if str(get("dob")) < min_dob:
+                errors.append(_err("personal.dob",
+                                   f"Date of birth cannot be more than {DOBPAST_YEARS} years ago (earlier than {min_dob})"))
+            if str(get("dob")) > max_dob:
+                errors.append(_err("personal.dob", "Date of birth cannot be in the future"))
+            if get("age_years") not in (None, ""):
+                # Age is auto-calculated from DOB in the form; accept it only
+                # when it matches the completed-years calculation.
+                expected = age_in_completed_years(str(get("dob")))
+                age = _to_int(get("age_years"))
+                if expected is None or age is None or age != expected:
+                    errors.append(_err("personal.age_years",
+                                       f"Age (in completed years) does not match date of birth (expected {expected})"))
     if get("age_years") not in (None, ""):
         age = _to_int(get("age_years"))
         if age is None or age < 0 or age > 120:
@@ -110,6 +174,19 @@ def _validate_past_history(section, errors):
     get = lambda k: section.get(k)
     diagnosed = get("diagnosed_malaria")
     _choice_required(get, "diagnosed_malaria", YES_NO_UNSURE, "past_history.diagnosed_malaria", errors, "Diagnosed malaria")
+    # Source page 2, survey add-ons recorded alongside Section II. Optional /
+    # non-clinical profile items: mobile brand, qualification, repellent and
+    # mosquito-net use. These are evaluated for every respondent, so they must
+    # run before the conditional chain below short-circuits on non-"yes".
+    if get("repellent_use") not in (None, ""):
+        _choice(get("repellent_use"), YES_NO, "past_history.repellent_use", errors, "Repellent use")
+    if get("mosquito_net_use") not in (None, ""):
+        _choice(get("mosquito_net_use"), YES_NO, "past_history.mosquito_net_use", errors, "Mosquito net use")
+    for key, limit, label in (("mobile_brand", 60, "Mobile brand"),
+                              ("qualification", 120, "Qualification")):
+        value = get(key)
+        if value not in (None, "") and (not isinstance(value, str) or len(value.strip()) > limit):
+            errors.append(_err(f"past_history.{key}", f"{label} must be {limit} characters or fewer"))
     if diagnosed != "yes":
         return
     times = _to_int(get("times_malaria_2y"))
@@ -153,8 +230,11 @@ def _validate_present_clinical(section, errors):
     unknown = [s for s in symptoms if s not in SPECIFIC + ("no_other_symptoms",)]
     if unknown:
         errors.append(_err("present_clinical.symptoms", f"Unknown symptom code: {sorted(unknown)[0]}"))
-    if any(s in SPECIFIC for s in symptoms):
-        _date_field(get("onset_date"), "present_clinical.onset_date", errors, "Symptom onset date", required=True)
+    # Onset of the current illness: required when the worker reports fever or
+    # specific symptoms, and never allowed in the future.
+    needs_onset = fever == "yes" or any(s in SPECIFIC for s in symptoms)
+    _reject_future_date(get("onset_date"), "present_clinical.onset_date", "Onset date of current illness", errors,
+                        required=needs_onset)
     for key, label in (("breathing_difficulty", "Breathing difficulty"), ("chest_pain", "Chest pain"), ("confusion", "Confusion")):
         _choice_required(get, key, YES_NO, f"present_clinical.{key}", errors, label)
     _choice_required(get, "can_attend_testing", YES_NO_NOT_REQUIRED, "present_clinical.can_attend_testing", errors, "Can attend testing today")
@@ -196,6 +276,10 @@ def _validate_planned_travel(section, errors):
         departure, return_date = episode_get("departure_date"), episode_get("return_date")
         if _is_date(str(departure)) and _is_date(str(return_date)) and str(return_date) < str(departure):
             errors.append(_err(f"{base}.return_date", "Return date cannot precede departure date"))
+        # Planned travel looks forward: a planned departure cannot lie in the
+        # past (historical trips belong to migration history, Section IV).
+        if _is_date(str(departure)) and str(departure) < today_iso():
+            errors.append(_err(f"{base}.departure_date", "Planned departure date cannot be in the past"))
         if not str(episode_get("place_state") or "").strip():
             errors.append(_err(f"{base}.place_state", "Place/state is required"))
         fever = episode_get("fever_malaria_during")
