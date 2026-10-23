@@ -262,10 +262,16 @@ export function clearOwner(ownerId: string) {
 }
 
 export function saveDraft(ownerId: string, data: any) {
-  const jsonStr = JSON.stringify(data)
+  // Stamp the draft with its own save timestamp so the intake screen can apply
+  // the newer-wins conflict policy against the server draft. The row's
+  // updated_at column carries the same value; the JSON shape is otherwise
+  // identical to what was passed in.
+  const updatedAt = new Date().toISOString()
+  const stamped = data && typeof data === 'object' ? { ...data, updated_at: updatedAt } : { updated_at: updatedAt }
+  const jsonStr = JSON.stringify(stamped)
   db.runSync(
     'INSERT OR REPLACE INTO local_drafts(owner_id, json, updated_at) VALUES(?, ?, ?)',
-    [ownerId, jsonStr, new Date().toISOString()]
+    [ownerId, jsonStr, updatedAt]
   )
 }
 

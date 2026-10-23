@@ -9,6 +9,9 @@ buildscript {
     classpath('com.android.tools.build:gradle')
     classpath('com.facebook.react:react-native-gradle-plugin')
     classpath('org.jetbrains.kotlin:kotlin-gradle-plugin')
+    // Standalone Local Server mode: embeds CPython 3.12 + the real FastAPI
+    // backend into the APK (see docs/STANDALONE_LOCAL_SERVER.md).
+    classpath('com.chaquo.python:gradle:17.1.0')
   }
 }
 

@@ -12,10 +12,9 @@ import { router } from 'expo-router'
 import { api, removeToken, base } from '@/src/api'
 import {
   DEMO_OWNER,
-  demoWorkers,
   readLastSync,
-  writeWorkers,
   readWorkers,
+  writeWorkers,
   clearOwner,
   readOutbox,
   outboxCount,
@@ -23,8 +22,28 @@ import {
   readMeta,
   CachedWorker,
 } from '@/src/cache'
+import {
+  demoSessionFor,
+  demoWorkers,
+  demoCases,
+  demoAuditEvents,
+  demoDashboardMetrics,
+  DEMO_ROLES,
+  type DemoRole,
+  type DemoCase,
+} from '@/src/demoData'
+import {
+  initDemoStore,
+  setActiveDemoRole,
+  resetDemoData,
+  listDemoRecords,
+  listDemoActivity,
+  listDemoDrafts,
+  type DemoRecord,
+} from '@/src/demoStore'
 import { t } from '@/src/i18n'
 import { useAppStore } from '@/src/store'
+import { flushOutbox } from '@/src/outbox'
 import {
   Button,
   Card,
@@ -34,6 +53,7 @@ import {
   EmptyState,
 } from '@/components/ui'
 import { TourModal } from '@/components/TourModal'
+import { DemoBanner } from '@/components/DemoBanner'
 import { WorkerCard } from '@/components/WorkerCard'
 import { WorkerDetailModal } from '@/components/WorkerDetailModal'
 import { NotificationBell } from '@/components/NotificationBell'
@@ -55,7 +75,11 @@ export default function Dashboard() {
     setLastSync,
     setLanguage,
     setSession,
+    clearSessionExpired,
   } = useAppStore()
+  // 401 session-degradation: api.ts flags this centrally; render the banner
+  // and let the user explicitly sign out (no auto-signout, drafts preserved).
+  const sessionExpiredAt = useAppStore((x) => x.sessionExpiredAt)
 
   const [summary, setSummary] = useState<DashboardMetricData | null>(null)
   const [cachedWorkers, setCachedWorkers] = useState<CachedWorker[]>([])
@@ -71,8 +95,29 @@ export default function Dashboard() {
   const [showTour, setShowTour] = useState(false)
   // Task 4: worker inspect bottom sheet.
   const [detailWorker, setDetailWorker] = useState<CachedWorker | null>(null)
+  // Offline Demo Mode: local synthetic work + role switcher.
+  const [demoRoleOpen, setDemoRoleOpen] = useState(false)
+  const [demoRecords, setDemoRecords] = useState<DemoRecord[]>([])
+  const [demoActivity, setDemoActivity] = useState<any[]>([])
+  const isDemo = Boolean(session?.demo)
+  const refreshDemoWork = useCallback(() => {
+    if (!session?.demo) return
+    setDemoRecords(listDemoRecords())
+    setDemoActivity(listDemoActivity())
+  }, [session?.demo])
 
+  // Offline demo runs its own self-check: no server contact is attempted.
   const checkDiagnostics = useCallback(async () => {
+    if (session?.demo) {
+      setDiagnosticsInfo({
+        status: 'offline_demo',
+        api_reachable: false,
+        database_ready: false,
+        app_version: 'offline-demo (local device)',
+        environment: 'demo — local device only; no server was contacted',
+      })
+      return
+    }
     setDiagnosticsLoading(true)
     try {
       const diag = await api<any>('/diagnostics')
@@ -87,7 +132,7 @@ export default function Dashboard() {
     } finally {
       setDiagnosticsLoading(false)
     }
-  }, [])
+  }, [session?.demo])
 
   const [showQrModal, setShowQrModal] = useState(false)
   const [workerQrData, setWorkerQrData] = useState<{ token: string; patient_code?: string; created_at?: string } | null>(null)
@@ -129,7 +174,10 @@ export default function Dashboard() {
   const tr = useCallback((k: Parameters<typeof t>[1]) => t(language, k), [language])
   const owner = session?.user?.id || DEMO_OWNER
   const roles = session?.user?.roles || []
-  const canWrite = online && !session?.demo
+  // Demo sessions are explicitly allowed to exercise write-looking forms; the
+  // screens capture those writes into the ISOLATED demo store instead of the
+  // server. Only connectivity + a real token grant real write capability.
+  const canWrite = Boolean((online && !session?.demo) || session?.demo)
 
   const isWorkerOnly = roles.length === 1 && roles[0] === 'worker'
   const isContractor = roles.includes('contractor')
@@ -141,12 +189,13 @@ export default function Dashboard() {
 
   const loadCache = useCallback(() => {
     try {
-      const records = readWorkers(owner)
-      setCachedWorkers(records)
+      // Demo mode reads ONLY deterministic synthetic roster data; real cached
+      // worker rows are never shown or modified inside a demo session.
+      setCachedWorkers(session?.demo ? (demoWorkers() as unknown as CachedWorker[]) : readWorkers(owner))
     } catch {
       setCachedWorkers([])
     }
-  }, [owner])
+  }, [owner, session?.demo])
 
   const refresh = useCallback(async () => {
     if (!session?.token || !online || session.demo) return
@@ -227,26 +276,44 @@ export default function Dashboard() {
 
   useEffect(() => {
     loadCache()
+    refreshDemoWork()
     // Task 3: auto-open the guided tour on first launch only.
     if (!readMeta('m3_tour_completed')) setShowTour(true)
     if (session?.demo) {
-      setSummary({
-        workers: 1,
-        followups_due: 1,
-        samples_pending: 1,
-        tests_positive: 0,
-      })
+      setSummary(demoDashboardMetrics(roles[0] as DemoRole))
     } else if (session?.token && online) {
       refresh()
       loadNotifications()
       loadCases()
     }
-  }, [session?.token, online, session?.demo, owner])
+  }, [session?.token, online, session?.demo, owner, roles, loadCache, refreshDemoWork])
 
   // P2: server-side session revocation is best-effort — it requires connectivity.
   // Locally cached authenticated state is cleared regardless; queued records and
   // drafts stay on the device so no field work is lost (mission P2 requirement).
   function logout() {
+    if (session?.demo) {
+      // Demo sign-out is purely local: no API call, no token removal (a demo
+      // session never holds one), no clearing of any real cached data, and no
+      // demo-data wipe (use the explicit "Reset Demo Data" action for that).
+      setActiveDemoRole(null)
+      setSession(null)
+      router.replace('/')
+      return
+    }
+    if (session?.local) {
+      // LOCAL (standalone) sign-out is a real logout against the embedded
+      // backend. The local server itself keeps running across account
+      // switches; its SQLite data persists until the explicit reset action.
+      if (session.token && online) {
+        api('/auth/logout', session.token, { method: 'POST' }).catch(() => {})
+      }
+      removeToken()
+      clearSessionExpired()
+      setSession(null)
+      router.replace('/')
+      return
+    }
     if (session?.token !== undefined && online && !session?.demo) {
       api('/auth/logout', session.token, { method: 'POST' }).catch(() => {
         // Offline/expired: the server session expires on its own schedule; local sign-out proceeds.
@@ -258,9 +325,40 @@ export default function Dashboard() {
       } catch {}
     }
     removeToken()
+    clearSessionExpired()
     setSession(null)
     router.replace('/')
   }
+
+  // Replay Outbox: actually flushes the durable queue via the shared
+  // src/outbox.ts module (previously this button only called `refresh`, which
+  // never sent queued records). Reports before/after counts honestly.
+  const [replayingOutbox, setReplayingOutbox] = useState(false)
+  const handleReplayOutbox = useCallback(async () => {
+    if (!session?.token || session?.demo || !online || replayingOutbox) return
+    const before = outboxCount(owner)
+    if (before === 0) {
+      Alert.alert('Outbox is empty', 'There are no queued records to replay.')
+      return
+    }
+    setReplayingOutbox(true)
+    try {
+      const result = await flushOutbox(owner, session.token, {
+        demo: Boolean(session.demo),
+      })
+      const remaining = outboxCount(owner)
+      Alert.alert(
+        'Outbox Replay Finished',
+        `Queued: ${before} — replayed ${result.succeeded}, failed ${result.failed}` +
+          (result.authBlocked ? ' (session expired — sign in again to send the rest)' : '') +
+          (remaining > 0 ? ` · ${remaining} still queued` : '')
+      )
+    } catch {
+      Alert.alert('Outbox Replay Finished', `Queued: ${before} — replay failed; the queue is untouched and will retry automatically.`)
+    } finally {
+      setReplayingOutbox(false)
+    }
+  }, [owner, online, session?.token, session?.demo, replayingOutbox])
 
   const filteredWorkers = cachedWorkers.filter((w) => {
     if (!searchQuery) return true
@@ -318,7 +416,7 @@ export default function Dashboard() {
   }
 
   return (
-    <ScrollView contentContainerStyle={s.container}>
+    <ScrollView contentContainerStyle={[s.container, { width: '100%', maxWidth: 820, alignSelf: 'center' }]}>
       {/* Top Header */}
       <View style={s.topNav}>
         <View style={{ flex: 1 }}>
@@ -328,6 +426,9 @@ export default function Dashboard() {
             {roles.map((r) => (
               <StatusBadge key={r} label={r.toUpperCase()} variant="neutral" />
             ))}
+            {session?.local && (
+              <StatusBadge label="LOCAL SERVER" variant="warning" />
+            )}
             {session?.demo && (
               <StatusBadge label="DEMO" variant="warning" />
             )}
@@ -349,11 +450,37 @@ export default function Dashboard() {
           title="Offline Mode Active"
           message="Connection to LAN API is currently unavailable. You may view and search cached patient records below. Submissions and writes are disabled."
         />
-      ) : session?.demo ? (
+      ) : null}
+      {/* Local-Server Banner: persistent honesty about where data lives. */}
+      {session?.local && (
         <NoticeBanner
-          type="warning"
-          title="Demo Mode"
-          message="Running in local sandbox mode with synthetic records. Sign in with an authorized LAN user for live server writes."
+          type="info"
+          title="Standalone local server"
+          message="This tablet is running the REAL M3 backend on 127.0.0.1. Accounts, records and audit history persist in app-private storage only — nothing is uploaded anywhere and no remote surveillance server participates in this session."
+        />
+      )}
+      {/* Persistent Offline-Demo banner (demo sessions only). Stays visible on
+          the dashboard; individual screens render their own banner too. */}
+      {session?.demo && <DemoBanner />}
+
+      {/* Demo self-check: server diagnostics are never contacted in demo. */}
+      {session?.demo ? (
+        <NoticeBanner
+          type="info"
+          title="Server, sync & notifications are switched off"
+          message="This demo session never authenticates against the real backend: no sign-in, no refresh, no outbox replay, no notifications. All seven roles are explored with built-in synthetic data. Your real queued records (if you signed in online before) remain preserved and untouched."
+        />
+      ) : null}
+
+      {/* Central 401 session-degradation banner (flag set by src/api.ts).
+          Never wipes drafts or the token — sign out is user-initiated. */}
+      {sessionExpiredAt ? (
+        <NoticeBanner
+          type="error"
+          title={tr('sessionEndedTitle')}
+          message={tr('sessionEndedMessage')}
+          actionLabel={tr('signOut')}
+          onAction={logout}
         />
       ) : null}
 
@@ -529,6 +656,128 @@ export default function Dashboard() {
         </View>
       )}
 
+      {/* Offline Demo: deterministic synthetic case queue (no server, no real
+          clinical records) for clinician/pathologist/health-worker/admin review. */}
+      {session?.demo && (isClinician || isPathology || isHealthWorker || isAdmin) && (
+        <View style={s.section}>
+          <View style={s.sectionHeader}>
+            <Text style={s.sectionTitle}>Synthetic case queue (demo)</Text>
+            <Text style={s.sectionSubtitle}>{demoCases().length} examples</Text>
+          </View>
+          {demoCases().map((c: DemoCase) => (
+            <Card key={c.id} style={s.workerCard}>
+              <View style={s.workerTop}>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.workerCode}>{c.case_code}</Text>
+                  <Text style={s.workerMeta}>
+                    {c.site_name ? `Site: ${c.site_name} · ` : ''}
+                    Worker: {c.patient_code} · {'synthetic'}
+                  </Text>
+                </View>
+                <View style={s.rolesRow}>
+                  {c.urgent ? <StatusBadge label="URGENT" variant="danger" /> : null}
+                  <StatusBadge label="SYN" variant="warning" />
+                  <StatusBadge label={String(c.status).toUpperCase()} variant={c.status === 'closed' ? 'neutral' : 'warning'} />
+                </View>
+              </View>
+            </Card>
+          ))}
+        </View>
+      )}
+
+      {/* Admin (demo): read-only synthetic audit + surveillance views. */}
+      {session?.demo && isAdmin && (
+        <View style={s.section}>
+          <View style={s.sectionHeader}>
+            <Text style={s.sectionTitle}>Synthetic audit & surveillance (demo)</Text>
+            <Text style={s.sectionSubtitle}>read-only</Text>
+          </View>
+          <NoticeBanner
+            type="info"
+            title="Read-only in Offline Demo"
+            message="Admin has no write capability in the application. These synthetic audit examples illustrate the audited event trail; they contain no real account activity."
+          />
+          {demoAuditEvents().map((e) => (
+            <Card key={e.id} style={s.workerCard}>
+              <Text style={s.workerCode}>{e.action}</Text>
+              <Text style={s.workerMeta}>{e.detail}</Text>
+              <Text style={s.sectionSubtitle}>
+                {String(e.at).slice(0, 16).replace('T', ' ')} · {e.actor}
+              </Text>
+            </Card>
+          ))}
+        </View>
+      )}
+
+      {/* Offline Demo: local synthetic work inspector — drafts, demo
+          submissions and local activity, kept strictly apart from the real
+          outbox ("x queued for sync" below covers REAL submissions only). */}
+      {session?.demo && (
+        <Card style={s.syncCard}>
+          <View style={s.sectionHeader}>
+            <Text style={s.syncTitle}>{t(language, 'demoWorkTitle')}</Text>
+            <StatusBadge label="LOCAL ONLY" variant="warning" />
+          </View>
+          {demoRecords.length === 0 ? (
+            <Text style={s.workerMeta}>{t(language, 'demoWorkEmpty')}</Text>
+          ) : (
+            demoRecords.slice(0, 6).map((r) => (
+              <View key={r.id} style={s.demoRecordRow}>
+                <StatusBadge label="SYN" variant="warning" />
+                <View style={{ flex: 1 }}>
+                  <Text style={s.workerCode}>{r.label}</Text>
+                  <Text style={s.workerMeta}>
+                    {String(r.created_at).slice(0, 16).replace('T', ' ')} · {String(r.status).replace(/_/g, ' ')}
+                  </Text>
+                </View>
+              </View>
+            ))
+          )}
+          {demoActivity.slice(0, 4).map((a) => (
+            <Text key={a.id} style={s.workerMeta}>
+              • {a.label} — {String(a.at).slice(0, 16).replace('T', ' ')}
+            </Text>
+          ))}
+          {listDemoDrafts().length > 0 ? (
+            <Text style={s.workerMeta}>Saved demo draft: {listDemoDrafts().length} (restored automatically when you open the questionnaire)</Text>
+          ) : null}
+          <View style={{ marginTop: 10, flexDirection: 'row', gap: 8 }}>
+            <Button
+              variant="ghost"
+              size="sm"
+              style={{ flex: 1 }}
+              onPress={refreshDemoWork}
+            >
+              Refresh demo list
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              style={{ flex: 1 }}
+              onPress={() => {
+                Alert.alert(
+                  t(language, 'offlineDemoResetConfirmTitle'),
+                  t(language, 'offlineDemoResetConfirmBody'),
+                  [
+                    { text: language === 'hi' ? 'रद्द करें' : 'Cancel', style: 'cancel' },
+                    {
+                      text: language === 'hi' ? 'रीसेट' : 'Reset',
+                      style: 'destructive',
+                      onPress: () => {
+                        resetDemoData()
+                        refreshDemoWork()
+                      },
+                    },
+                  ]
+                )
+              }}
+            >
+              {t(language, 'offlineDemoReset')}
+            </Button>
+          </View>
+        </Card>
+      )}
+
       {/* Cached Worker Browser */}
       <View style={s.section}>
         <View style={s.sectionHeader}>
@@ -619,9 +868,15 @@ export default function Dashboard() {
         <Text style={s.workerMeta}>
           Configured API: {base()}
         </Text>
-        <Text style={s.workerMeta}>
-          Local Outbox: {readOutbox(owner).length} queued for sync · Draft: {readDraft(owner) ? 'Saved' : 'None'}
-        </Text>
+        {session?.demo ? (
+          <Text style={s.workerMeta}>
+            OFFLINE DEMO: this session never contacts the API — the configured server above is shown for information only. Local demo items are never queued into the real outbox.
+          </Text>
+        ) : (
+          <Text style={s.workerMeta}>
+            Local Outbox: {readOutbox(owner).length} queued for sync · Draft: {readDraft(owner) ? 'Saved' : 'None'}
+          </Text>
+        )}
 
         {showDiagnostics && diagnosticsInfo && (
           <View style={{ marginTop: 8, padding: 10, backgroundColor: '#f8fafc', borderRadius: 8 }}>
@@ -655,7 +910,9 @@ export default function Dashboard() {
               variant="secondary"
               size="sm"
               style={{ flex: 1 }}
-              onPress={refresh}
+              loading={replayingOutbox}
+              disabled={replayingOutbox}
+              onPress={handleReplayOutbox}
             >
               Replay Outbox
             </Button>
@@ -735,10 +992,46 @@ export default function Dashboard() {
         <Button variant="outline" size="sm" onPress={() => setLanguage(language === 'en' ? 'hi' : 'en')}>
           {language === 'en' ? 'Switch to हिन्दी' : 'Switch to English'}
         </Button>
+        {session?.demo && (
+          <Button variant="outline" size="sm" onPress={() => setDemoRoleOpen(true)}>
+            {t(language, 'offlineDemoSwitchRole')}
+          </Button>
+        )}
         <Button variant="danger" size="sm" onPress={logout}>
           {tr('logout')}
         </Button>
       </View>
+
+      {/* Demo role switcher — changes the demo identity ONLY. It is impossible
+          for it to grant real server privileges: the session keeps token=undefined. */}
+      <Modal visible={demoRoleOpen} transparent animationType="fade" onRequestClose={() => setDemoRoleOpen(false)}>
+        <View style={s.demoBackdrop}>
+          <View style={s.demoSwitchCard}>
+            <Text style={s.demoSwitchTitle}>{t(language, 'offlineDemoChooseRole')}</Text>
+            {DEMO_ROLES.map(({ role, label }) => (
+              <Button
+                key={role}
+                variant={roles[0] === role ? 'primary' : 'outline'}
+                size="md"
+                fullWidth
+                onPress={() => {
+                  // Explicit demo role swap: same synthetic identity, new
+                  // demo role. Never touches tokens, real sessions, or data.
+                  initDemoStore()
+                  setActiveDemoRole(role)
+                  setSession(demoSessionFor(role as DemoRole) as any)
+                  setDemoRoleOpen(false)
+                }}
+              >
+                {label}
+              </Button>
+            ))}
+            <Button variant="ghost" size="md" onPress={() => setDemoRoleOpen(false)}>
+              {language === 'hi' ? 'बंद करें' : 'Close'}
+            </Button>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   )
 }
@@ -769,19 +1062,28 @@ function ActionCard({
   disabled?: boolean
   onPress: () => void
 }) {
+  // The card is an inert View; the SINGLE tap target is one full-width button
+  // that carries the title/subtitle and the "Open" affordance — no nested
+  // pressables and no double dispatch.
   return (
     <Card style={[s.actionCard, disabled && s.actionCardDisabled]}>
-      <View style={{ flex: 1, gap: 2 }}>
-        <Text style={[s.actionTitle, disabled && s.actionTextDisabled]}>{title}</Text>
-        <Text style={s.actionSubtitle}>{subtitle}</Text>
-      </View>
       <Button
-        variant={disabled ? 'outline' : 'secondary'}
+        variant="ghost"
         size="sm"
+        fullWidth
         disabled={disabled}
         onPress={onPress}
+        style={s.actionCardTap}
       >
-        {disabled ? 'Offline' : 'Open →'}
+        <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+          <View style={{ flex: 1, gap: 2 }}>
+            <Text style={[s.actionTitle, disabled && s.actionTextDisabled]}>{title}</Text>
+            <Text style={s.actionSubtitle}>{subtitle}</Text>
+          </View>
+          <Text style={[s.actionOpen, disabled && s.actionTextDisabled]}>
+            {disabled ? 'Offline' : 'Open →'}
+          </Text>
+        </View>
       </Button>
     </Card>
   )
@@ -865,10 +1167,17 @@ const s = StyleSheet.create({
     gap: 8,
   },
   actionCard: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 14,
+    padding: 8,
+    gap: 2,
+  },
+  actionCardTap: {
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+  },
+  actionOpen: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f766e',
   },
   actionCardDisabled: {
     backgroundColor: '#fafafa',
@@ -940,6 +1249,35 @@ const s = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#f4f4f5',
     paddingTop: 8,
+  },
+  demoRecordRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f4f4f5',
+  },
+  demoBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  demoSwitchCard: {
+    width: '100%',
+    maxWidth: 480,
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 20,
+    gap: 10,
+  },
+  demoSwitchTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#92400e',
+    marginBottom: 4,
   },
   syncCard: {
     padding: 14,

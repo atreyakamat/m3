@@ -18,6 +18,8 @@ import {
   setPendingRequestId,
   clearPendingRequestId,
 } from '@/src/cache'
+import { saveDemoRecord } from '@/src/demoStore'
+import { DemoBanner } from '@/components/DemoBanner'
 import {
   Button,
   Card,
@@ -87,15 +89,17 @@ export default function Symptom() {
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<(typeof FIELD_ORDER)[number], string>>>({})
   const [submitting, setSubmitting] = useState(false)
   const [result, setResult] = useState<{
-    caseCode: string; status: string; urgent: boolean; savedOffline: boolean
+    caseCode: string; status: string; urgent: boolean; savedOffline: boolean; demo?: boolean
   } | null>(null)
   const [queued, setQueued] = useState(0)
 
   const isUrgent = symptoms.some((x) => DANGER_CODES.includes(x))
 
   useEffect(() => {
-    setQueued(outboxCount(owner, 'queued'))
-  }, [owner])
+    // Real outbox counts never apply to a demo session (demo submissions are
+    // final local demo records, not pending syncs).
+    setQueued(session?.demo ? 0 : outboxCount(owner, 'queued'))
+  }, [owner, session?.demo])
 
   const validate = useCallback(() => {
     const errors: Partial<Record<(typeof FIELD_ORDER)[number], string>> = {}
@@ -134,11 +138,29 @@ export default function Symptom() {
       scrollApiRef.current?.scrollToError(first)
       return
     }
-    if (!session?.token || session?.demo) {
+    if (session?.demo) {
+      // Offline Demo: validate identically, then finalize as a LOCAL SYNTHETIC
+      // demo record — timestamped, sealed, and permanently non-uploadable
+      // (no outbox enqueue, no idempotency key, no replay).
+      const record = saveDemoRecord({
+        kind: 'symptom_report',
+        label: `Health report — ${symptoms.slice(0, 3).join(', ')}${symptoms.length > 3 ? '…' : ''}`,
+        payload: buildPayload(`demo_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
+      })
+      setResult({
+        caseCode: record.id,
+        status: 'demo — saved on this device only, never sent to a server',
+        urgent: isUrgent,
+        savedOffline: true,
+        demo: true,
+      })
+      return
+    }
+    if (!session?.token) {
       // No authority to write anywhere: show the device-save state in-page
       // (Alert is unreliable on web) and stop. Nothing was sent to a server.
       setResult({
-        caseCode: 'n/a (demo)',
+        caseCode: 'n/a (not signed in)',
         status: 'device only — not sent to the surveillance server',
         urgent: isUrgent,
         savedOffline: true,
@@ -210,16 +232,19 @@ export default function Symptom() {
   return (
     <FormShell scrollApiRef={scrollApiRef}>
       <View style={st.page}>
+        {session?.demo && <DemoBanner />}
         {result ? (
           <Card
             title={result.savedOffline ? 'Saved for sync' : 'Report received'}
             badge={result.urgent ? 'Urgent' : undefined}
           >
             <NoticeBanner
-              type={result.urgent ? 'warning' : 'info'}
-              title={result.urgent ? URGENT_TITLE : 'What happens next'}
+              type={result.demo ? 'info' : result.urgent ? 'warning' : 'info'}
+              title={result.demo ? 'DEMO — synthetic data, local device only' : result.urgent ? URGENT_TITLE : 'What happens next'}
               message={
-                result.savedOffline
+                result.demo
+                  ? `Saved on this device at local demo time. This is SYNTHETIC DEMO data (reference ${result.caseCode}); it is NOT a real case report, will NOT reach any clinician, and will never upload when connectivity returns.`
+                  : result.savedOffline
                   ? isUrgent
                     ? `${URGENT_BODY}\nThis report is saved on this phone and will be sent automatically when you are back online (reference: ${result.caseCode}).`
                     : 'This report is saved on this phone and will be sent automatically when you are back online. Do not submit again for the same problem.'

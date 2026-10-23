@@ -1,5 +1,5 @@
 import React from 'react'
-import { Pressable, StyleSheet, Text, View } from 'react-native'
+import { StyleSheet, Text, View } from 'react-native'
 import { useAppStore } from '@/src/store'
 import { t } from '@/src/i18n'
 import { Button, StatusBadge } from '@/components/ui'
@@ -8,8 +8,10 @@ import type { CachedWorker } from '@/src/cache'
 /* Task 4: touch-friendly worker identification card.
  * Lets health workers identify a candidate WITHOUT alphanumeric codes:
  * large name, phone, home state, and a single-screening status badge
- * (green = screened, yellow = pending). Tapping the card opens the full
- * WorkerDetailModal bottom sheet. */
+ * (green = screened, yellow = pending). The card itself is an inert View;
+ * the nested-touchable defect is fixed by making the card region navigable
+ * through its accessible inner buttons ("View record" + the role quick
+ * action) instead of wrapping everything in one Pressable. */
 
 export type WorkerCardActions = {
   onOpenRecord: () => void
@@ -36,11 +38,7 @@ export function WorkerCard({
     : { label: tr('pendingBadge'), variant: 'warning' as const }
 
   return (
-    <Pressable
-      accessibilityRole="button"
-      onPress={onOpenRecord}
-      style={({ pressed }) => [s.card, pressed && { opacity: 0.8 }]}
-    >
+    <View style={s.card}>
       {/* Header row: name + status badge */}
       <View style={s.topRow}>
         <View style={{ flex: 1 }}>
@@ -69,7 +67,8 @@ export function WorkerCard({
         {worker.patient_code ? (worker.occupation || worker.age_years || worker.gender ? '  ·  ' : '') + worker.patient_code : ''}
       </Text>
 
-      {/* Action row */}
+      {/* Action row: the ONLY touchables on this card — at least one
+          ("View record"), plus the role quick action when offered. */}
       <View style={s.actionsRow}>
         <View style={s.actionBtn}>
           <Button variant="outline" size="sm" fullWidth onPress={onOpenRecord}>
@@ -90,7 +89,7 @@ export function WorkerCard({
           </View>
         ) : null}
       </View>
-    </Pressable>
+    </View>
   )
 }
 

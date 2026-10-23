@@ -16,6 +16,8 @@ import {
   EmptyState,
   colors,
 } from '@/components/ui'
+import { DemoBanner } from '@/components/DemoBanner'
+import { demoResearchAggregates } from '@/src/demoData'
 
 interface ResearchResult {
   id: string
@@ -36,8 +38,17 @@ export default function Research() {
   const [results, setResults] = useState<ResearchResult[] | null>(null)
   const [error, setError] = useState('')
 
+  const isDemo = Boolean(session?.demo)
+
   const load = useCallback(async () => {
-    if (!session?.token || !online || session?.demo) {
+    if (session?.demo) {
+      // Deterministic synthetic aggregate dataset — no identifiers beyond
+      // opaque M3-RES-SYN sample codes, and zero network activity.
+      setResults(demoResearchAggregates())
+      setError('')
+      return
+    }
+    if (!session?.token || !online) {
       setError('')
       setResults([])
       return
@@ -53,7 +64,7 @@ export default function Research() {
 
   useEffect(() => {
     load()
-  }, [session?.token, online, session?.demo])
+  }, [session?.token, online, session?.demo, load])
 
   const statusVariant = (status: string): 'success' | 'neutral' | 'warning' => {
     if (status === 'detected' || status === 'positive') return 'success'
@@ -81,6 +92,10 @@ export default function Research() {
           title={tr('offline')}
           message="Connect to the LAN API to view the approved molecular dataset."
         />
+      )}
+
+      {isDemo && (
+        <DemoBanner detail="Read-only SYNTHETIC aggregate dataset: each example carries an opaque M3-RES-SYN sample code only — no real worker identifiers exist in this screen." />
       )}
 
       {error ? <NoticeBanner type="error" title="Error" message={error} /> : null}

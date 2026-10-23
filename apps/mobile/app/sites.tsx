@@ -12,6 +12,8 @@ import { useAppStore } from '@/src/store'
 import { readWorkers, CachedWorker } from '@/src/cache'
 import { CalendarDatePickerField } from '@/components/CalendarDatePickerField'
 import { todayISO } from '@/src/dateFields'
+import { DemoBanner } from '@/components/DemoBanner'
+import { demoSites, demoRoster, demoWorkers } from '@/src/demoData'
 import { t } from '@/src/i18n'
 import {
   Button,
@@ -99,32 +101,32 @@ export default function Sites() {
   const [statusSuccess, setStatusSuccess] = useState('')
 
   const isContractor = session?.user?.roles?.includes('contractor')
+  const isDemoCtx = Boolean(session?.demo)
   const canWrite = online && !session?.demo && isContractor
 
   // Load sites list
   const loadSites = useCallback(async () => {
-    if (!session?.token || !online || session?.demo) {
-      const demoSites: Site[] = [
-        {
-          id: 'demo-site-1',
-          code: 'SYN-SITE-01',
-          name: 'Synthetic Riverside Build',
-          district: 'North Goa',
-          area: 'Panaji',
-          status: 'active',
-          worker_count: 142,
-        },
-        {
-          id: 'demo-site-2',
-          code: 'SYN-SITE-02',
-          name: 'Synthetic Zuari Industrial Expansion',
-          district: 'South Goa',
-          area: 'Mormugao',
-          status: 'active',
-          worker_count: 98,
-        },
-      ]
-      setSites(demoSites)
+    if (session?.demo) {
+      // Deterministic synthetic site roster for the demo contractor; no
+      // network request, and never a write into cached_workers or the outbox.
+      setSites(demoSites().map((ds) => ({
+        id: ds.id,
+        code: ds.code,
+        name: ds.name,
+        district: ds.district,
+        area: ds.area,
+        status: 'active',
+        worker_count: ds.worker_count,
+        created_at: ds.created_at,
+      })) as Site[])
+      setError('')
+      return
+    }
+    if (!session?.token || !online) {
+      // Honest empty state: no fabricated sites. Real previously-cached worker
+      // rows (cached_workers) still power the Add-Worker quick pick; the sites
+      // list itself only ever shows data fetched from the live server.
+      setSites([])
       return
     }
 
@@ -142,21 +144,24 @@ export default function Sites() {
 
   // Load site workers roster
   const loadRoster = useCallback(async (siteId: string) => {
-    if (!session?.token || !online || session?.demo) {
-      setRoster([
-        {
-          id: 'demo-w-1',
-          patient_code: 'M3-DEMO-001',
-          display_name: 'Demo Construction Worker',
-          age_years: 32,
-          gender: 'male',
-          occupation: 'Mason',
-          start_date: new Date().toISOString().slice(0, 10),
-          reported_malaria_status: 'none',
-          reported_treatment_status: 'not_reported',
-          assignment_id: 'demo-assign-1',
-        },
-      ])
+    if (session?.demo) {
+      // Synthetic roster with travel + reported-status examples per site.
+      setRoster(demoRoster(siteId).map((r) => ({
+        id: r.worker_id,
+        patient_code: r.patient_code,
+        display_name: r.display_name,
+        start_date: r.assigned_at,
+        reported_malaria_status: r.malaria_reported,
+        reported_treatment_status: r.travel_reported,
+        assignment_id: `demo-assign-${r.worker_id}`,
+      })) as WorkerRosterItem[])
+      setRosterLoading(false)
+      return
+    }
+    if (!session?.token || !online) {
+      // Honest empty state: roster data is authoritative server data and is
+      // never fabricated while offline.
+      setRoster([])
       return
     }
 
@@ -174,7 +179,10 @@ export default function Sites() {
   useEffect(() => {
     loadSites()
     try {
-      if (session?.user?.id) {
+      if (session?.demo) {
+        // Demo quick-pick offers the synthetic roster workers.
+        setCachedWorkers(demoWorkers() as unknown as CachedWorker[])
+      } else if (session?.user?.id) {
         setCachedWorkers(readWorkers(session.user.id))
       }
     } catch {
@@ -459,8 +467,12 @@ export default function Sites() {
         <NoticeBanner
           type="offline"
           title={tr('offline')}
-          message="Displaying cached site records. Connect to LAN to create sites or assign workers."
+          message="Sites load from the live server and are unavailable while offline. Connect to LAN to create sites or assign workers."
         />
+      )}
+
+      {isDemoCtx && (
+        <DemoBanner detail="Read-only synthetic view: two demo sites with roster, travel and reported-status examples. Creating sites, assigning workers and recording status are disabled in Offline Demo because they are real server writes — nothing here is sent anywhere." />
       )}
 
       {/* VIEW 1: SITES LIST */}
@@ -487,10 +499,22 @@ export default function Sites() {
           ) : error ? (
             <NoticeBanner type="error" title="Error" message={error} />
           ) : sites.length === 0 ? (
-            <EmptyState
-              title="No Construction Sites Found"
-              message="No active sites are assigned to your organization. Tap Create Site above to set up your first construction site."
-            />
+            !online ? (
+              <EmptyState
+                title="You are offline"
+                message="You are offline — awaiting connection to load your sites. Previously cached rosters will appear when connectivity returns."
+              />
+            ) : session?.demo ? (
+              <EmptyState
+                title="Demo Mode"
+                message="Demo mode does not fabricate site records beyond the built-in SYNthetic sites shown above. Create-site is disabled in demo; sign in with an authorized contractor account on a live connection for real site management."
+              />
+            ) : (
+              <EmptyState
+                title="No Construction Sites Found"
+                message="No active sites are assigned to your organization. Tap Create Site above to set up your first construction site."
+              />
+            )
           ) : (
             <View style={s.sitesList}>
               {sites.map((site) => (
@@ -682,10 +706,17 @@ export default function Sites() {
           {rosterLoading ? (
             <LoadingSpinner message="Loading worker roster..." />
           ) : roster.length === 0 ? (
-            <EmptyState
-              title="No Workers Assigned"
-              message="No workers are currently assigned to this site. Tap 'Add Worker' to scan a worker's QR pass and assign them."
-            />
+            !online ? (
+              <EmptyState
+                title="You are offline"
+                message="This site's worker roster is loaded from the live server and cannot be shown while offline. Reconnect and refresh to view it."
+              />
+            ) : (
+              <EmptyState
+                title="No Workers Assigned"
+                message="No workers are currently assigned to this site. Tap 'Add Worker' to scan a worker's QR pass and assign them."
+              />
+            )
           ) : (
             <View style={{ gap: 10 }}>
               {roster.map((w) => (

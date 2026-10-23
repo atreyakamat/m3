@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { api, baseUrl } from './api'
+import { Badge, Button, Card, Modal, StatusBadge, Tabs } from './ui/components'
 
 interface AnalyticsDashboardProps {
   token: string
@@ -40,6 +41,7 @@ export function AnalyticsDashboard({ token, roles }: AnalyticsDashboardProps) {
 
   // Export state
   const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState('')
 
   // Construct query string for API calls
   function buildQuery(extra: Record<string, string | number> = {}): string {
@@ -156,6 +158,7 @@ export function AnalyticsDashboard({ token, roles }: AnalyticsDashboardProps) {
   async function handleExport(dataset: 'tests' | 'cases') {
     if (!token) return
     setExporting(true)
+    setExportError('')
     try {
       const q = buildQuery()
       const url = `${baseUrl}/analytics/export/${dataset}.csv${q}`
@@ -173,7 +176,8 @@ export function AnalyticsDashboard({ token, roles }: AnalyticsDashboardProps) {
       a.remove()
       window.URL.revokeObjectURL(downloadUrl)
     } catch (err: any) {
-      alert(`Export error: ${err.message}`)
+      console.error(err)
+      setExportError(`Export error: ${err.message}`)
     } finally {
       setExporting(false)
     }
@@ -187,57 +191,63 @@ export function AnalyticsDashboard({ token, roles }: AnalyticsDashboardProps) {
   const pr = tests?.positive_rate
 
   return (
-    <div className="analytics-container">
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-5)' }}>
       {/* Analytics Header & Title */}
-      <div className="analytics-header">
-        <div>
-          <div className="eyebrow">Localhost Surveillance Intelligence</div>
-          <h2 className="analytics-title">Goa Malaria Surveillance & Epidemiological Analytics</h2>
-          <div className="analytics-meta text-xs text-secondary mt-1">
+      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 'var(--sp-4)' }}>
+        <div style={{ minWidth: 0 }}>
+          <div className="m3-hint">Localhost Surveillance Intelligence</div>
+          <h2 style={{ fontSize: 'var(--fs-2xl)', fontWeight: 800, marginTop: 2, overflowWrap: 'anywhere' }}>
+            Goa Malaria Surveillance & Epidemiological Analytics
+          </h2>
+          <p className="m3-hint" style={{ marginTop: 'var(--sp-2)' }}>
             <span>As of: <strong>{summaryData?.meta?.as_of ? new Date(summaryData.meta.as_of).toLocaleString() : '—'}</strong> ({summaryData?.meta?.timezone || 'UTC'})</span>
-            <span className="ml-2">·</span>
-            <span className="ml-2">Source: <strong className="text-success">Persisted Database Records</strong> (SQLAlchemy / Alembic Head)</span>
-            <span className="ml-2">·</span>
-            <span className="ml-2">Date Basis: <strong>{dateBasis === 'received' ? 'Server Received' : 'Clinical Event Time'}</strong></span>
+            <span style={{ marginInline: 'var(--sp-2)' }}>·</span>
+            <span>Source: <Badge tone="ok" dot={false}>Persisted Database Records</Badge> (SQLAlchemy / Alembic Head)</span>
+            <span style={{ marginInline: 'var(--sp-2)' }}>·</span>
+            <span>Date Basis: <strong>{dateBasis === 'received' ? 'Server Received' : 'Clinical Event Time'}</strong></span>
+          </p>
+        </div>
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 'var(--sp-2)' }}>
+            <Button variant="secondary" size="sm" onClick={loadData} disabled={loading}>
+              {loading ? 'Refreshing...' : '↻ Refresh Data'}
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => handleExport('tests')}
+              disabled={exporting}
+              title="Export filtered records to formula-injection-safe CSV"
+            >
+              {exporting ? 'Exporting...' : '📥 Export Tests (CSV)'}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => handleExport('cases')}
+              disabled={exporting}
+              title="Export filtered case records to CSV"
+            >
+              📥 Export Cases
+            </Button>
           </div>
+          {exportError && <p className="m3-error" role="alert">⚠ {exportError}</p>}
         </div>
-        <div className="analytics-actions">
-          <button className="btn-outline btn-sm" onClick={loadData} disabled={loading}>
-            {loading ? 'Refreshing...' : '↻ Refresh Data'}
-          </button>
-          <button
-            className="btn-primary btn-sm ml-2"
-            onClick={() => handleExport('tests')}
-            disabled={exporting}
-            title="Export filtered records to formula-injection-safe CSV"
-          >
-            {exporting ? 'Exporting...' : '📥 Export Tests (CSV)'}
-          </button>
-          <button
-            className="btn-secondary btn-sm ml-2"
-            onClick={() => handleExport('cases')}
-            disabled={exporting}
-            title="Export filtered case records to CSV"
-          >
-            📥 Export Cases
-          </button>
-        </div>
-      </div>
+      </header>
 
       {/* Unified Surveillance Filter Bar (Section 7.1) */}
-      <div className="analytics-filter-card">
-        <div className="filter-card-header">
-          <span className="font-semibold text-sm">Surveillance Filters</span>
+      <section className="m3-card" style={{ padding: 'var(--sp-4) var(--sp-5)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--sp-3)' }}>
+          <span style={{ fontWeight: 600, fontSize: 'var(--fs-sm)' }}>Surveillance Filters</span>
           {(period !== 'all' || district || method || resultStatus || species || caseStatus || dateFrom || dateTo) && (
-            <button className="btn-outline btn-xs" onClick={resetFilters}>
+            <Button variant="secondary" size="sm" onClick={resetFilters}>
               Reset All Filters
-            </button>
+            </Button>
           )}
         </div>
-        <div className="filter-grid">
-          <div>
-            <label className="filter-label">Reporting Period</label>
-            <select className="filter-select" value={period} onChange={(e) => handlePeriodChange(e.target.value)}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 'var(--sp-3)' }}>
+          <div className="m3-field">
+            <label className="m3-label">Reporting Period</label>
+            <select className="m3-select" value={period} onChange={(e) => handlePeriodChange(e.target.value)}>
               <option value="all">All Available Records</option>
               <option value="today">Today</option>
               <option value="7d">Last 7 Days</option>
@@ -245,11 +255,11 @@ export function AnalyticsDashboard({ token, roles }: AnalyticsDashboardProps) {
               <option value="custom">Custom Date Range</option>
             </select>
           </div>
-          <div>
-            <label className="filter-label">Date From (UTC)</label>
+          <div className="m3-field">
+            <label className="m3-label">Date From (UTC)</label>
             <input
               type="date"
-              className="filter-select"
+              className="m3-input"
               value={dateFrom}
               onChange={(e) => {
                 setDateFrom(e.target.value)
@@ -257,11 +267,11 @@ export function AnalyticsDashboard({ token, roles }: AnalyticsDashboardProps) {
               }}
             />
           </div>
-          <div>
-            <label className="filter-label">Date To (UTC)</label>
+          <div className="m3-field">
+            <label className="m3-label">Date To (UTC)</label>
             <input
               type="date"
-              className="filter-select"
+              className="m3-input"
               value={dateTo}
               onChange={(e) => {
                 setDateTo(e.target.value)
@@ -269,10 +279,10 @@ export function AnalyticsDashboard({ token, roles }: AnalyticsDashboardProps) {
               }}
             />
           </div>
-          <div>
-            <label className="filter-label">Date Basis</label>
+          <div className="m3-field">
+            <label className="m3-label">Date Basis</label>
             <select
-              className="filter-select"
+              className="m3-select"
               value={dateBasis}
               onChange={(e) => setDateBasis(e.target.value as any)}
             >
@@ -280,26 +290,26 @@ export function AnalyticsDashboard({ token, roles }: AnalyticsDashboardProps) {
               <option value="event">Clinical Event (performed_at / reported_at)</option>
             </select>
           </div>
-          <div>
-            <label className="filter-label">District</label>
-            <select className="filter-select" value={district} onChange={(e) => setDistrict(e.target.value)}>
+          <div className="m3-field">
+            <label className="m3-label">District</label>
+            <select className="m3-select" value={district} onChange={(e) => setDistrict(e.target.value)}>
               <option value="">All Districts</option>
               <option value="North Goa">North Goa</option>
               <option value="South Goa">South Goa</option>
             </select>
           </div>
-          <div>
-            <label className="filter-label">Diagnostic Method</label>
-            <select className="filter-select" value={method} onChange={(e) => setMethod(e.target.value)}>
+          <div className="m3-field">
+            <label className="m3-label">Diagnostic Method</label>
+            <select className="m3-select" value={method} onChange={(e) => setMethod(e.target.value)}>
               <option value="">All Methods</option>
               <option value="rdt">Rapid Diagnostic Test (RDT)</option>
               <option value="microscopy">Laboratory Microscopy</option>
               <option value="other">Other / Molecular</option>
             </select>
           </div>
-          <div>
-            <label className="filter-label">Result Status</label>
-            <select className="filter-select" value={resultStatus} onChange={(e) => setResultStatus(e.target.value)}>
+          <div className="m3-field">
+            <label className="m3-label">Result Status</label>
+            <select className="m3-select" value={resultStatus} onChange={(e) => setResultStatus(e.target.value)}>
               <option value="">All Outcomes</option>
               <option value="positive">Positive</option>
               <option value="negative">Negative</option>
@@ -307,9 +317,9 @@ export function AnalyticsDashboard({ token, roles }: AnalyticsDashboardProps) {
               <option value="indeterminate">Indeterminate</option>
             </select>
           </div>
-          <div>
-            <label className="filter-label">Parasite Species</label>
-            <select className="filter-select" value={species} onChange={(e) => setSpecies(e.target.value)}>
+          <div className="m3-field">
+            <label className="m3-label">Parasite Species</label>
+            <select className="m3-select" value={species} onChange={(e) => setSpecies(e.target.value)}>
               <option value="">All Species</option>
               <option value="pv">Plasmodium vivax (Pv)</option>
               <option value="pf">Plasmodium falciparum (Pf)</option>
@@ -318,404 +328,363 @@ export function AnalyticsDashboard({ token, roles }: AnalyticsDashboardProps) {
             </select>
           </div>
         </div>
-      </div>
+      </section>
 
       {/* Sub-tab Navigation */}
-      <div className="analytics-tabs-bar">
-        <button
-          className={`analytics-tab-btn ${subTab === 'overview' ? 'active' : ''}`}
-          onClick={() => setSubTab('overview')}
-        >
-          📊 Executive Summary
-        </button>
-        <button
-          className={`analytics-tab-btn ${subTab === 'diagnostic' ? 'active' : ''}`}
-          onClick={() => setSubTab('diagnostic')}
-        >
-          🔬 Diagnostic & Positivity Rates
-        </button>
-        <button
-          className={`analytics-tab-btn ${subTab === 'lifecycle' ? 'active' : ''}`}
-          onClick={() => setSubTab('lifecycle')}
-        >
-          🏥 Case Lifecycle & Durations
-        </button>
-        <button
-          className={`analytics-tab-btn ${subTab === 'quality' ? 'active' : ''}`}
-          onClick={() => setSubTab('quality')}
-        >
-          🛡️ Data Quality & Completeness
-          {dqData?.summary?.checks_with_findings > 0 && (
-            <span className="tab-pill-badge">{dqData.summary.checks_with_findings}</span>
-          )}
-        </button>
-        <button
-          className={`analytics-tab-btn ${subTab === 'records' ? 'active' : ''}`}
-          onClick={() => setSubTab('records')}
-        >
-          📋 Traceability & Provenance Drill-down
-        </button>
-      </div>
+      <Tabs
+        value={subTab}
+        onChange={(id) => setSubTab(id as typeof subTab)}
+        tabs={[
+          { id: 'overview', label: '📊 Executive Summary' },
+          { id: 'diagnostic', label: '🔬 Diagnostic & Positivity Rates' },
+          { id: 'lifecycle', label: '🏥 Case Lifecycle & Durations' },
+          {
+            id: 'quality',
+            label: '🛡️ Data Quality & Completeness',
+            badge: dqData?.summary?.checks_with_findings > 0 ? dqData.summary.checks_with_findings : undefined,
+          },
+          { id: 'records', label: '📋 Traceability & Provenance Drill-down' },
+        ]}
+      />
 
       {/* Error / Loading State */}
       {error && (
-        <div className="state-card error-card my-3">
-          <h3>Error loading analytics</h3>
-          <p>{error}</p>
-          <button className="btn-primary btn-sm mt-2" onClick={loadData}>Retry</button>
+        <div className="m3-banner tone-danger" role="alert">
+          <div>
+            <p style={{ fontWeight: 700 }}>Error loading analytics</p>
+            <p style={{ marginTop: 2 }}>{error}</p>
+          </div>
+          <div className="banner-action">
+            <Button variant="secondary" size="sm" onClick={loadData}>Retry</Button>
+          </div>
         </div>
       )}
 
       {loading && !summaryData && (
-        <div className="state-card loading-card my-3">
-          <div className="spinner" />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, margin: 'var(--sp-3) 0' }}>
+          <div className="m3-spinner m3-spinner-dark" aria-hidden="true" />
           <p>Querying operational tables and calculating aggregates...</p>
         </div>
       )}
 
       {/* TAB 1: EXECUTIVE SUMMARY */}
       {subTab === 'overview' && summaryData && (
-        <div className="analytics-content-view">
+        <div style={{ display: 'grid', gap: 'var(--sp-4)' }}>
           {/* Section 7.2 Executive Summary Cards */}
-          <div className="metrics-grid">
-            <div className="metric-card">
-              <div className="metric-header">
-                <span className="metric-label">Total Registered Workers</span>
-                <span className="info-icon" title="Unique worker profiles enrolled in patients table">ⓘ</span>
+          <div className="metric-grid">
+            <div className="metric">
+              <div className="metric-label" title="Unique worker profiles enrolled in patients table">
+                Total Registered Workers
               </div>
-              <div className="metric-val">{workers?.registered ?? '—'}</div>
-              <div className="metric-meta text-xs text-secondary mt-1">
+              <div className="metric-value">{workers?.registered ?? '—'}</div>
+              <div className="metric-hint">
                 Active on Site: <strong>{workers?.with_active_site_assignment ?? 0}</strong>
               </div>
             </div>
 
-            <div className="metric-card">
-              <div className="metric-header">
-                <span className="metric-label">Malaria Surveillance Cases</span>
-                <span className="info-icon" title="Active health episodes tracked through case state machine">ⓘ</span>
+            <div className="metric">
+              <div className="metric-label" title="Active health episodes tracked through case state machine">
+                Malaria Surveillance Cases
               </div>
-              <div className="metric-val">{cases?.total ?? '—'}</div>
-              <div className="metric-meta text-xs text-secondary mt-1">
-                Urgent: <strong className="text-danger">{cases?.urgent ?? 0}</strong> · Standard: {((cases?.total ?? 0) - (cases?.urgent ?? 0))}
+              <div className="metric-value">{cases?.total ?? '—'}</div>
+              <div className="metric-hint">
+                Urgent: <Badge tone="danger" dot={false}>{cases?.urgent ?? 0}</Badge> · Standard: {((cases?.total ?? 0) - (cases?.urgent ?? 0))}
               </div>
             </div>
 
-            <div className="metric-card">
-              <div className="metric-header">
-                <span className="metric-label">Total Diagnostic Tests</span>
-                <span className="info-icon" title="All RDT and microscopy examinations in diagnostic_tests">ⓘ</span>
+            <div className="metric">
+              <div className="metric-label" title="All RDT and microscopy examinations in diagnostic_tests">
+                Total Diagnostic Tests
               </div>
-              <div className="metric-val">{tests?.total ?? '—'}</div>
-              <div className="metric-meta text-xs text-secondary mt-1">
+              <div className="metric-value">{tests?.total ?? '—'}</div>
+              <div className="metric-hint">
                 Linked to Case: <strong>{tests?.linkage?.linked_to_case ?? 0}</strong> · Unlinked: {tests?.linkage?.not_linked ?? 0}
               </div>
             </div>
 
-            <div className="metric-card highlight-card">
-              <div className="metric-header">
-                <span className="metric-label">Test Positivity Rate</span>
-                <span className="info-icon" title="positive / (positive + negative) * 100. Pending and indeterminate excluded from denominator.">ⓘ</span>
+            <div className="metric">
+              <div className="metric-label" title="positive / (positive + negative) * 100. Pending and indeterminate excluded from denominator.">
+                Test Positivity Rate
               </div>
-              <div className="metric-val text-primary">
+              <div className="metric-value">
                 {pr?.rate !== null && pr?.rate !== undefined ? `${(pr.rate * 100).toFixed(1)}%` : '0.0%'}
               </div>
-              <div className="metric-meta text-xs text-secondary mt-1">
+              <div className="metric-hint">
                 {pr?.numerator ?? 0} pos / {pr?.denominator ?? 0} completed tests
               </div>
             </div>
 
-            <div className="metric-card">
-              <div className="metric-header">
-                <span className="metric-label">Positive Tests</span>
-                <span className="info-icon" title="Confirmed positive results (RDT or Microscopy)">ⓘ</span>
+            <div className="metric tone-danger">
+              <div className="metric-label" title="Confirmed positive results (RDT or Microscopy)">
+                Positive Tests
               </div>
-              <div className="metric-val text-danger">{tests?.by_result?.positive ?? 0}</div>
-              <div className="metric-meta text-xs text-secondary mt-1">
+              <div className="metric-value">{tests?.by_result?.positive ?? 0}</div>
+              <div className="metric-hint">
                 Pv: {tests?.positive_by_species?.pv ?? 0} · Pf: {tests?.positive_by_species?.pf ?? 0} · Mixed: {tests?.positive_by_species?.mixed ?? 0}
               </div>
             </div>
 
-            <div className="metric-card">
-              <div className="metric-header">
-                <span className="metric-label">Negative Tests</span>
-                <span className="info-icon" title="Tests with confirmed negative parasite status">ⓘ</span>
+            <div className="metric tone-ok">
+              <div className="metric-label" title="Tests with confirmed negative parasite status">
+                Negative Tests
               </div>
-              <div className="metric-val text-success">{tests?.by_result?.negative ?? 0}</div>
-              <div className="metric-meta text-xs text-secondary mt-1">
+              <div className="metric-value">{tests?.by_result?.negative ?? 0}</div>
+              <div className="metric-hint">
                 Pending: <strong>{tests?.by_result?.pending ?? 0}</strong>
               </div>
             </div>
 
-            <div className="metric-card">
-              <div className="metric-header">
-                <span className="metric-label">Follow-ups Overdue</span>
-                <span className="info-icon" title="Scheduled protocol visits past due_at timestamp where status remains 'due'">ⓘ</span>
+            <div className="metric tone-warn">
+              <div className="metric-label" title="Scheduled protocol visits past due_at timestamp where status remains 'due'">
+                Follow-ups Overdue
               </div>
-              <div className="metric-val text-warning">{followups?.overdue ?? 0}</div>
-              <div className="metric-meta text-xs text-secondary mt-1">
+              <div className="metric-value">{followups?.overdue ?? 0}</div>
+              <div className="metric-hint">
                 Total Due: {followups?.by_status?.due ?? 0} · Completed: {followups?.by_status?.completed ?? 0}
               </div>
             </div>
 
-            <div className="metric-card">
-              <div className="metric-header">
-                <span className="metric-label">Symptom Reports</span>
-                <span className="info-icon" title="Worker-initiated unwell reports submitted via mobile client">ⓘ</span>
+            <div className="metric">
+              <div className="metric-label" title="Worker-initiated unwell reports submitted via mobile client">
+                Symptom Reports
               </div>
-              <div className="metric-val">{reports?.total ?? '—'}</div>
-              <div className="metric-meta text-xs text-secondary mt-1">
+              <div className="metric-value">{reports?.total ?? '—'}</div>
+              <div className="metric-hint">
                 Distinct Workers: <strong>{reports?.distinct_people ?? 0}</strong>
               </div>
             </div>
           </div>
 
           {/* Units of Analysis & Provenance Gaps Notice (Section 7.2) */}
-          <div className="analytics-card mt-4">
-            <h3 className="section-title">Surveillance Lineage & Epistemological Basis</h3>
-            <p className="notice-muted mt-2">
+          <Card title="Surveillance Lineage & Epistemological Basis">
+            <p style={{ color: 'var(--text-2)', maxWidth: '90ch' }}>
               Under the Goa Comprehensive Malaria Elimination Surveillance Protocol, units of analysis are tracked distinctly: <strong>Tests</strong> (rows in diagnostic_tests), <strong>Cases</strong> (health episodes in cases), and <strong>People</strong> (distinct patients). A positive test is never presented as a unique malaria case because patients undergo follow-up confirmatory microscopy.
             </p>
-            <div className="gap-badges-row mt-3">
-              <span className="badge-ro">Provenance Gaps Explicitly Logged:</span>
-              <span className="badge-neutral ml-2">Client capture time not stored</span>
-              <span className="badge-neutral ml-2">Source channel not stored</span>
-              <span className="badge-neutral ml-2">Sync state not stored server-side</span>
-              <span className="badge-neutral ml-2">performed_at assigned at result recording</span>
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 'var(--sp-2)', marginTop: 'var(--sp-3)' }}>
+              <Badge tone="accent" dot={false}>Provenance Gaps Explicitly Logged:</Badge>
+              <Badge tone="neutral" dot={false}>Client capture time not stored</Badge>
+              <Badge tone="neutral" dot={false}>Source channel not stored</Badge>
+              <Badge tone="neutral" dot={false}>Sync state not stored server-side</Badge>
+              <Badge tone="neutral" dot={false}>performed_at assigned at result recording</Badge>
             </div>
-          </div>
+          </Card>
 
           {/* Durations Summary Card */}
-          <div className="analytics-card mt-4">
-            <h3 className="section-title">Clinical Lifecycle Durations (Observed Persisted Timestamps)</h3>
-            <div className="durations-grid mt-3">
-              <div className="duration-item">
-                <div className="duration-label">Submission to Clinician Acknowledgment</div>
-                <div className="duration-val">
+          <Card title="Clinical Lifecycle Durations (Observed Persisted Timestamps)">
+            <div className="metric-grid" style={{ marginTop: 'var(--sp-2)' }}>
+              <div className="metric">
+                <div className="metric-label">Submission to Clinician Acknowledgment</div>
+                <div className="metric-value">
                   {cases?.durations?.submission_to_acknowledgement?.available
                     ? `${(cases.durations.submission_to_acknowledgement.avg_seconds / 3600).toFixed(1)} hrs`
                     : 'N/A (Pending)'}
                 </div>
-                <div className="duration-meta text-xs text-secondary">
+                <div className="metric-hint">
                   Sample size: {cases?.durations?.submission_to_acknowledgement?.n ?? 0} cases
                 </div>
               </div>
-              <div className="duration-item">
-                <div className="duration-label">Submission to First Diagnostic Result</div>
-                <div className="duration-val">
+              <div className="metric">
+                <div className="metric-label">Submission to First Diagnostic Result</div>
+                <div className="metric-value">
                   {cases?.durations?.submission_to_first_completed_result?.available
                     ? `${(cases.durations.submission_to_first_completed_result.avg_seconds / 3600).toFixed(1)} hrs`
                     : 'N/A (Pending)'}
                 </div>
-                <div className="duration-meta text-xs text-secondary">
+                <div className="metric-hint">
                   Sample size: {cases?.durations?.submission_to_first_completed_result?.n ?? 0} cases
                 </div>
               </div>
-              <div className="duration-item">
-                <div className="duration-label">Submission to Case Closure</div>
-                <div className="duration-val">
+              <div className="metric">
+                <div className="metric-label">Submission to Case Closure</div>
+                <div className="metric-value">
                   {cases?.durations?.submission_to_closure?.available
                     ? `${(cases.durations.submission_to_closure.avg_seconds / 86400).toFixed(1)} days`
                     : 'In Progress'}
                 </div>
-                <div className="duration-meta text-xs text-secondary">
+                <div className="metric-hint">
                   Sample size: {cases?.durations?.submission_to_closure?.n ?? 0} cases
                 </div>
               </div>
             </div>
-          </div>
+          </Card>
         </div>
       )}
 
       {/* TAB 2: DIAGNOSTIC TESTING & POSITIVITY */}
       {subTab === 'diagnostic' && (
-        <div className="analytics-content-view">
-          <div className="two-column-grid">
-            {/* Tests by Method */}
-            <div className="analytics-card">
-              <h3 className="section-title">Tests by Diagnostic Modality</h3>
-              <p className="text-xs text-secondary mt-1">Breakdown of active surveillance tests by laboratory method.</p>
-              <div className="chart-bar-list mt-3">
-                {breakdownMethod?.groups?.map((g: any) => {
-                  const pct = breakdownMethod.groups[0]?.total > 0 ? (g.total / breakdownMethod.groups[0].total) * 100 : 0
-                  return (
-                    <div key={g.key} className="chart-bar-item">
-                      <div className="chart-bar-labels">
-                        <span className="font-semibold text-sm">{g.key?.toUpperCase() || 'UNKNOWN'}</span>
-                        <span className="text-sm"><strong>{g.total}</strong> tests ({g.positive} pos, {g.negative} neg)</span>
-                      </div>
-                      <div className="progress-bar-bg">
-                        <div className="progress-bar-fill fill-primary" style={{ width: `${Math.min(100, Math.max(5, pct))}%` }} />
-                      </div>
-                      <div className="text-xs text-secondary mt-1">
-                        Positivity Rate: <strong>{g.positive_rate?.rate !== null ? `${(g.positive_rate.rate * 100).toFixed(1)}%` : '—'}</strong>
-                      </div>
+        <div style={{ display: 'grid', gap: 'var(--sp-4)', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))' }}>
+          {/* Tests by Method */}
+          <Card title="Tests by Diagnostic Modality" subtitle="Breakdown of active surveillance tests by laboratory method.">
+            <div className="chart-bar-list">
+              {breakdownMethod?.groups?.map((g: any) => {
+                const pct = breakdownMethod.groups[0]?.total > 0 ? (g.total / breakdownMethod.groups[0].total) * 100 : 0
+                return (
+                  <div key={g.key} className="chart-bar-item">
+                    <div className="chart-bar-labels">
+                      <span style={{ fontWeight: 600, fontSize: 'var(--fs-sm)' }}>{g.key?.toUpperCase() || 'UNKNOWN'}</span>
+                      <span style={{ fontSize: 'var(--fs-sm)' }}><strong>{g.total}</strong> tests ({g.positive} pos, {g.negative} neg)</span>
                     </div>
-                  )
-                })}
-              </div>
-            </div>
-
-            {/* Species Breakdown */}
-            <div className="analytics-card">
-              <h3 className="section-title">Species Identification (Positive Results)</h3>
-              <p className="text-xs text-secondary mt-1">Parasite speciation confirmed via RDT or Giemsa microscopy.</p>
-              <div className="chart-bar-list mt-3">
-                {Object.entries(tests?.positive_by_species || {}).map(([sp, count]: [string, any]) => {
-                  const totalPos = tests?.by_result?.positive || 1
-                  const pct = Math.round((count / totalPos) * 100)
-                  return (
-                    <div key={sp} className="chart-bar-item">
-                      <div className="chart-bar-labels">
-                        <span className="font-semibold text-sm">
-                          {sp === 'pv' ? 'Plasmodium vivax (Pv)' : sp === 'pf' ? 'Plasmodium falciparum (Pf)' : sp === 'mixed' ? 'Mixed (Pf + Pv)' : sp}
-                        </span>
-                        <span className="text-sm"><strong>{count}</strong> ({pct}%)</span>
-                      </div>
-                      <div className="progress-bar-bg">
-                        <div className="progress-bar-fill fill-danger" style={{ width: `${Math.max(5, pct)}%` }} />
-                      </div>
+                    <div className="progress-bar-bg">
+                      <div className="progress-bar-fill fill-primary" style={{ width: `${Math.min(100, Math.max(5, pct))}%` }} />
                     </div>
-                  )
-                })}
-              </div>
+                    <div className="m3-hint" style={{ marginTop: 'var(--sp-1)' }}>
+                      Positivity Rate: <strong>{g.positive_rate?.rate !== null ? `${(g.positive_rate.rate * 100).toFixed(1)}%` : '—'}</strong>
+                    </div>
+                  </div>
+                )
+              })}
             </div>
-          </div>
+          </Card>
 
-          {/* Positivity by Site & District Table */}
-          <div className="analytics-card mt-4">
-            <h3 className="section-title">Site-Level Surveillance & Positivity Rates</h3>
-            <p className="text-xs text-secondary mt-1">
-              Descriptive positive rates by construction site. Small denominators (&lt;5) are explicitly flagged as unstable.
-            </p>
-            <div className="table-responsive mt-3">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Site Code</th>
-                    <th>Site Name</th>
-                    <th>Total Tests</th>
-                    <th>Positive</th>
-                    <th>Negative</th>
-                    <th>Positivity Rate</th>
-                    <th>Reliability</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {breakdownSite?.groups?.map((s: any) => (
-                    <tr key={s.key || 'unassigned'}>
-                      <td><strong>{s.key || '—'}</strong></td>
-                      <td>{s.label || 'Unassigned Field Location'}</td>
-                      <td>{s.total}</td>
-                      <td className="text-danger font-semibold">{s.positive}</td>
-                      <td className="text-success">{s.negative}</td>
-                      <td>
-                        <strong>{s.positive_rate?.rate !== null ? `${(s.positive_rate.rate * 100).toFixed(1)}%` : '—'}</strong>
-                      </td>
-                      <td>
-                        {s.total >= 5 ? (
-                          <span className="status-badge badge-success">Adequate Sample</span>
-                        ) : (
-                          <span className="status-badge badge-warning">Small Denominator</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                  {(!breakdownSite?.groups || breakdownSite.groups.length === 0) && (
-                    <tr>
-                      <td colSpan={7} className="text-center text-secondary py-4">No site-level test records matched filters.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+          {/* Species Breakdown */}
+          <Card title="Species Identification (Positive Results)" subtitle="Parasite speciation confirmed via RDT or Giemsa microscopy.">
+            <div className="chart-bar-list">
+              {Object.entries(tests?.positive_by_species || {}).map(([sp, count]: [string, any]) => {
+                const totalPos = tests?.by_result?.positive || 1
+                const pct = Math.round((count / totalPos) * 100)
+                return (
+                  <div key={sp} className="chart-bar-item">
+                    <div className="chart-bar-labels">
+                      <span style={{ fontWeight: 600, fontSize: 'var(--fs-sm)' }}>
+                        {sp === 'pv' ? 'Plasmodium vivax (Pv)' : sp === 'pf' ? 'Plasmodium falciparum (Pf)' : sp === 'mixed' ? 'Mixed (Pf + Pv)' : sp}
+                      </span>
+                      <span style={{ fontSize: 'var(--fs-sm)' }}><strong>{count}</strong> ({pct}%)</span>
+                    </div>
+                    <div className="progress-bar-bg">
+                      <div className="progress-bar-fill fill-danger" style={{ width: `${Math.max(5, pct)}%` }} />
+                    </div>
+                  </div>
+                )
+              })}
             </div>
-          </div>
+          </Card>
         </div>
+      )}
+
+      {/* Positivity by Site & District Table */}
+      {subTab === 'diagnostic' && (
+        <Card title="Site-Level Surveillance & Positivity Rates" subtitle="Descriptive positive rates by construction site. Small denominators (<5) are explicitly flagged as unstable.">
+          <div className="m3-table-wrap" tabIndex={0} role="region" aria-label="Site-level test breakdown">
+            <table className="m3-table">
+              <thead>
+                <tr>
+                  <th>Site Code</th>
+                  <th>Site Name</th>
+                  <th>Total Tests</th>
+                  <th>Positive</th>
+                  <th>Negative</th>
+                  <th>Positivity Rate</th>
+                  <th>Reliability</th>
+                </tr>
+              </thead>
+              <tbody>
+                {breakdownSite?.groups?.map((s: any) => (
+                  <tr key={s.key || 'unassigned'}>
+                    <td><span className="m3-cell-main">{s.key || '—'}</span></td>
+                    <td>{s.label || 'Unassigned Field Location'}</td>
+                    <td className="m3-cell-num">{s.total}</td>
+                    <td><Badge tone="danger" dot={false}>{s.positive}</Badge></td>
+                    <td><Badge tone="ok" dot={false}>{s.negative}</Badge></td>
+                    <td>
+                      <strong>{s.positive_rate?.rate !== null ? `${(s.positive_rate.rate * 100).toFixed(1)}%` : '—'}</strong>
+                    </td>
+                    <td>
+                      {s.total >= 5 ? (
+                        <Badge tone="ok">Adequate Sample</Badge>
+                      ) : (
+                        <Badge tone="warn">Small Denominator</Badge>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {(!breakdownSite?.groups || breakdownSite.groups.length === 0) && (
+                  <tr>
+                    <td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-2)', padding: 'var(--sp-4) 0' }}>
+                      No site-level test records matched filters.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Card>
       )}
 
       {/* TAB 3: CASE LIFECYCLE */}
       {subTab === 'lifecycle' && (
-        <div className="analytics-content-view">
-          <div className="analytics-card">
-            <h3 className="section-title">Case Distribution Across Lifecycle States (Section 7.4)</h3>
-            <p className="text-xs text-secondary mt-1">
-              Active surveillance cases strictly mapped across the 10 state machine stages.
-            </p>
-            <div className="lifecycle-grid mt-4">
+        <div style={{ display: 'grid', gap: 'var(--sp-4)' }}>
+          <Card title="Case Distribution Across Lifecycle States (Section 7.4)" subtitle="Active surveillance cases strictly mapped across the 10 state machine stages.">
+            <div className="metric-grid" style={{ marginTop: 'var(--sp-2)' }}>
               {Object.entries(cases?.by_status || {}).map(([st, count]: [string, any]) => (
-                <div key={st} className="lifecycle-card">
-                  <div className="lifecycle-state-label">{st.replace(/_/g, ' ').toUpperCase()}</div>
-                  <div className="lifecycle-count">{count}</div>
-                  <div className="lifecycle-pct text-xs text-secondary">
+                <div key={st} className="metric">
+                  <div className="metric-label">{st.replace(/_/g, ' ').toUpperCase()}</div>
+                  <div className="metric-value">{count}</div>
+                  <div className="metric-hint">
                     {cases?.total ? `${Math.round((count / cases.total) * 100)}% of total` : '0%'}
                   </div>
                 </div>
               ))}
             </div>
-          </div>
+          </Card>
 
-          <div className="analytics-card mt-4">
-            <h3 className="section-title">Clinical Durations & Triage Latency</h3>
-            <div className="durations-grid mt-3">
-              <div className="duration-item">
-                <div className="duration-label">Submission to Triage / Acknowledgment</div>
-                <div className="duration-val">
+          <Card title="Clinical Durations & Triage Latency">
+            <div className="metric-grid" style={{ marginTop: 'var(--sp-2)' }}>
+              <div className="metric">
+                <div className="metric-label">Submission to Triage / Acknowledgment</div>
+                <div className="metric-value">
                   {cases?.durations?.submission_to_acknowledgement?.available
                     ? `${(cases.durations.submission_to_acknowledgement.avg_seconds / 3600).toFixed(1)} hours`
                     : 'N/A'}
                 </div>
-                <div className="text-xs text-secondary mt-1">
+                <div className="metric-hint">
                   Min: {cases?.durations?.submission_to_acknowledgement?.min_seconds ? `${(cases.durations.submission_to_acknowledgement.min_seconds / 60).toFixed(0)}m` : '—'} · Max: {cases?.durations?.submission_to_acknowledgement?.max_seconds ? `${(cases.durations.submission_to_acknowledgement.max_seconds / 3600).toFixed(1)}h` : '—'}
                 </div>
               </div>
 
-              <div className="duration-item">
-                <div className="duration-label">Submission to First Diagnostic Result</div>
-                <div className="duration-val">
+              <div className="metric">
+                <div className="metric-label">Submission to First Diagnostic Result</div>
+                <div className="metric-value">
                   {cases?.durations?.submission_to_first_completed_result?.available
                     ? `${(cases.durations.submission_to_first_completed_result.avg_seconds / 3600).toFixed(1)} hours`
                     : 'N/A'}
                 </div>
-                <div className="text-xs text-secondary mt-1">
+                <div className="metric-hint">
                   Min: {cases?.durations?.submission_to_first_completed_result?.min_seconds ? `${(cases.durations.submission_to_first_completed_result.min_seconds / 60).toFixed(0)}m` : '—'}
                 </div>
               </div>
 
-              <div className="duration-item">
-                <div className="duration-label">Submission to Case Resolution / Closure</div>
-                <div className="duration-val">
+              <div className="metric">
+                <div className="metric-label">Submission to Case Resolution / Closure</div>
+                <div className="metric-value">
                   {cases?.durations?.submission_to_closure?.available
                     ? `${(cases.durations.submission_to_closure.avg_seconds / 86400).toFixed(1)} days`
                     : 'In Progress'}
                 </div>
-                <div className="text-xs text-secondary mt-1">
+                <div className="metric-hint">
                   Evaluated across {cases?.durations?.submission_to_closure?.n ?? 0} closed episodes
                 </div>
               </div>
             </div>
-          </div>
+          </Card>
         </div>
       )}
 
       {/* TAB 4: DATA QUALITY & COMPLETENESS */}
       {subTab === 'quality' && (
-        <div className="analytics-content-view">
-          <div className="analytics-card">
-            <div className="dq-summary-header">
-              <div>
-                <h3 className="section-title">Data Completeness & Surveillance Integrity Rules (Section 7.5)</h3>
-                <p className="text-xs text-secondary mt-1">
-                  12 automated integrity rules checking required fields, orphan linkages, and non-standard states.
-                </p>
+        <div style={{ display: 'grid', gap: 'var(--sp-4)' }}>
+          <Card
+            title="Data Completeness & Surveillance Integrity Rules (Section 7.5)"
+            subtitle="12 automated integrity rules checking required fields, orphan linkages, and non-standard states."
+            actions={
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--sp-2)' }}>
+                <Badge tone="neutral">Rules Checked: {dqData?.summary?.checks_run ?? 12}</Badge>
+                <Badge tone="warn">With Findings: {dqData?.summary?.checks_with_findings ?? 0}</Badge>
+                <Badge tone="danger">High Severity: {dqData?.summary?.high_severity_findings ?? 0}</Badge>
               </div>
-              <div className="dq-stats">
-                <span className="status-badge badge-neutral">Rules Checked: {dqData?.summary?.checks_run ?? 12}</span>
-                <span className="status-badge badge-warning ml-2">With Findings: {dqData?.summary?.checks_with_findings ?? 0}</span>
-                <span className="status-badge badge-danger ml-2">High Severity: {dqData?.summary?.high_severity_findings ?? 0}</span>
-              </div>
-            </div>
-
-            <div className="table-responsive mt-3">
-              <table className="data-table">
+            }
+          >
+            <div className="m3-table-wrap" tabIndex={0} role="region" aria-label="Data quality checks">
+              <table className="m3-table">
                 <thead>
                   <tr>
                     <th>Rule Key</th>
@@ -733,29 +702,27 @@ export function AnalyticsDashboard({ token, roles }: AnalyticsDashboardProps) {
                     <tr key={chk.key}>
                       <td><code>{chk.key}</code></td>
                       <td>
-                        <strong>{chk.name}</strong>
-                        <div className="text-xs text-secondary">{chk.definition}</div>
+                        <span className="m3-cell-main">{chk.name}</span>
+                        <span className="m3-cell-sub">{chk.definition}</span>
                       </td>
                       <td>
-                        <span className={`status-badge ${chk.severity === 'high' ? 'badge-danger' : chk.severity === 'medium' ? 'badge-warning' : 'badge-neutral'}`}>
+                        <Badge tone={chk.severity === 'high' ? 'danger' : chk.severity === 'medium' ? 'warn' : 'neutral'}>
                           {chk.severity?.toUpperCase()}
-                        </span>
+                        </Badge>
                       </td>
                       <td><code>{chk.table}</code></td>
                       <td>
-                        <strong className={chk.affected > 0 ? 'text-danger' : 'text-success'}>
-                          {chk.affected}
-                        </strong> / {chk.total}
+                        <Badge tone={chk.affected > 0 ? 'danger' : 'ok'} dot={false}>{chk.affected}</Badge> / {chk.total}
                       </td>
-                      <td>{chk.pct_affected !== null ? `${chk.pct_affected}%` : '0%'}</td>
-                      <td className="text-xs">{chk.remediation}</td>
+                      <td className="m3-cell-num">{chk.pct_affected !== null ? `${chk.pct_affected}%` : '0%'}</td>
+                      <td className="m3-hint">{chk.remediation}</td>
                       <td>
                         {chk.affected > 0 ? (
-                          <button className="btn-outline btn-xs" onClick={() => inspectDqCheck(chk)}>
+                          <Button variant="secondary" size="sm" onClick={() => inspectDqCheck(chk)}>
                             Drill Down →
-                          </button>
+                          </Button>
                         ) : (
-                          <span className="text-success text-xs font-semibold">✓ Pass</span>
+                          <span className="badge tone-ok no-dot">✓ Pass</span>
                         )}
                       </td>
                     </tr>
@@ -763,95 +730,92 @@ export function AnalyticsDashboard({ token, roles }: AnalyticsDashboardProps) {
                 </tbody>
               </table>
             </div>
-          </div>
+          </Card>
 
           {/* Drill-down Drawer for Data Quality Check */}
           {activeDqCheck && (
-            <div className="modal-backdrop" onClick={() => setActiveDqCheck(null)}>
-              <div className="modal-card wide-modal" onClick={(e) => e.stopPropagation()}>
-                <div className="modal-header">
-                  <div>
-                    <h3>Data Quality Drill-down: {activeDqCheck.name}</h3>
-                    <p className="text-xs text-secondary mt-1">
-                      Rule <code>{activeDqCheck.key}</code> · {activeDqCheck.affected} affected records in <code>{activeDqCheck.table}</code>
-                    </p>
-                  </div>
-                  <button className="btn-close" onClick={() => setActiveDqCheck(null)}>×</button>
-                </div>
-                <div className="modal-body">
-                  <div className="notice-banner mb-3">
-                    <strong>Remediation:</strong> {activeDqCheck.remediation} ({activeDqCheck.safe_to_remediate_automatically ? 'Safe for automated script' : 'Requires human clinical/supervisor review'})
-                  </div>
-                  {dqRecordsLoading ? (
-                    <div className="spinner my-4" />
-                  ) : (
-                    <div className="table-responsive">
-                      <table className="data-table">
-                        <thead>
-                          <tr>
-                            <th>Record Type</th>
-                            <th>Identifiers</th>
-                            <th>Status / Detail</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {dqRecords.map((r: any, idx: number) => (
-                            <tr key={idx}>
-                              <td><span className="status-badge badge-neutral">{r.record_type}</span></td>
-                              <td>
-                                {r.test_id && <div>Test ID: <code>{r.test_id}</code></div>}
-                                {r.sample_code && <div>Sample: <strong>{r.sample_code}</strong></div>}
-                                {r.case_code && <div>Case: <strong>{r.case_code}</strong></div>}
-                                {r.worker_ref && <div>Worker Ref: <code>{r.worker_ref}</code></div>}
-                              </td>
-                              <td>{r.status || 'Flagged for integrity review'}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
+            <Modal
+              open
+              wide
+              title={`Data Quality Drill-down: ${activeDqCheck.name}`}
+              onClose={() => setActiveDqCheck(null)}
+            >
+              <p className="m3-hint">
+                Rule <code>{activeDqCheck.key}</code> · {activeDqCheck.affected} affected records in <code>{activeDqCheck.table}</code>
+              </p>
+              <div className="m3-banner tone-info" style={{ marginTop: 'var(--sp-3)' }}>
+                <span>
+                  <strong>Remediation:</strong> {activeDqCheck.remediation} ({activeDqCheck.safe_to_remediate_automatically ? 'Safe for automated script' : 'Requires human clinical/supervisor review'})
+                </span>
               </div>
-            </div>
+              {dqRecordsLoading ? (
+                <div className="m3-spinner m3-spinner-dark" style={{ margin: 'var(--sp-4) auto', display: 'block' }} aria-hidden="true" />
+              ) : (
+                <div className="m3-table-wrap" style={{ marginTop: 'var(--sp-3)' }} tabIndex={0} role="region" aria-label="Affected records">
+                  <table className="m3-table">
+                    <thead>
+                      <tr>
+                        <th>Record Type</th>
+                        <th>Identifiers</th>
+                        <th>Status / Detail</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {dqRecords.map((r: any, idx: number) => (
+                        <tr key={idx}>
+                          <td><Badge tone="neutral" dot={false}>{r.record_type}</Badge></td>
+                          <td>
+                            {r.sample_code && <span className="m3-cell-main">Sample: {r.sample_code}</span>}
+                            {r.test_id && <span className="m3-cell-sub">Test ID: <code>{r.test_id}</code></span>}
+                            {r.case_code && <span className="m3-cell-sub">Case: {r.case_code}</span>}
+                            {r.worker_ref && <span className="m3-cell-sub">Worker Ref: <code>{r.worker_ref}</code></span>}
+                          </td>
+                          <td>
+                            {r.status ? <StatusBadge status={r.status} /> : <span className="m3-hint">Flagged for integrity review</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </Modal>
           )}
         </div>
       )}
 
       {/* TAB 5: TRACEABILITY & PROVENANCE DRILL-DOWN */}
       {subTab === 'records' && (
-        <div className="analytics-content-view">
-          <div className="analytics-card">
-            <div className="flex-between">
-              <div>
-                <h3 className="section-title">Test-Level Provenance & Traceability Records (Section 7.6)</h3>
-                <p className="text-xs text-secondary mt-1">
-                  Individual records showing modality, timestamps, linkage status, and pseudonymized patient reference.
-                </p>
-              </div>
-              <div className="records-pagination-controls">
-                <button
-                  className="btn-outline btn-xs"
+        <div style={{ display: 'grid', gap: 'var(--sp-4)' }}>
+          <Card
+            title="Test-Level Provenance & Traceability Records (Section 7.6)"
+            subtitle="Individual records showing modality, timestamps, linkage status, and pseudonymized patient reference."
+            actions={
+              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
+                <Button
+                  variant="secondary"
+                  size="sm"
                   disabled={recordsOffset <= 0}
                   onClick={() => setRecordsOffset(Math.max(0, recordsOffset - 25))}
                 >
                   ← Previous 25
-                </button>
-                <span className="text-xs text-secondary mx-2">
+                </Button>
+                <span className="m3-hint" style={{ marginInline: 'var(--sp-1)' }}>
                   Showing {recordsOffset + 1} - {Math.min((testsData?.total || 0), recordsOffset + 25)} of {testsData?.total || 0}
                 </span>
-                <button
-                  className="btn-outline btn-xs"
+                <Button
+                  variant="secondary"
+                  size="sm"
                   disabled={recordsOffset + 25 >= (testsData?.total || 0)}
                   onClick={() => setRecordsOffset(recordsOffset + 25)}
                 >
                   Next 25 →
-                </button>
+                </Button>
               </div>
-            </div>
-
-            <div className="table-responsive mt-3">
-              <table className="data-table">
+            }
+          >
+            <div className="m3-table-wrap" tabIndex={0} role="region" aria-label="Test-level provenance records">
+              <table className="m3-table">
                 <thead>
                   <tr>
                     <th>Test ID</th>
@@ -871,46 +835,48 @@ export function AnalyticsDashboard({ token, roles }: AnalyticsDashboardProps) {
                   {testsData?.items?.map((t: any) => (
                     <tr key={t.test_id}>
                       <td><code>{t.test_id?.slice(0, 8)}...</code></td>
-                      <td><strong>{t.sample_code}</strong></td>
+                      <td><span className="m3-cell-main">{t.sample_code}</span></td>
                       <td>{t.case_code || '—'}</td>
                       <td><code>{t.worker_ref}</code></td>
                       <td>
-                        <div>{t.facility?.name || t.site?.name || '—'}</div>
-                        <div className="text-xs text-secondary">{t.district || 'Goa'}</div>
+                        <span className="m3-cell-main">{t.facility?.name || t.site?.name || '—'}</span>
+                        <span className="m3-cell-sub">{t.district || 'Goa'}</span>
                       </td>
-                      <td><span className="status-badge badge-neutral">{t.method}</span></td>
+                      <td><Badge tone="neutral" dot={false}>{t.method}</Badge></td>
                       <td>
-                        <span className={`status-badge ${t.result_status === 'positive' ? 'badge-danger' : t.result_status === 'negative' ? 'badge-success' : 'badge-warning'}`}>
+                        <Badge tone={t.result_status === 'positive' ? 'danger' : t.result_status === 'negative' ? 'ok' : 'warn'}>
                           {t.result_status?.toUpperCase()}
-                        </span>
+                        </Badge>
                       </td>
                       <td>{t.species?.toUpperCase() || '—'}</td>
-                      <td className="text-xs">{t.server_received_at ? new Date(t.server_received_at).toLocaleString() : '—'}</td>
+                      <td className="m3-hint">{t.server_received_at ? new Date(t.server_received_at).toLocaleString() : '—'}</td>
                       <td>
-                        <span className={`status-badge ${t.linkage_status === 'linked' ? 'badge-success' : 'badge-warning'}`}>
-                          {t.linkage_status}
-                        </span>
+                        <Badge tone={t.linkage_status === 'linked' ? 'ok' : 'warn'}>{t.linkage_status}</Badge>
                       </td>
                       <td>
                         {t.data_quality_flags?.length > 0 ? (
-                          t.data_quality_flags.map((fl: string) => (
-                            <span key={fl} className="status-badge badge-danger mr-1">{fl}</span>
-                          ))
+                          <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 4 }}>
+                            {t.data_quality_flags.map((fl: string) => (
+                              <Badge key={fl} tone="danger" dot={false}>{fl}</Badge>
+                            ))}
+                          </span>
                         ) : (
-                          <span className="text-xs text-success">Clean</span>
+                          <Badge tone="ok" dot={false}>Clean</Badge>
                         )}
                       </td>
                     </tr>
                   ))}
                   {(!testsData?.items || testsData.items.length === 0) && (
                     <tr>
-                      <td colSpan={11} className="text-center text-secondary py-4">No records found matching current filters.</td>
+                      <td colSpan={11} style={{ textAlign: 'center', color: 'var(--text-2)', padding: 'var(--sp-4) 0' }}>
+                        No records found matching current filters.
+                      </td>
                     </tr>
                   )}
                 </tbody>
               </table>
             </div>
-          </div>
+          </Card>
         </div>
       )}
     </div>

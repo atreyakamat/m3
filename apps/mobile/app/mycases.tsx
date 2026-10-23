@@ -15,6 +15,9 @@ import {
   NoticeBanner,
   StatusBadge,
 } from '@/components/ui'
+import { DemoBanner } from '@/components/DemoBanner'
+import { demoCasesForWorker } from '@/src/demoData'
+import { listDemoRecords } from '@/src/demoStore'
 import { router } from 'expo-router'
 
 // Worker-facing case status screen. Served data is already role-scoped by the
@@ -51,7 +54,25 @@ export default function MyCases() {
   const [lastSync, setLastSync] = useState<string | null>(null)
 
   const authGuard = useCallback((): boolean => {
-    if (!token || session?.demo || !session?.user?.roles?.includes('worker')) {
+    if (session?.demo) {
+      // Demo: deterministic synthetic cases for the demo worker identity plus
+      // any symptom/health reports the tester saved in demo mode.
+      const localCases = listDemoRecords().map((r) => ({
+        id: r.id,
+        case_code: `DEMO-LOCAL-${r.kind.replace(/_/g, '-').toUpperCase()}`,
+        status: r.kind === 'symptom_report' ? 'awaiting_clinical_review' : 'closed',
+        urgent: r.kind === 'symptom_report' && Boolean((r.payload as any)?.symptoms?.some?.((s: string) => ['breathing_difficulty', 'chest_pain', 'confusion'].includes(s))),
+        site_name: null,
+        created_at: r.created_at,
+        demo: true,
+      }))
+      setCases([...localCases, ...demoCasesForWorker(session?.user?.patient_id || 'demo-worker-1')])
+      setDetail(null)
+      setError('')
+      setLastSync('demo (local device)')
+      return false
+    }
+    if (!token || !session?.user?.roles?.includes('worker')) {
       setError('A signed-in worker session is required to view case status.')
       return false
     }
@@ -74,6 +95,25 @@ export default function MyCases() {
   }, [token, authGuard])
 
   const loadDetail = useCallback(async (caseId: string) => {
+    if (session?.demo) {
+      // Demo: build the status history locally from the same synthetic case —
+      // never a server fetch.
+      const base = cases.find((c) => c.id === caseId)
+      setDetail({
+        ...(base || {}),
+        id: caseId,
+        case_code: base?.case_code || 'DEMO-SYN-CASE',
+        status: base?.status || 'closed',
+        created_at: base?.created_at || 'demo',
+        patient_code: base?.patient_code || 'M3-SYN-7K2Q',
+        status_timeline: [
+          { to_status: 'submitted', created_at: base?.created_at || 'demo' },
+          { to_status: base?.status || 'closed', created_at: base?.created_at || 'demo' },
+        ],
+        demo: true,
+      })
+      return
+    }
     if (!authGuard()) return
     setLoading(true)
     setError('')
@@ -97,6 +137,7 @@ export default function MyCases() {
       <ScrollView contentContainerStyle={st.container}>
         <Card
           title={`Case ${detail.case_code}`}
+          subtitle={detail.demo ? 'SYNTHETIC DEMO — stored on this device only' : undefined}
           badge={detail.urgent ? 'URGENT' : undefined}
         >
           <StatusBadge
@@ -142,18 +183,14 @@ export default function MyCases() {
 
   return (
     <ScrollView contentContainerStyle={st.container}>
+      {session?.demo && (
+        <DemoBanner detail="Every case below is a synthetic example (or a demo submission you saved locally). Statuses are illustrative only and no clinician ever sees them." />
+      )}
       {!online && (
         <NoticeBanner
           type="offline"
           title="Offline"
           message="Showing the last synchronized data. Case status updates when the connection returns."
-        />
-      )}
-      {session?.demo && (
-        <NoticeBanner
-          type="warning"
-          title="Demo Mode"
-          message="Sign in with your worker account to see your real case status. Nothing is shown here by guesswork."
         />
       )}
       {error ? <NoticeBanner type="error" title="Could not load" message={error} /> : null}
@@ -199,7 +236,11 @@ export default function MyCases() {
         ))
       )}
       {lastSync && (
-        <Text style={st.syncNote}>Synchronized {lastSync.slice(0, 19).replace('T', ' ')} · data shown comes from the server only.</Text>
+        <Text style={st.syncNote}>
+          {session?.demo
+            ? 'Demo data — saved/synthesized on this device only; no server data is involved.'
+            : `Synchronized ${lastSync.slice(0, 19).replace('T', ' ')} · data shown comes from the server only.`}
+        </Text>
       )}
     </ScrollView>
   )

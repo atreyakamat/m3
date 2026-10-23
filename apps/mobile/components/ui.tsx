@@ -11,6 +11,7 @@ import {
   TextInput,
   StyleProp,
   TextInputProps,
+  useWindowDimensions,
   View,
   ViewStyle,
   TextStyle,
@@ -442,7 +443,7 @@ export function NoticeBanner({
         <Pressable
           accessibilityRole="button"
           onPress={onAction}
-          style={s.noticeActionBtn}
+          style={({ pressed }) => [s.noticeActionBtn, pressed && s.noticeActionPressed]}
         >
           <Text style={[s.noticeActionText, textStyle]}>{actionLabel} →</Text>
         </Pressable>
@@ -569,6 +570,12 @@ interface FormShellProps {
 
 export function FormShell({ children, footer, contentContainerStyle, style, scrollApiRef }: FormShellProps) {
   const insets = useSafeAreaInsets()
+  // Tablet usability: on wide screens constrain the form column and centre it
+  // so fields, pickers and the sticky footer stay reachable (thumb range) and
+  // rows never stretch edge-to-edge. Phone layout is unaffected (maxWidth only
+  // binds when the window is wider than the column).
+  const { width } = useWindowDimensions()
+  const columnMaxWidth = width >= 768 ? Math.min(width - 96, 720) : undefined
   const scrollViewRef = useRef<ScrollView>(null)
   const fieldsRef = useRef(new Map<string, View>())
 
@@ -635,7 +642,11 @@ export function FormShell({ children, footer, contentContainerStyle, style, scro
           ref={scrollViewRef}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
-          contentContainerStyle={[s.shellContent, { paddingBottom: (insets.bottom || 0) + 24 }, contentContainerStyle]}
+          contentContainerStyle={[
+            s.shellContent,
+            { paddingBottom: (insets.bottom || 0) + 24, alignSelf: 'center', width: '100%', maxWidth: columnMaxWidth },
+            contentContainerStyle,
+          ]}
         >
           {children}
         </ScrollView>
@@ -979,6 +990,9 @@ const s = StyleSheet.create({
   },
   noticeActionBtn: {
     marginTop: 4,
+  },
+  noticeActionPressed: {
+    opacity: 0.6,
   },
   noticeActionText: {
     fontSize: 12,

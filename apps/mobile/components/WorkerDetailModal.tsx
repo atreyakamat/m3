@@ -13,6 +13,7 @@ import { t } from '@/src/i18n'
 import { api } from '@/src/api'
 import { StatusBadge } from '@/components/ui'
 import type { CachedWorker } from '@/src/cache'
+import { demoAssessments, demoSamples, demoFollowups } from '@/src/demoData'
 
 /* Task 4: bottom-sheet worker inspection with four detail tabs.
  * Tab 1 Profile: demographics and contact.
@@ -63,7 +64,26 @@ export function WorkerDetailModal({
 
   const loadAll = useCallback(async () => {
     if (!worker) return
-    if (!session?.token || !online || session?.demo) {
+    if (session?.demo) {
+      // Offline Demo: show the synthetic profile plus any synthetic examples
+      // from demoData (and local demo records) — never a server fetch.
+      setDetailError(null)
+      setDetail(worker)
+      const roles = session?.user?.roles || []
+      const next: typeof roleData = {}
+      if (roles.includes('clinician') || roles.includes('health_worker')) {
+        next.assessments = { items: demoAssessments().filter((a) => a.patient_code === worker.patient_code) }
+      }
+      if (roles.some((r) => ['pathologist', 'pathology', 'research_lab'].includes(r))) {
+        next.samples = { items: demoSamples().filter((s) => s.patient_code === worker.patient_code) }
+      }
+      if (roles.includes('clinician') || roles.includes('health_worker')) {
+        next.followups = { items: demoFollowups().filter((f) => f.patient_code === worker.patient_code) }
+      }
+      setRoleData(next)
+      return
+    }
+    if (!session?.token || !online) {
       setDetailError(tr('noWorkerDetails'))
       return
     }
@@ -107,7 +127,7 @@ export function WorkerDetailModal({
     } finally {
       setDetailLoading(false)
     }
-  }, [worker, session?.token, session?.demo, online, tr])
+  }, [worker, session?.token, session?.demo, online, session?.user?.roles, tr])
 
   useEffect(() => {
     if (visible) loadAll()

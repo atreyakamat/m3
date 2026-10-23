@@ -1,6 +1,7 @@
 import * as SecureStore from 'expo-secure-store'
 import { Platform } from 'react-native'
 import { readMeta, writeMeta, deleteMeta } from './cache'
+import { useAppStore } from './store'
 
 // ---------------------------------------------------------------------------
 // Task 1: runtime-configurable API base URL.
@@ -34,7 +35,27 @@ export function normalizeServerUrl(input: string): string | null {
   return cleaned
 }
 
+// ---------------------------------------------------------------------------
+// Standalone Local Server mode (Phase 5): the tablet hosts the REAL FastAPI
+// backend in-process (Chaquopy CPython + uvicorn, see docs/STANDALONE_LOCAL_SERVER.md).
+// In this mode the base URL is FORCED to the loopback server — the runtime
+// stored custom server URL and every other resolution branch are ignored, so a
+// request can never accidentally reach a previously-configured remote server.
+// The stored remote URL is preserved untouched and re-activated when local
+// mode is switched off.
+// ---------------------------------------------------------------------------
+
+const LOCAL_MODE_META_KEY = 'localMode'
+/** Must match LocalServerModule.kt / m3_local_server.py (loopback-only bind). */
+export const LOCAL_SERVER_PORT = 8741
+const LOCAL_API_BASE = `http://127.0.0.1:${LOCAL_SERVER_PORT}/api/v1`
+
+let localModeActive = false
+
 function resolveMobileBaseUrl(): string {
+  if (localModeActive) {
+    return LOCAL_API_BASE
+  }
   const stored = readMeta(SERVER_URL_META_KEY)
   if (stored && /^https?:\/\/.+/.test(stored)) {
     return stored
@@ -81,8 +102,33 @@ export function applyServerUrl(url: string | null): string {
 }
 
 /** Called at app start to pick up a persisted custom URL (if it was written
- * before this module loaded) — cheap and stable on every platform. */
+ * before this module loaded) — cheap and stable on every platform. Also
+ * restores the persisted Standalone Local Server mode flag if a previous
+ * session used it (`isLocalMode()` then reports the truth before the app UI
+ * asks the native server bridge to start). */
 export function initBaseUrl(): string {
+  localModeActive = readMeta(LOCAL_MODE_META_KEY) === '1'
+  baseUrl = resolveMobileBaseUrl()
+  return baseUrl
+}
+
+// --- Standalone Local Server mode ----------------------------------------
+
+/** The current local-server mode (device hosting the real backend). The
+ * persisted flag survives restarts so returning to the app re-enters the
+ * same server lifecycle instead of silently falling back to a remote URL. */
+export const isLocalMode = (): boolean => localModeActive
+
+/** The forced loopback URL used in local mode (also used by readiness probes). */
+export const localApiBase = (): string => LOCAL_API_BASE
+
+/** Enter/leave standalone local-server mode. The custom (remote) server URL
+ * stored in cache_meta is NEVER modified — switching modes back re-activates
+ * it exactly as saved. */
+export function setLocalMode(active: boolean): string {
+  localModeActive = active
+  if (active) writeMeta(LOCAL_MODE_META_KEY, '1')
+  else deleteMeta(LOCAL_MODE_META_KEY)
   baseUrl = resolveMobileBaseUrl()
   return baseUrl
 }
@@ -157,6 +203,18 @@ export async function api<T>(path: string, token?: string, init: RequestInit = {
     const body = await response.json().catch(() => ({}))
     const raw = (body as any).detail
     const message = typeof raw === 'string' ? raw : (raw?.message || `Request failed (${response.status})`)
+    // Central 401 session-degradation hook: a request that CARRIED a token and
+    // got 401 means the session is expired/revoked. Only flag the store (the
+    // token itself must stay — screens persist drafts tied to the session);
+    // the dashboard banner lets the user explicitly sign out. Never let this
+    // observation break the normal ApiError contract.
+    if (response.status === 401 && token) {
+      try {
+        useAppStore.getState().markSessionExpired()
+      } catch {
+        // store not ready (edge bundling scenarios): per-screen alerts still fire
+      }
+    }
     throw new ApiError(response.status, raw, message, respReqId)
   }
   return response.json() as Promise<T>

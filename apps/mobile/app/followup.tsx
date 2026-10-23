@@ -20,6 +20,10 @@ import {
   EmptyState,
   LoadingSpinner,
 } from '@/components/ui'
+import { DemoBanner } from '@/components/DemoBanner'
+import { demoFollowups, demoHealthWorkerOptions } from '@/src/demoData'
+import { saveDemoRecord, listDemoRecords } from '@/src/demoStore'
+import type { DemoFollowup } from '@/src/demoData'
 
 interface FollowUpRow {
   id: string
@@ -54,7 +58,10 @@ export default function Followup() {
   const params = useLocalSearchParams<{ patientId?: string }>()
 
   const isClinician = session?.user?.roles?.includes('clinician')
-  const disabled = !online || !session?.token || session?.demo
+  // Demo: the read-only queue and (for clinicians) the local demo assignment
+  // form stay available; only real server writes require token + network.
+  const isDemo = Boolean(session?.demo)
+  const canAssign = isDemo ? isClinician : online && Boolean(session?.token) && isClinician
 
   // Read-only assignment list for health workers (and clinicians).
   const [assignments, setAssignments] = useState<FollowUpRow[] | null>(null)
@@ -70,7 +77,31 @@ export default function Followup() {
   const [formError, setFormError] = useState('')
 
   const load = useCallback(async () => {
-    if (!session?.token || !online || session?.demo) return
+    if (session?.demo) {
+      // Synthetic demo queue: deterministic examples + everything recorded
+      // locally in demo mode during this install. Zero server traffic.
+      const localRows: FollowUpRow[] = listDemoRecords('followup').map((r) => {
+        const p = r.payload as any
+        return {
+          id: r.id,
+          patient_id: p?.patient_id || '',
+          scheduled_day: p?.scheduled_day,
+          due_at: p?.due_at || r.created_at,
+          status: 'demo_saved_locally',
+          assigned_to_user_id: p?.assigned_user_id || null,
+          assigned_user_name: p?.assigned_user_name || 'Synthetic Health Worker',
+          completed_at: null,
+          outcome: null,
+        }
+      })
+      setAssignments([
+        ...localRows,
+        ...(demoFollowups() as unknown as FollowUpRow[]),
+      ])
+      setListError('')
+      return
+    }
+    if (!session?.token || !online) return
     try {
       const res = await api<{ items: FollowUpRow[] }>('/follow-ups', session.token)
       setAssignments(res.items || [])
@@ -85,6 +116,11 @@ export default function Followup() {
   }, [session?.token, online, session?.demo])
 
   async function loadWorkers() {
+    if (session?.demo) {
+      // Synthetic health-worker options so the demo assignment form is usable.
+      setWorkers(demoHealthWorkerOptions())
+      return
+    }
     try {
       const res = await api<{ items: HealthWorkerOption[] }>('/health-workers', session!.token!)
       setWorkers(res.items || [])
@@ -94,12 +130,19 @@ export default function Followup() {
   }
 
   useEffect(() => {
-    if (!isClinician || !session?.token || !online || session?.demo) return
+    if (session?.demo) {
+      // Demo: synthetic assignments + health-worker options, no server.
+      load()
+      loadWorkers()
+      return
+    }
+    if (!isClinician || !session?.token || !online) return
     loadWorkers()
-  }, [isClinician, session?.token, online, session?.demo])
+  }, [isClinician, session?.token, online, session?.demo, load])
 
   async function assign() {
-    if (!session?.token) return
+    if (!isClinician) return
+    if (!session?.demo && !session?.token) return
     setFormError('')
     if (!patientId.trim()) {
       setFormError('Patient ID or code is required')
@@ -109,6 +152,34 @@ export default function Followup() {
       setFormError('Assign a Health Worker before scheduling')
       return
     }
+
+    if (session?.demo) {
+      // Offline Demo: finalize a LOCAL synthetic demo assignment (never a
+      // server write; the demo queue above shows it with its local timestamp).
+      const assignedName = demoHealthWorkerOptions().find((w) => w.id === assignedId)?.display_name
+        || 'Synthetic Health Worker'
+      saveDemoRecord({
+        kind: 'followup',
+        label: `Follow-up +${scheduledDay}d — ${patientId.trim()}`,
+        payload: {
+          patient_id: patientId.trim(),
+          assigned_user_id: assignedId,
+          assigned_user_name: assignedName,
+          scheduled_day: `+${scheduledDay}d`,
+          due_at: dueDateFor(scheduledDay),
+          notes: notes.trim() || undefined,
+        },
+      })
+      Alert.alert(
+        'Demo follow-up saved locally',
+        `Reference saved on this device at ${new Date().toLocaleString()}.\n\nThis is SYNTHETIC DEMO data only; no health worker has actually been assigned and nothing will upload to a server.`
+      )
+      setPatientId('')
+      setNotes('')
+      await load()
+      return
+    }
+
     setPending(true)
     try {
       await api('/follow-ups', session.token, {
@@ -150,6 +221,9 @@ export default function Followup() {
 
       {!online && (
         <NoticeBanner type="offline" title={tr('offline')} message={tr('connectivityRequired')} />
+      )}
+      {isDemo && (
+        <DemoBanner detail="The queue below is a synthetic example set. Clinicians can schedule a LOCAL demo follow-up; no real health worker will be assigned and nothing uploads." />
       )}
 
       {isClinician ? (
@@ -214,7 +288,7 @@ export default function Followup() {
               size="lg"
               fullWidth
               loading={pending}
-              disabled={disabled || pending}
+              disabled={!canAssign || pending}
               onPress={assign}
             >
               {tr('submit')}
@@ -238,7 +312,7 @@ export default function Followup() {
           <EmptyState
             title={tr('noRecords')}
             message={
-              disabled
+              !canAssign
                 ? 'Connect to the LAN API to load your assigned visits.'
                 : 'No follow-up visits are assigned to you yet.'
             }

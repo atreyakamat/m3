@@ -8,16 +8,23 @@ import {
 } from 'react-native'
 import { router } from 'expo-router'
 import { api } from '@/src/api'
+import { flushOutbox as flushOutboxShared } from '@/src/outbox'
 import { t } from '@/src/i18n'
 import { useAppStore } from '@/src/store'
+import { demoSites } from '@/src/demoData'
+import {
+  saveDemoDraft,
+  readDemoDraft,
+  deleteDemoDraft,
+  saveDemoRecord,
+  listDemoRecords,
+} from '@/src/demoStore'
+import { computeQuestionnaireSectionErrors, type QuestionnaireFormData, type TravelEpisodeState } from '@/src/questionnaireValidation'
 import {
   saveDraft,
   readDraft,
   deleteDraft,
   enqueueOutbox,
-  readOutbox,
-  removeOutbox,
-  setOutboxStatus,
   outboxCount,
   isAuthError,
   getPendingRequestId,
@@ -39,6 +46,7 @@ import {
   FormScrollApi,
 } from '@/components/ui'
 import { CalendarDatePickerField } from '@/components/CalendarDatePickerField'
+import { DemoBanner } from '@/components/DemoBanner'
 import {
   addCalendarYears,
   ageInCompletedYears,
@@ -50,73 +58,9 @@ import {
   validatePlannedTravelDates,
 } from '@/src/dateFields'
 
-interface TravelEpisodeState {
-  departure_date: string
-  return_date: string
-  place_state: string
-  fever_malaria_during: 'yes' | 'no' | ''
-  treatment_given?: 'yes' | 'no' | ''
-  full_course_completed?: 'yes' | 'no' | 'not_sure' | ''
-  treatment_place?: string
-  treatment_place_other?: string
-}
-
-interface QuestionnaireFormData {
-  personal: {
-    full_name: string
-    dob: string
-    dob_unknown: 'yes' | 'no' // local fallback when the worker does not know DOB
-    age_years: string // manual fallback age (only when dob_unknown === 'yes')
-    gender: 'male' | 'female' | ''
-    mobile: string
-    alternate_contact: string
-    id_type: 'aadhaar' | 'voter_id' | 'other' | ''
-    id_other_details: string
-    address_present: string
-    address_permanent: string
-    preferred_language: 'hindi' | 'english' | 'bengali' | 'other' | ''
-    site_id?: string
-  }
-  past_history: {
-    diagnosed_malaria: 'yes' | 'no' | 'dont_know' | ''
-    times_malaria_2y: string
-    last_detection: 'less_1_year' | '1_2_years' | 'dont_know' | ''
-    treatment_place: 'uhc_phc' | 'private_clinic' | 'govt_hospital' | 'pharmacy' | 'other' | ''
-    treatment_place_other: string
-    diagnostic_test_performed: 'yes' | 'no' | ''
-    same_day_report: 'yes' | 'no' | ''
-    test_method: 'rdt' | 'microscopy' | 'not_sure' | ''
-    medication_period: 'days_3' | 'days_14' | 'followup_28' | 'not_informed' | 'dont_know' | ''
-    full_course_completed: 'yes' | 'no' | 'not_sure' | ''
-    // Source questionnaire page 2, recorded alongside Section II.
-    repellent_use: 'yes' | 'no' | ''
-    mosquito_net_use: 'yes' | 'no' | ''
-    mobile_brand: string
-    qualification: string
-  }
-  present_clinical: {
-    fever_today: 'yes' | 'no' | 'not_sure' | ''
-    temperature_c: string
-    fever_duration: 'within_24h' | '1_3_days' | 'more_3_days' | 'not_required' | ''
-    symptoms: string[]
-    onset_date: string
-    breathing_difficulty: 'yes' | 'no' | ''
-    chest_pain: 'yes' | 'no' | ''
-    confusion: 'yes' | 'no' | ''
-    can_attend_testing: 'yes' | 'no' | 'not_required' | ''
-  }
-  migration_history: {
-    time_in_goa: 'up_to_1_month' | '1_6_months' | '6_months_or_more' | ''
-    outside_goa_3m: 'yes' | 'no' | ''
-    states_visited: string
-    last_stay_home_state: '7_days' | '14_days' | 'up_to_1_month' | ''
-    fever_before_goa_3m: 'yes' | 'no' | 'dont_know' | ''
-  }
-  planned_travel: {
-    planning: 'yes' | 'no' | ''
-    episodes: TravelEpisodeState[]
-  }
-}
+// Form-state shape and section validation rules are shared with the offline
+// demo mode and the automated tests via src/questionnaireValidation.ts
+// (single source of truth — this screen only renders + routes writes).
 
 const INITIAL_FORM: QuestionnaireFormData = {
   personal: {
@@ -190,6 +134,9 @@ export default function Intake() {
 
   const owner = session?.user?.id || DEMO_OWNER
   const isWorker = session?.user?.roles?.includes('worker')
+  // Offline Demo Mode: writes are captured in the ISOLATED demo store (never
+  // the real local_drafts/outbox tables) and always labelled local-only.
+  const isDemo = Boolean(session?.demo)
 
   const [step, setStep] = useState(1)
   const [formData, setFormData] = useState<QuestionnaireFormData>(INITIAL_FORM)
@@ -202,13 +149,23 @@ export default function Intake() {
   const [draftSavedMsg, setDraftSavedMsg] = useState('')
   const [queuedCount, setQueuedCount] = useState(0)
   const [failedCount, setFailedCount] = useState(0)
+  // Draft restore conflict policy: which side won the updated_at comparison.
+  const [draftRestoreInfo, setDraftRestoreInfo] = useState<
+    '' | 'offlineEditsKept' | 'serverDraftRestored'
+  >('')
   const scrollApiRef = useRef<FormScrollApi | null>(null)
 
   // Load authorized sites & initial draft on mount
   useEffect(() => {
     async function init() {
-      // 1. Read local draft first
-      const local = readDraft(owner)
+      // 1. Read local draft first; remember its saved timestamp so it can be
+      // compared against the server draft's updated_at below. Demo mode reads
+      // (and later writes) the demo-namespace draft exclusively.
+      const local = isDemo ? readDemoDraft(owner) : readDraft(owner)
+      const localUpdatedAt =
+        local && typeof local === 'object' && typeof (local as any).updated_at === 'string'
+          ? (local as any).updated_at as string
+          : null
       if (local && typeof local === 'object') {
         setFormData((prev) => ({
           ...prev,
@@ -221,23 +178,39 @@ export default function Intake() {
         }))
       }
 
-      // 2. If online worker, check server draft
+      // 2. If online worker, check server draft. Merge rule: the draft with
+      // the NEWER updated_at wins; when timestamps are equal or missing,
+      // prefer the server copy (previous behavior). Local edits made while
+      // offline are kept (not lost) only when they are strictly newer.
       if (online && session?.token && isWorker && !session?.demo) {
         try {
-          const res = await api<{ submission_id: string | null; data?: any }>(
+          const res = await api<{ submission_id: string | null; data?: any; updated_at?: string | null }>(
             '/questionnaires/draft',
             session.token
           )
           if (res?.data && Object.keys(res.data).length > 0) {
-            setFormData((prev) => ({
-              ...prev,
-              ...res.data,
-              personal: { ...prev.personal, ...(res.data.personal || {}) },
-              past_history: { ...prev.past_history, ...(res.data.past_history || {}) },
-              present_clinical: { ...prev.present_clinical, ...(res.data.present_clinical || {}) },
-              migration_history: { ...prev.migration_history, ...(res.data.migration_history || {}) },
-              planned_travel: { ...prev.planned_travel, ...(res.data.planned_travel || {}) },
-            }))
+            const serverUpdatedAt = typeof res.updated_at === 'string' ? res.updated_at : null
+            const localIsNewer = Boolean(
+              localUpdatedAt && serverUpdatedAt && localUpdatedAt > serverUpdatedAt
+            )
+            if (localIsNewer) {
+              // Keep the older server copy OFF the form: the offline local
+              // draft is strictly newer.
+              setDraftRestoreInfo('offlineEditsKept')
+            } else {
+              setFormData((prev) => ({
+                ...prev,
+                ...res.data,
+                personal: { ...prev.personal, ...(res.data.personal || {}) },
+                past_history: { ...prev.past_history, ...(res.data.past_history || {}) },
+                present_clinical: { ...prev.present_clinical, ...(res.data.present_clinical || {}) },
+                migration_history: { ...prev.migration_history, ...(res.data.migration_history || {}) },
+                planned_travel: { ...prev.planned_travel, ...(res.data.planned_travel || {}) },
+              }))
+              if (localUpdatedAt && serverUpdatedAt && serverUpdatedAt > localUpdatedAt) {
+                setDraftRestoreInfo('serverDraftRestored')
+              }
+            }
           }
         } catch {
           // Fall back gracefully to local draft
@@ -272,80 +245,32 @@ export default function Intake() {
         }
       }
 
-      setQueuedCount(outboxCount(owner)); setFailedCount(outboxCount(owner, "failed"))
+      // 3. Demo mode preloads a synthetic site list (no server fetch).
+      if (isDemo) {
+        setSites(demoSites().map((s) => ({ id: s.id, code: s.code, name: s.name, area: s.area })))
+      }
+
+      if (isDemo) {
+        // "Queued" in demo means local demo submissions pending nothing — they
+        // are final, local-only entries and never upload.
+        setQueuedCount(listDemoRecords().length)
+        setFailedCount(0)
+      } else {
+        setQueuedCount(outboxCount(owner)); setFailedCount(outboxCount(owner, "failed"))
+      }
     }
 
     init()
   }, [owner, session?.token, online, isWorker, session?.demo])
 
-  // Flush any writes queued while offline, oldest first, stopping at the first
-  // transport failure. Each item carries its own client_request_id, so a server
-  // duplicate-ack still counts as success and retries cannot create duplicates
-  // (PRD SCR-006; P0 offline registration reconciliation).
-  // Item kinds:
-  //  - 'worker_register': payload = { worker: <WorkerCreate body with client_request_id>,
-  //        questionnaire: { data, client_request_id } }; the profile is created first,
-  //        then the questionnaire submitted against the (server-side) new profile.
-  //  - 'questionnaire_submit': payload = { data, client_request_id }.
+  // Replay queued offline submissions whenever connectivity or session returns.
+  // The replay algorithm itself lives in src/outbox.ts (shared with the
+  // dashboard "Replay Outbox" button and the flush-on-boot scheduler) so all
+  // three entry points use the identical item kinds, idempotency-key clearing
+  // and draft-deletion rules. This component mirrors the resulting counts.
   const flushOutbox = useCallback(async () => {
     if (!online || !session?.token || session?.demo) return
-    const items = readOutbox(owner).filter((item) => item.status !== 'failed')
-    for (const item of items) {
-      setOutboxStatus(item.id, 'syncing', null)
-      try {
-        if (item.kind === 'worker_register') {
-          const { worker, questionnaire } = item.payload
-          const created = await api<any>('/workers', session.token, {
-            method: 'POST',
-            body: JSON.stringify(worker),
-          })
-          if (created?.id) {
-            useAppStore.setState({
-              session: { ...(session as any), user: { ...(session!.user as any), patient_id: created.id } },
-            })
-          }
-          await api('/questionnaires/submit', session.token, {
-            method: 'POST',
-            body: JSON.stringify(questionnaire),
-          })
-        } else if (item.kind === 'symptom_report') {
-          await api('/symptom-reports', session.token, {
-            method: 'POST',
-            body: JSON.stringify(item.payload),
-          })
-        } else {
-          await api('/questionnaires/submit', session.token, {
-            method: 'POST',
-            body: JSON.stringify(item.payload),
-          })
-        }
-        removeOutbox(item.id)
-        // Authoritative server ack: retire the pending idempotency key that
-        // belongs to this item if it still matches (never touches another
-        // owner's key or a minted-for-newer-attempt key).
-        const itemCrid = item.kind === 'worker_register'
-          ? item.payload?.questionnaire?.client_request_id
-          : item.payload?.client_request_id
-        if (itemCrid) clearPendingRequestId(owner, itemCrid, item.kind === 'symptom_report' ? 'symptom_report' : 'questionnaire')
-        deleteDraft(owner) // server accepted the full item; local draft is now redundant
-      } catch (error) {
-        const message = error instanceof Error ? error.message : ''
-        if (isAuthError(message)) {
-          // Expired/revoked session: keep every queued record, surface the reason.
-          setOutboxStatus(item.id, 'failed', 'Session expired. Sign in again to send queued records.')
-          break
-        }
-        if (/\(4(0[03-9]|22)\)|Invalid|required|Validation|validation|Duplicate|already exists|already uses/.test(message)) {
-          // Permanent rejection (validation/404/409): keep the draft locally so the
-          // user can review and fix it, but stop treating the queue item as retryable.
-          setOutboxStatus(item.id, 'failed', message)
-          continue
-        }
-        // Transport/offline problem: return to the durably queued state and retry later.
-        setOutboxStatus(item.id, 'queued', message || 'Network unavailable', 1)
-        break
-      }
-    }
+    await flushOutboxShared(owner, session?.token)
     setQueuedCount(outboxCount(owner))
     setFailedCount(outboxCount(owner, 'failed'))
   }, [owner, online, session?.token, session?.demo])
@@ -358,6 +283,17 @@ export default function Intake() {
   // Save draft locally & remotely
   const handleSaveDraft = useCallback(
     async (showFeedback = true) => {
+      if (isDemo) {
+        // Demo draft: writes into the demo namespace only; nothing syncs.
+        saveDemoDraft(owner, formData)
+        const nowStr = new Date().toLocaleTimeString()
+        setLastDraftAt(nowStr)
+        if (showFeedback) {
+          setDraftSavedMsg(`Demo draft saved on this device (${nowStr}) — never sent to any server.`)
+          setTimeout(() => setDraftSavedMsg(''), 4000)
+        }
+        return
+      }
       saveDraft(owner, formData)
       const nowStr = new Date().toLocaleTimeString()
       setLastDraftAt(nowStr)
@@ -380,7 +316,7 @@ export default function Intake() {
         setTimeout(() => setDraftSavedMsg(''), 4000)
       }
     },
-    [owner, formData, online, session?.token, isWorker, session?.demo]
+    [owner, formData, online, session?.token, isWorker, session?.demo, isDemo]
   )
 
   // Deliberate draft discard: asks for confirmation, then clears the local
@@ -396,8 +332,12 @@ export default function Intake() {
           text: 'Discard',
           style: 'destructive',
           onPress: () => {
-            deleteDraft(owner)
-            clearPendingRequestId(owner)
+            if (isDemo) {
+              deleteDemoDraft(owner)
+            } else {
+              deleteDraft(owner)
+              clearPendingRequestId(owner)
+            }
             setFormData(INITIAL_FORM)
             setErrors({})
             setLastDraftAt('')
@@ -562,192 +502,10 @@ export default function Intake() {
     })
   }
 
-  // Section-by-section validation
-  // Build the error map for one section WITHOUT committing it to state.
+  // Section-by-section validation (delegated to the pure shared module so
+  // the offline demo mode and automated tests run the EXACT same rules).
   function computeSectionErrors(sec: number): Record<string, string> {
-    const errs: Record<string, string> = {}
-
-    if (sec === 1) {
-      const p = formData.personal
-      if (!p.full_name || p.full_name.trim().length < 2) {
-        errs['personal.full_name'] = 'Full name is required (min 2 characters)'
-      }
-      if (p.dob_unknown === 'yes') {
-        // Fallback: the worker does not know their DOB — manual age only.
-        const a = parseInt(p.age_years, 10)
-        if (isNaN(a) || a < 0 || a > 120) {
-          errs['personal.age_years'] = 'Completed age must be between 0 and 120'
-        }
-      } else {
-        const dobErr = validateDobISO(p.dob)
-        if (!p.dob) {
-          errs['personal.dob'] = 'Date of birth is required (tap the field to pick it)'
-        } else if (dobErr) {
-          errs['personal.dob'] = dobErr
-        }
-      }
-      if (!p.mobile || p.mobile.replace(/\D/g, '').length < 8) {
-        errs['personal.mobile'] = 'A valid mobile number is required (min 8 digits)'
-      }
-      if (p.id_type === 'other' && !p.id_other_details.trim()) {
-        errs['personal.id_other_details'] = 'Details are required when Other ID is selected'
-      }
-      if (!p.address_present || p.address_present.trim().length < 4) {
-        errs['personal.address_present'] = 'Present address is required (min 4 characters)'
-      }
-    }
-
-    if (sec === 2) {
-      const h = formData.past_history
-      if (!h.diagnosed_malaria) {
-        errs['past_history.diagnosed_malaria'] = 'Please select malaria diagnosis status'
-      }
-      if (h.diagnosed_malaria === 'yes') {
-        const times = parseInt(h.times_malaria_2y, 10)
-        if (isNaN(times) || times < 0 || times > 50) {
-          errs['past_history.times_malaria_2y'] = 'Enter malaria episodes in last 2 years (0-50)'
-        }
-        if (!h.last_detection) {
-          errs['past_history.last_detection'] = 'Please select timing of last detection'
-        }
-        if (!h.treatment_place) {
-          errs['past_history.treatment_place'] = 'Please select treatment location'
-        }
-        if (h.treatment_place === 'other' && !h.treatment_place_other.trim()) {
-          errs['past_history.treatment_place_other'] = 'Specify other treatment place'
-        }
-        if (!h.diagnostic_test_performed) {
-          errs['past_history.diagnostic_test_performed'] = 'Specify if diagnostic test was performed'
-        }
-        if (h.diagnostic_test_performed === 'yes') {
-          if (!h.same_day_report) {
-            errs['past_history.same_day_report'] = 'Specify if same-day report was received'
-          }
-          if (h.same_day_report === 'yes') {
-            if (!h.test_method) {
-              errs['past_history.test_method'] = 'Select test method'
-            }
-            if (!h.medication_period) {
-              errs['past_history.medication_period'] = 'Select medication period'
-            }
-            if (
-              ['days_3', 'days_14', 'followup_28'].includes(h.medication_period) &&
-              !h.full_course_completed
-            ) {
-              errs['past_history.full_course_completed'] = 'Specify if full course was completed'
-            }
-          }
-        }
-      }
-    }
-
-    if (sec === 3) {
-      const c = formData.present_clinical
-      if (!c.fever_today) {
-        errs['present_clinical.fever_today'] = 'Specify current fever status'
-      }
-      const hasSpecific = c.symptoms.some((s) => s !== 'no_other_symptoms')
-      if (['yes', 'not_sure'].includes(c.fever_today) && !c.fever_duration) {
-        errs['present_clinical.fever_duration'] = 'Fever duration is required'
-      }
-      if (c.temperature_c) {
-        const t = parseFloat(c.temperature_c)
-        if (isNaN(t) || t < 30.0 || t > 45.0) {
-          errs['present_clinical.temperature_c'] = 'Temperature must be between 30.0 and 45.0 °C'
-        }
-      }
-      // Onset of the current illness: required with fever or specific
-      // symptoms, never in the future (past-event field).
-      const needsOnset = c.fever_today === 'yes' || hasSpecific
-      if (needsOnset && !c.onset_date) {
-        errs['present_clinical.onset_date'] = 'Onset date of the current illness is required'
-      } else if (c.onset_date) {
-        const onsetErr = validatePastEventDate(c.onset_date, 'Onset date')
-        if (onsetErr) errs['present_clinical.onset_date'] = onsetErr
-      }
-      if (!c.breathing_difficulty) {
-        errs['present_clinical.breathing_difficulty'] = 'Required'
-      }
-      if (!c.chest_pain) {
-        errs['present_clinical.chest_pain'] = 'Required'
-      }
-      if (!c.confusion) {
-        errs['present_clinical.confusion'] = 'Required'
-      }
-      if (!c.can_attend_testing) {
-        errs['present_clinical.can_attend_testing'] = 'Required'
-      }
-    }
-
-    if (sec === 4) {
-      const m = formData.migration_history
-      if (!m.time_in_goa) {
-        errs['migration_history.time_in_goa'] = 'Select duration lived in Goa'
-      }
-      if (!m.outside_goa_3m) {
-        errs['migration_history.outside_goa_3m'] = 'Specify travel outside Goa in last 3 months'
-      }
-      if (m.outside_goa_3m === 'yes') {
-        if (!m.states_visited.trim()) {
-          errs['migration_history.states_visited'] = 'Specify states visited outside Goa'
-        }
-        if (!m.last_stay_home_state) {
-          errs['migration_history.last_stay_home_state'] = 'Select duration of stay in home state'
-        }
-      }
-      if (!m.fever_before_goa_3m) {
-        errs['migration_history.fever_before_goa_3m'] = 'Specify prior fever/malaria history'
-      }
-    }
-
-    if (sec === 5) {
-      const t = formData.planned_travel
-      if (!t.planning) {
-        errs['planned_travel.planning'] = 'Specify if travel is planned'
-      }
-      if (t.planning === 'yes') {
-        if (t.episodes.length === 0) {
-          errs['planned_travel.episodes'] = 'Add at least one travel episode'
-        }
-        t.episodes.forEach((ep, idx) => {
-          const dateErrs = validatePlannedTravelDates(ep.departure_date, ep.return_date)
-          if (!ep.departure_date) {
-            errs[`episode.${idx}.departure_date`] = 'Departure date is required (tap the field to pick it)'
-          } else if (dateErrs.departure) {
-            errs[`episode.${idx}.departure_date`] = dateErrs.departure
-          }
-          if (!ep.return_date) {
-            errs[`episode.${idx}.return_date`] = 'Return date is required (tap the field to pick it)'
-          } else if (dateErrs.return) {
-            errs[`episode.${idx}.return_date`] = dateErrs.return
-          }
-          if (!ep.place_state.trim()) {
-            errs[`episode.${idx}.place_state`] = 'Destination place/state required'
-          }
-          if (!ep.fever_malaria_during) {
-            errs[`episode.${idx}.fever_malaria_during`] = 'Specify fever during travel'
-          }
-          if (ep.fever_malaria_during === 'yes') {
-            if (!ep.treatment_given) {
-              errs[`episode.${idx}.treatment_given`] = 'Specify if treatment was given'
-            }
-            if (ep.treatment_given === 'yes') {
-              if (!ep.full_course_completed) {
-                errs[`episode.${idx}.full_course_completed`] = 'Course completion required'
-              }
-              if (!ep.treatment_place) {
-                errs[`episode.${idx}.treatment_place`] = 'Treatment place required'
-              }
-              if (ep.treatment_place === 'other' && !ep.treatment_place_other?.trim()) {
-                errs[`episode.${idx}.treatment_place_other`] = 'Details required for Other place'
-              }
-            }
-          }
-        })
-      }
-    }
-
-    return errs
+    return computeQuestionnaireSectionErrors(formData, sec)
   }
 
   // Canonical field order per section, used to scroll to the FIRST invalid
@@ -970,9 +728,29 @@ export default function Intake() {
       }
     }
 
-    if (!session?.token || session?.demo) {
+    if (isDemo) {
+      // Offline Demo: the questionnaire passed the SAME validation, then is
+      // finalized as a LOCAL SYNTHETIC DEMO submission. It becomes a finished
+      // demo record (distinct from the draft), gets a local timestamp and a
+      // demo reference, and never enters the real outbox or uploads anywhere.
+      const record = saveDemoRecord({
+        kind: 'questionnaire_submit',
+        label: `Screening form — ${formData.personal.full_name.trim() || 'Synthetic Participant'}`,
+        payload: buildQuestionnairePayload(),
+      })
+      deleteDemoDraft(owner)
+      setQueuedCount(listDemoRecords().length)
       Alert.alert(
-        'Offline / Demo Mode',
+        'Demo submission saved locally',
+        `Reference: ${record.id}\nSaved on this device at ${new Date(record.created_at).toLocaleString()}.\n\nThis is SYNTHETIC DEMO data only. It has NOT been sent to any surveillance server and will never upload, even when connectivity returns.`,
+        [{ text: 'OK', onPress: () => router.replace('/dashboard') }]
+      )
+      return
+    }
+
+    if (!session?.token) {
+      Alert.alert(
+        'Offline / Demo Mode hasn\'t been started',
         'A live authorized session is required to submit screening questionnaires to the surveillance server. Your draft has been safely saved locally.'
       )
       return
@@ -1220,6 +998,7 @@ export default function Intake() {
       </View>
 
       {/* Step Indicator */}
+      {isDemo && <DemoBanner />}
       <StepIndicator currentStep={step} totalSteps={6} labels={stepLabels} />
 
         {/* Draft Notification */}
@@ -1227,8 +1006,23 @@ export default function Intake() {
           <NoticeBanner type="info" message={draftSavedMsg} />
         ) : null}
 
-        {/* Pending offline submission indicator */}
-        {queuedCount > 0 || failedCount > 0 ? (
+        {/* Draft restore conflict resolution (updated_at comparison) */}
+        {draftRestoreInfo ? (
+          <NoticeBanner
+            type={draftRestoreInfo === 'offlineEditsKept' ? 'warning' : 'info'}
+            message={tr(draftRestoreInfo)}
+          />
+        ) : null}
+
+        {/* Demo vs real pending indicators are completely distinct: demo items
+            are final local records; real items await server synchronization. */}
+        {isDemo && queuedCount > 0 ? (
+          <NoticeBanner
+            type="info"
+            title="Demo submissions on this device"
+            message={`${queuedCount} synthetic demo submission${queuedCount === 1 ? '' : 's'} saved locally with a timestamp. They are complete demo records — they will never be sent to any server.`}
+          />
+        ) : queuedCount > 0 || failedCount > 0 ? (
           <NoticeBanner
             type={failedCount > 0 ? 'error' : 'warning'}
             title={failedCount > 0 ? 'Queued & needs attention' : 'Pending sync'}

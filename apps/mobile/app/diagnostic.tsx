@@ -23,6 +23,10 @@ import {
 } from '@/components/ui'
 import { CalendarDatePickerField } from '@/components/CalendarDatePickerField'
 import { WorkerLookupField } from '@/components/WorkerLookupField'
+import { DemoBanner } from '@/components/DemoBanner'
+import { demoFacilities, demoSamples } from '@/src/demoData'
+import { saveDemoRecord } from '@/src/demoStore'
+import { computeDiagnosticSampleErrors, type DiagnosticSampleValues } from '@/src/diagnosticValidation'
 
 const sampleSchema = z.object({
   patient_id: z.string().min(1, 'Patient ID or Code is required'),
@@ -48,7 +52,11 @@ export default function Diagnostic() {
   const isPathologist = session?.user?.roles?.some((r: string) =>
     ['pathologist', 'pathology'].includes(r)
   )
-  const disabled = !online || !session?.token || session?.demo || !isPathologist
+  // Offline Demo (pathologist role): sample/slide forms stay usable and
+  // finalize LOCAL synthetic demo records; a real token + connectivity are
+  // required for server writes.
+  const isDemo = Boolean(session?.demo)
+  const disabled = isDemo ? !isPathologist : !online || !session?.token || !isPathologist
 
   const [pending, setPending] = useState(false)
   const [activeTab, setActiveTab] = useState<'sample' | 'slide_followup'>('sample')
@@ -80,7 +88,11 @@ export default function Diagnostic() {
 
   useEffect(() => {
     async function loadFacilities() {
-      if (!session?.token || session?.demo || !online) return
+      if (session?.demo) {
+        setFacilities(demoFacilities()) // synthetic demo facilities, no network
+        return
+      }
+      if (!session?.token || !online) return
       try {
         const res = await api<{ items: any[] }>('/facilities', session.token)
         setFacilities(res.items || [])
@@ -124,54 +136,66 @@ export default function Diagnostic() {
     }
 
     // Conditional validation mirroring the source questionnaire: result fields
-    // and species depend on the selected test.
-    if (values.method === 'other' && !(values.other_method_note || '').trim()) {
-      Alert.alert('Test Note Required', 'Describe the Other diagnostic test performed.')
+    // and species depend on the selected test (shared pure module — the SAME
+    // rules are exercised by demo mode and automated tests).
+    const diagError = computeDiagnosticSampleErrors(values as DiagnosticSampleValues)
+    if (diagError) {
+      const titles: Record<string, string> = {
+        other_method_note: 'Test Note Required',
+        species: 'Species Required',
+        species_other_note: 'Species Note Required',
+        smear_type: 'Smear Type Required',
+      }
+      Alert.alert(titles[diagError.field] || 'Invalid Result', diagError.message)
       return
     }
-    if (values.result_status === 'positive' && !values.species) {
-      Alert.alert('Species Required', 'Select the identified species for a positive result.')
-      return
+
+    const payload: Record<string, any> = {
+      patient_id: values.patient_id.trim(),
+      method: values.method,
+      result_status: values.result_status,
+      facility_id: selectedFacilityId || undefined,
     }
-    if (currentSpecies === 'other' && !(values.species_other_note || '').trim()) {
-      Alert.alert('Species Note Required', 'Describe the other species identified.')
-      return
+
+    if (values.result_status === 'positive') {
+      payload.species = values.species
+      if (values.species === 'other') {
+        payload.species_other_note = values.species_other_note || undefined
+      }
     }
-    if (['microscopy', 'smp'].includes(values.method) && !values.smear_type) {
-      Alert.alert('Smear Type Required', 'Select the type of smear read (Thick / Thin / Both).')
+
+    if (['microscopy', 'smp'].includes(values.method)) {
+      payload.smear_type = values.smear_type || 'both'
+    }
+    if (values.method === 'other' && (values.other_method_note || '').trim()) {
+      payload.other_method_note = (values.other_method_note || '').trim()
+    }
+    // Patient identity linkage (name/mobile) is appended to the lab notes;
+    // the authoritative demographic link is patient_id itself.
+    const identityNote = `Recorded by ${pathologistName || 'pathologist'}; patient: ${
+      patientName.trim() || '(name not provided)'
+    }, mobile: ${patientMobile.trim() || '(not provided)'}`
+    payload.notes = identityNote
+
+    if (isDemo) {
+      // Offline Demo: identical conditional validation; finalize as a local
+      // synthetic demo sample. Never touches the real outbox or server.
+      const record = saveDemoRecord({
+        kind: 'diagnostic',
+        label: `Lab test ${values.method.toUpperCase()} — ${values.patient_id.trim()}`,
+        payload,
+      })
+      Alert.alert(
+        'Demo sample saved locally',
+        `Reference: ${record.id}\nStatus: ${values.result_status.toUpperCase()}\n\nThis is SYNTHETIC DEMO data only; it was NOT recorded in any laboratory system and will never upload to a server.`,
+        [{ text: 'OK', onPress: () => router.replace('/dashboard') }]
+      )
       return
     }
 
     setPending(true)
     try {
-      const payload: Record<string, any> = {
-        patient_id: values.patient_id.trim(),
-        method: values.method,
-        result_status: values.result_status,
-        facility_id: selectedFacilityId || undefined,
-      }
-
-      if (values.result_status === 'positive') {
-        payload.species = values.species
-        if (values.species === 'other') {
-          payload.species_other_note = values.species_other_note || undefined
-        }
-      }
-
-      if (['microscopy', 'smp'].includes(values.method)) {
-        payload.smear_type = values.smear_type || 'both'
-      }
-      if (values.method === 'other' && (values.other_method_note || '').trim()) {
-        payload.other_method_note = (values.other_method_note || '').trim()
-      }
-      // Patient identity linkage (name/mobile) is appended to the lab notes;
-      // the authoritative demographic link is patient_id itself.
-      const identityNote = `Recorded by ${pathologistName || 'pathologist'}; patient: ${
-        patientName.trim() || '(name not provided)'
-      }, mobile: ${patientMobile.trim() || '(not provided)'}`
-      payload.notes = identityNote
-
-      const res = await api<any>('/samples', session.token, {
+      const res = await api<any>('/samples', session!.token, {
         method: 'POST',
         body: JSON.stringify(payload),
       })
@@ -242,6 +266,21 @@ export default function Diagnostic() {
 
     if (slideReceived === 'no' && notReceivedReason === 'other' && !otherReason.trim()) {
       Alert.alert('Reason Required', 'Please describe the other reason why the slide was not received.')
+      return
+    }
+
+    if (isDemo) {
+      // Offline Demo: the slide form (received/positive/positive-day or the
+      // not-received reason rules) is validated identically, then finalized as
+      // a local synthetic demo follow-up slide. No optimistic-version probe
+      // against the server is needed because nothing is uploaded.
+      const record = saveDemoRecord({
+        kind: 'slide_followup',
+        label: `Follow-up slide ${scheduledDay} — ${slideSampleId.trim()}`,
+        payload: slidePayload(),
+      })
+      setSlideSuccessMsg(`Demo slide follow-up saved locally (${new Date(record.created_at).toLocaleTimeString()}) — synthetic data, never uploaded.`)
+      setSlideSampleId('')
       return
     }
 
@@ -333,6 +372,29 @@ export default function Diagnostic() {
             title={tr('offline')}
             message={tr('connectivityRequired')}
           />
+        )}
+
+        {isDemo && (
+          <>
+            <DemoBanner detail="Fill the lab forms as usual — species/result/smear validation runs identically. Submitting finalizes a SYNTHETIC local demo record on this tablet; nothing is sent to any laboratory system." />
+            <Card title="Synthetic example samples (demo)" subtitle="Tap a code to use it — deterministic synthetic data">
+              <View style={{ gap: 6 }}>
+                {demoSamples().map((s) => (
+                  <Button
+                    key={s.id}
+                    variant="ghost"
+                    size="sm"
+                    onPress={() => {
+                      setValue('patient_id', s.patient_code)
+                      setSlideSampleId(s.sample_code)
+                    }}
+                  >
+                    {`${s.sample_code} · ${s.patient_code} · ${s.method.toUpperCase()} · ${s.result_status}`}
+                  </Button>
+                ))}
+              </View>
+            </Card>
+          </>
         )}
 
         {/* Tab Toggle */}

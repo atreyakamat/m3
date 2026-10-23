@@ -1,8 +1,67 @@
 apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
+// Standalone Local Server mode: embedded CPython 3.12 + real FastAPI backend.
+apply plugin: "com.chaquo.python"
 
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
+
+// --- Standalone Local Server (Chaquopy) -------------------------------------
+// Host Python (build machine) must be 3.12.x; resolves M3_BUILD_PYTHON first
+// (documented in docs/STANDALONE_LOCAL_SERVER.md).
+def m3BuildPython = System.getenv('M3_BUILD_PYTHON') ?: '/home/atreya/.local/share/mise/installs/python/3.12.15/bin/python3.12'
+def m3WheelDir = file('m3-wheels').absolutePath
+
+chaquopy {
+    defaultConfig {
+        buildPython = [m3BuildPython]
+        version = '3.12'
+        pip {
+            options '--extra-index-url', 'https://chaquo.com/pypi-13.1'
+            options '--find-links', m3WheelDir
+            install '-r', 'm3-requirements.txt'
+        }
+    }
+    sourceSets {
+        getByName('main') {
+            // The wrapper/entry module + the REAL backend app package (kept
+            // in-tree, synced from services/api by the syncM3Backend task below).
+            srcDirs = ['m3-python', 'src/main/python-backend']
+        }
+    }
+}
+
+// Keep the embedded backend identical to services/api: copy the real app/
+// package into the APK source dir before any Chaquopy packaging task runs.
+// rootDir is apps/mobile/android; the repo root is two levels up.
+tasks.register('syncM3Backend', Copy) {
+    from "${rootDir}/../../../services/api/app"
+    into file('src/main/python-backend/app')
+    exclude '**/__pycache__', '**/*.pyc'
+}
+// The alembic migration tree must exist as REAL files on the device (alembic
+// loads env.py from disk), so it ships as APK assets and LocalServerModule.kt
+// extracts it into the app-private files dir before the first `upgrade head`.
+tasks.register('syncM3Migrations', Copy) {
+    from "${rootDir}/../../../services/api/alembic"
+    into file('src/main/assets/alembic_pack/alembic')
+    exclude '**/__pycache__', '**/*.pyc'
+}
+tasks.register('syncM3MigrationsIni', Copy) {
+    from "${rootDir}/../../../services/api/alembic.ini"
+    into file('src/main/assets/alembic_pack')
+}
+tasks.matching { it.name.startsWith('preBuild') || it.name.startsWith('compilePython') }.configureEach {
+    dependsOn 'syncM3Backend', 'syncM3Migrations', 'syncM3MigrationsIni'
+}
+// mergePythonSources reads src/main/python-backend and merge*Assets reads
+// src/main/assets/alembic_pack — both must run AFTER the sync Copy tasks.
+tasks.matching { it.name.matches(~/merge.*PythonSources/) }.configureEach {
+    dependsOn 'syncM3Backend'
+}
+tasks.matching { it.name.matches(~/merge.*Assets/) }.configureEach {
+    dependsOn 'syncM3Migrations', 'syncM3MigrationsIni'
+}
 
 /**
  * This is the configuration block to customize your React Native Android app.
@@ -92,8 +151,8 @@ android {
         applicationId 'org.m3.surveillance'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "0.1.0"
+        versionCode 3
+        versionName "0.3.0-standalone"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }

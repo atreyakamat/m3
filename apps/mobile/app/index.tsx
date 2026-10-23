@@ -18,10 +18,20 @@ import {
   applyServerUrl,
   normalizeServerUrl,
   probeServerUrl,
+  isLocalMode,
+  setLocalMode as setLocalModeApi,
 } from '@/src/api'
-import { demoWorkers, DEMO_OWNER, initCache, writeWorkers } from '@/src/cache'
+import { demoSessionFor, demoRoleLabel, DEMO_ROLES, type DemoRole } from '@/src/demoData'
+import {
+  initDemoStore,
+  setActiveDemoRole,
+  getActiveDemoRole,
+  listDemoRecords,
+  listDemoActivity,
+} from '@/src/demoStore'
 import { t } from '@/src/i18n'
 import { useAppStore } from '@/src/store'
+import { localServerAvailable, localServerReset, localServerStart, localServerStop, localServerStatus, type LocalServerStatus } from '@/src/localServer'
 import { Button, ChipPicker, Field, NoticeBanner, FormShell, StatusBadge } from '@/components/ui'
 
 const loginSchema = z.object({
@@ -55,8 +65,19 @@ const ROLE_OPTIONS = [
   { label: 'Research Lab', value: 'research_lab' },
 ]
 
+// Demo entry is HIDDEN from the sign-in screen (superseded by Standalone Local
+// Server mode testing). The entire demo-mode implementation remains in the code
+// base intact — flip this flag to `true` to restore the demo card, the Quick
+// Sign-In dev box and demo-session restore-on-launch.
+const SHOW_DEMO_ENTRY = false
+
 export default function Index() {
-  const { language, setLanguage, setSession, setLastSync, online, customServerUrl, setCustomServerUrl } = useAppStore()
+  const { language, setLanguage, setSession, setLastSync, online, customServerUrl, setCustomServerUrl, localMode, setLocalMode, setLocalServerReady, setOnline } = useAppStore()
+  // Standalone Local Server bridge status (Phase 5): controls the embedded
+  // real-backend startup UX. Server lifecycle lives in the native module.
+  const [localServerState, setLocalServerState] = useState<LocalServerStatus | null>(null)
+  const [localBusy, setLocalBusy] = useState(false)
+  const localPollTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const [mode, setMode] = useState<'login' | 'signup'>('login')
   const [loading, setLoading] = useState(false)
   // Task 1: runtime server configuration (LAN IP / public tunnel URL).
@@ -64,6 +85,9 @@ export default function Index() {
   const [serverInput, setServerInput] = useState('')
   const [serverTesting, setServerTesting] = useState(false)
   const [serverStatus, setServerStatus] = useState<null | { ok: boolean; message: string }>(null)
+  // Offline Demo Mode: explicit role picker, no network involved.
+  const [demoModalOpen, setDemoModalOpen] = useState(false)
+  const [demoSelectedRole, setDemoSelectedRole] = useState<DemoRole | ''>('')
 
   // Login form
   const {
@@ -109,7 +133,7 @@ export default function Index() {
         body: JSON.stringify(values),
       })
       await saveToken(result.access_token)
-      setSession({ token: result.access_token, user: result.user, demo: false })
+      setSession({ token: result.access_token, user: result.user, demo: false, local: isLocalMode() })
       router.replace('/dashboard')
     } catch (e) {
       Alert.alert(tr('signinError'), e instanceof Error ? e.message : tr('error'))
@@ -135,7 +159,7 @@ export default function Index() {
         }),
       })
       await saveToken(result.access_token)
-      setSession({ token: result.access_token, user: result.user, demo: false })
+      setSession({ token: result.access_token, user: result.user, demo: false, local: isLocalMode() })
 
       if (values.role === 'worker') {
         Alert.alert(
@@ -158,26 +182,150 @@ export default function Index() {
     }
   }
 
-  function demo() {
-    initCache()
-    writeWorkers(DEMO_OWNER, demoWorkers)
-    setLastSync(new Date().toISOString())
-    setSession({
-      demo: true,
-      user: {
-        id: DEMO_OWNER,
-        display_name: 'Synthetic Demo Account',
-        roles: ['worker'],
-        patient_id: 'demo-worker-1',
-      },
-    })
+  // -----------------------------------------------------------------------
+  // Standalone Local Server mode (Phase 5). The REAL FastAPI backend is
+  // embedded in the app (Chaquopy) and bound to 127.0.0.1 only. The API
+  // client is switched to the loopback URL only AFTER an explicit readiness
+  // signal, and local mode is persisted so a restart re-enters the same
+  // lifecycle instead of silently falling back to a remote URL.
+  // -----------------------------------------------------------------------
+  React.useEffect(() => {
+    let cancelled = false
+    async function boot() {
+      if (!localServerAvailable()) return
+      const st = await localServerStatus()
+      if (cancelled) return
+      setLocalServerState(st)
+      // Returning user: local mode was persisted but the in-process server
+      // does not survive a process death — boot it again automatically.
+      if (isLocalMode() && st.state !== 'ready') {
+        void startLocalServer()
+      }
+    }
+    void boot()
+    return () => { cancelled = true; if (localPollTimer.current) clearTimeout(localPollTimer.current) }
+  }, [])
+
+  async function pollLocalServer(): Promise<LocalServerStatus> {
+    let st: LocalServerStatus | null = null
+    for (let i = 0; i < 100; i++) {
+      st = await localServerStatus()
+      if (st.state !== 'starting') return st
+      await new Promise<void>((r) => setTimeout(r, 700))
+    }
+    return st ?? { state: 'failed', detail: 'Timed out waiting for the local server' }
+  }
+
+  async function startLocalServer() {
+    if (localBusy) return
+    setLocalBusy(true)
+    try {
+      await localServerStart()
+      const st = await pollLocalServer()
+      setLocalServerState(st)
+      if (st.state === 'ready') {
+        setLocalModeApi(true) // api.ts: force loopback base URL + persist flag
+        setLocalMode(true)    // store
+        setLocalServerReady(true)
+        setOnline(true)       // the backend is on-device: local reads/writes work
+        setLastSync(null)
+      } else if (st.state === 'failed') {
+        // Explicit failure surfaced to the tester; API target is left untouched.
+        setLocalModeApi(false)
+        setLocalMode(false)
+        setLocalServerReady(false)
+      }
+    } catch (e) {
+      setLocalServerState({ state: 'failed', detail: e instanceof Error ? e.message : String(e) })
+      setLocalServerReady(false)
+    } finally {
+      setLocalBusy(false)
+    }
+  }
+
+  async function stopLocalServer() {
+    setLocalBusy(true)
+    try {
+      await localServerStop()
+      setLocalServerState({ state: 'stopped', detail: '' })
+      setLocalServerReady(false)
+      setOnline(false)
+    } finally {
+      setLocalBusy(false)
+    }
+  }
+
+  function exitLocalMode() {
+    if (localPollTimer.current) clearTimeout(localPollTimer.current)
+    void localServerStop()
+    setLocalModeApi(false) // restores the saved remote URL resolution order
+    setLocalMode(false)
+    setLocalServerReady(false)
+    setLocalServerState(null)
+    // Recompute connectivity honestly for remote-server mode.
+    setOnline(true)
+  }
+
+  /** Explicitly destructive: deletes the standalone SQLite database after a
+   * typed confirmation dialog (all committed records are LOST). Refuses while
+   * the server is running — stop it first. Never cascades into the remote
+   * server config or any online-mode storage. */
+  function requestLocalReset() {
+    if (localServerState?.state === 'ready' || localServerState?.state === 'starting' || localBusy) {
+      Alert.alert(tr('localServerStop'), tr('localServerIdleNotice'))
+      return
+    }
+    Alert.alert(
+      tr('localServerResetConfirmTitle'),
+      tr('localServerResetConfirmBody'),
+      [
+        { text: tr('cancel'), style: 'cancel' },
+        {
+          text: tr('localServerReset'),
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await localServerReset()
+            } catch (e) {
+              Alert.alert(tr('localServerFailed'), e instanceof Error ? e.message : String(e))
+            }
+          },
+        },
+      ],
+    )
+  }
+
+  function enterDemo(role: DemoRole) {
+    // ZERO network activity: demo mode is initialized entirely from built-in
+    // deterministic synthetic data. Nothing here may call `api()` or probe a
+    // server — the demo session carries no token, so it could never authorize
+    // a real request even if a screen attempted one.
+    initDemoStore()
+    setActiveDemoRole(role)
+    setLastSync(null)
+    setSession(demoSessionFor(role) as any)
+    setDemoModalOpen(false)
     router.replace('/dashboard')
   }
+
+  // Restore a persisted offline-demo session after an app restart (the marker
+  // lives in the ISOLATED demo store, never in real session storage).
+  // Skipped while the demo entry is hidden (SHOW_DEMO_ENTRY = false).
+  React.useEffect(() => {
+    if (!SHOW_DEMO_ENTRY) return
+    const savedRole = getActiveDemoRole()
+    if (savedRole && DEMO_ROLES.some((r) => r.role === savedRole)) {
+      setSession(demoSessionFor(savedRole as DemoRole) as any)
+      router.replace('/dashboard')
+    }
+  }, [])
 
   function fillSeededAccount(phone: string) {
     setMode('login')
     setLoginValue('phone', phone)
-    setLoginValue('pin', '2468')
+    // Shared dev database was seeded with PIN 1234 (older seed run).
+    // Repo seed.py now documents 2468 — kept in sync issue docs/docs/UI_REBUILD_REPORT.md.
+    setLoginValue('pin', '1234')
   }
 
   function openServerModal() {
@@ -224,13 +372,15 @@ export default function Index() {
   }
 
   return (
-    <FormShell contentContainerStyle={s.scrollContent}>
+    <FormShell contentContainerStyle={[s.scrollContent, { width: '100%', maxWidth: 640, alignSelf: 'center' }]}>
         <View style={s.topBar}>
           <Text style={s.eyebrow}>M3 / GOA</Text>
           <View style={s.topBarActions}>
-            <Button variant="ghost" size="sm" onPress={openServerModal}>
-              {tr('serverConfig')}
-            </Button>
+            {!localMode && (
+              <Button variant="ghost" size="sm" onPress={openServerModal}>
+                {tr('serverConfig')}
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="sm"
@@ -246,7 +396,50 @@ export default function Index() {
           <Text style={s.subtitle}>{tr('syntheticNotice')}</Text>
         </View>
 
-        {!online && (
+        {/* Standalone Local Server (Phase 5): the tablet hosts the REAL backend. */}
+        <View style={s.demoSection}>
+          <Text style={s.demoTitle}>{tr('localServerTitle')}</Text>
+          <Text style={s.demoBody}>{tr('localServerBody')}</Text>
+          {localServerState?.detail ? (
+            <Text style={s.demoBody}>{localServerState.detail.slice(0, 280)}</Text>
+          ) : null}
+          {(!localMode || localServerState?.state !== 'ready') && (
+            <Button
+              variant="outline"
+              size="md"
+              disabled={localBusy || !localServerAvailable()}
+              onPress={startLocalServer}
+            >
+              {localBusy ? tr('localServerStarting') : tr('localServerStart')}
+            </Button>
+          )}
+          {localMode ? (
+            <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+              <Button variant="ghost" size="sm" disabled={localBusy} onPress={stopLocalServer}>
+                {tr('localServerStop')}
+              </Button>
+              <Button variant="ghost" size="sm" onPress={exitLocalMode}>
+                {tr('localServerExit')}
+              </Button>
+              {(!localMode || localServerState?.state !== 'ready') && (
+                <Button variant="danger" size="sm" disabled={localBusy} onPress={requestLocalReset}>
+                  {tr('localServerReset')}
+                </Button>
+              )}
+            </View>
+          ) : null}
+        </View>
+
+        {!online && localMode && localServerState && (
+          <NoticeBanner
+            type={localServerState.state === 'failed' ? 'warning' : 'offline'}
+            title={localServerState.state === 'failed' ? tr('localServerFailed') : tr('localServerTitle')}
+            message={localServerState.state === 'failed'
+              ? localServerState.detail.slice(0, 240)
+              : tr('localServerIdleNotice')}
+          />
+        )}
+        {!online && !localMode && (
           <NoticeBanner
             type="offline"
             title={tr('offline')}
@@ -258,8 +451,13 @@ export default function Index() {
           {/* Mode Switcher: Sign In vs Sign Up */}
           <View style={s.segmentedRow}>
             <Pressable
-              style={[s.segmentedTab, mode === 'login' && s.segmentedTabActive]}
+              accessibilityRole="button"
               onPress={() => setMode('login')}
+              style={({ pressed }) => [
+                s.segmentedTab,
+                mode === 'login' && s.segmentedTabActive,
+                pressed && s.segmentedTabPressed,
+              ]}
             >
               <Text
                 style={[
@@ -271,8 +469,13 @@ export default function Index() {
               </Text>
             </Pressable>
             <Pressable
-              style={[s.segmentedTab, mode === 'signup' && s.segmentedTabActive]}
+              accessibilityRole="button"
               onPress={() => setMode('signup')}
+              style={({ pressed }) => [
+                s.segmentedTab,
+                mode === 'signup' && s.segmentedTabActive,
+                pressed && s.segmentedTabPressed,
+              ]}
             >
               <Text
                 style={[
@@ -311,7 +514,7 @@ export default function Index() {
                 render={({ field: { onChange, value } }) => (
                   <Field
                     label={tr('pin')}
-                    placeholder="4-digit PIN (e.g. 2468)"
+                    placeholder="4-digit PIN (dev DB: 1234)"
                     value={value}
                     onChangeText={onChange}
                     keyboardType="number-pad"
@@ -425,67 +628,76 @@ export default function Index() {
           )}
         </View>
 
-        {/* Development Quick Role Fill */}
+        {/* Development Quick Role Fill — HIDDEN together with the demo card
+            (SHOW_DEMO_ENTRY flag). Real login flow is unaffected. */}
+        {SHOW_DEMO_ENTRY ? (
         <View style={s.devBox}>
-          <Text style={s.devTitle}>Demo Quick Sign-In (PIN 2468):</Text>
+          <Text style={s.devTitle}>Demo Quick Sign-In (PIN 1234 — dev DB; seed.py: 2468):</Text>
           <View style={s.devRow}>
             <Button
               variant="outline"
               size="sm"
               onPress={() => fillSeededAccount('+919000000001')}
             >
-              Worker
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onPress={() => fillSeededAccount('+919000000002')}
-            >
-              Clinician
+              Contractor
             </Button>
             <Button
               variant="outline"
               size="sm"
               onPress={() => fillSeededAccount('+919000000003')}
             >
-              Pathology
+              Clinician
             </Button>
             <Button
               variant="outline"
               size="sm"
               onPress={() => fillSeededAccount('+919000000004')}
             >
-              Health Worker
+              Pathology
             </Button>
             <Button
               variant="outline"
               size="sm"
               onPress={() => fillSeededAccount('+919000000005')}
             >
-              Research Lab
+              Worker
             </Button>
             <Button
               variant="outline"
               size="sm"
               onPress={() => fillSeededAccount('+919000000006')}
             >
-              Contractor
+              Health Worker
             </Button>
             <Button
               variant="outline"
               size="sm"
               onPress={() => fillSeededAccount('+919000000007')}
             >
+              Research Lab
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onPress={() => fillSeededAccount('+919000000008')}
+            >
               Admin
             </Button>
           </View>
         </View>
+        ) : null}
 
+        {/* Offline Demo Mode — HIDDEN: superseded by Standalone Local Server mode.
+            Code kept intact; restore by setting SHOW_DEMO_ENTRY = true. */}
+        {SHOW_DEMO_ENTRY ? (
         <View style={s.demoSection}>
-          <Button variant="ghost" size="md" onPress={demo}>
-            {tr('demo')}
+          <Text style={s.demoTitle}>{tr('offlineDemoEntryTitle')}</Text>
+          <Text style={s.demoBody}>{tr('offlineDemoEntryBody')}</Text>
+          <Button variant="outline" size="md" onPress={() => setDemoModalOpen(true)}>
+            {tr('offlineDemoEnter')} →
           </Button>
         </View>
+        ) : null}
 
         {/* Task 1: Server Configuration modal dialog */}
         <Modal visible={serverModalOpen} transparent animationType="fade" onRequestClose={() => setServerModalOpen(false)}>
@@ -542,6 +754,61 @@ export default function Index() {
                 </View>
                 <View style={s.serverActionBtn}>
                   <Button variant="ghost" size="md" fullWidth onPress={() => setServerModalOpen(false)}>
+                    {language === 'hi' ? 'बंद करें' : 'Close'}
+                  </Button>
+                </View>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
+        {/* Offline Demo role chooser — demo identity only, never real auth */}
+        <Modal visible={demoModalOpen} transparent animationType="fade" onRequestClose={() => setDemoModalOpen(false)}>
+          <View style={s.serverBackdrop}>
+            <View style={[s.serverCard, s.demoCard]}>
+              <Text style={s.serverTitle}>{tr('offlineDemoTitle')}</Text>
+              <Text style={s.serverSubtitle}>{tr('offlineDemoChooseRole')}:</Text>
+              <View style={s.demoRoleGrid}>
+                {DEMO_ROLES.map(({ role, label, description }) => {
+                  const active = demoSelectedRole === role
+                  return (
+                    <Pressable
+                      key={role}
+                      accessibilityRole="button"
+                      onPress={() => setDemoSelectedRole(role)}
+                      style={[s.demoRoleCard, active && s.demoRoleCardActive]}
+                    >
+                      <Text style={[s.demoRoleLabel, active && s.demoRoleLabelActive]}>{label}</Text>
+                      <Text style={s.demoRoleDesc}>{description}</Text>
+                    </Pressable>
+                  )
+                })}
+              </View>
+              <View style={s.demoSeedRow}>
+                <Text style={s.demoSeedText}>
+                  Demo work on this device:{' '}
+                  {listDemoRecords().length} submission{listDemoRecords().length === 1 ? '' : 's'} ·{' '}
+                  {listDemoActivity().length} activity item{listDemoActivity().length === 1 ? '' : 's'}
+                </Text>
+              </View>
+              <View style={s.serverActionsRow}>
+                <View style={s.serverActionBtn}>
+                  <Button
+                    variant="primary"
+                    size="md"
+                    fullWidth
+                    disabled={!demoSelectedRole}
+                    onPress={() => demoSelectedRole && enterDemo(demoSelectedRole)}
+                  >
+                    {demoSelectedRole
+                      ? `${tr('offlineDemoEnter')} — ${demoRoleLabel(demoSelectedRole)}`
+                      : tr('offlineDemoEnter')}
+                  </Button>
+                </View>
+              </View>
+              <View style={s.serverActionsRow}>
+                <View style={s.serverActionBtn}>
+                  <Button variant="ghost" size="md" fullWidth onPress={() => setDemoModalOpen(false)}>
                     {language === 'hi' ? 'बंद करें' : 'Close'}
                   </Button>
                 </View>
@@ -621,6 +888,9 @@ const s = StyleSheet.create({
     shadowRadius: 2,
     elevation: 2,
   },
+  segmentedTabPressed: {
+    backgroundColor: '#e2e8f0',
+  },
   segmentedTabText: {
     fontSize: 14,
     fontWeight: '600',
@@ -652,7 +922,68 @@ const s = StyleSheet.create({
     gap: 8,
   },
   demoSection: {
-    alignItems: 'center',
+    backgroundColor: '#fef7ed',
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#f59e0b',
+    padding: 14,
+    gap: 8,
+  },
+  demoTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#92400e',
+  },
+  demoBody: {
+    fontSize: 12,
+    color: '#78350f',
+    lineHeight: 17,
+  },
+  demoCard: {
+    maxWidth: 620,
+    alignSelf: 'center',
+  },
+  demoRoleGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  demoRoleCard: {
+    flexGrow: 1,
+    flexBasis: '30%',
+    minWidth: 140,
+    backgroundColor: '#ffffff',
+    borderWidth: 2,
+    borderColor: '#e2e8f0',
+    borderRadius: 10,
+    padding: 10,
+    gap: 4,
+  },
+  demoRoleCardActive: {
+    borderColor: '#f59e0b',
+    backgroundColor: '#fffbeb',
+  },
+  demoRoleLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1e293b',
+  },
+  demoRoleLabelActive: {
+    color: '#92400e',
+  },
+  demoRoleDesc: {
+    fontSize: 11,
+    color: '#64748b',
+    lineHeight: 15,
+  },
+  demoSeedRow: {
+    backgroundColor: '#f1f5f9',
+    borderRadius: 8,
+    padding: 8,
+  },
+  demoSeedText: {
+    fontSize: 12,
+    color: '#475569',
   },
   // Task 1: Server Configuration dialog
   serverBackdrop: {

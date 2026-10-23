@@ -28,6 +28,9 @@ import {
 } from '@/components/ui'
 import { CalendarDatePickerField } from '@/components/CalendarDatePickerField'
 import { WorkerLookupField } from '@/components/WorkerLookupField'
+import { DemoBanner } from '@/components/DemoBanner'
+import { demoFacilities } from '@/src/demoData'
+import { saveDemoRecord } from '@/src/demoStore'
 
 const ENCOUNTER_SYMPTOM_OPTIONS = [
   { label: 'Chills / rigors', value: 'chills_rigors' },
@@ -163,7 +166,14 @@ export default function Assessment() {
   const tr = (k: Parameters<typeof t>[1]) => t(language, k)
   const params = useLocalSearchParams<{ patientId?: string }>()
   const isClinician = session?.user?.roles?.includes('clinician')
-  const disabled = !online || !session?.token || session?.demo || !isClinician
+  // Demo sessions with the clinician role may fill the form and finalize a
+  // LOCAL demo assessment (captured in the demo store); a real token +
+  // connectivity are still required for a server write.
+  const isDemo = Boolean(session?.demo)
+  const disabled = (() => {
+    if (isDemo) return !isClinician
+    return !online || !session?.token || !isClinician
+  })()
 
   const [form, setForm] = useState<AssessmentFormState>(() => ({
     ...INITIAL_STATE,
@@ -185,7 +195,12 @@ export default function Assessment() {
 
   useEffect(() => {
     async function loadFacilities() {
-      if (!session?.token || session?.demo || !online) return
+      if (session?.demo) {
+        // Deterministic synthetic facilities — no server contact in demo.
+        setFacilities(demoFacilities())
+        return
+      }
+      if (!session?.token || !online) return
       try {
         const res = await api<{ items: any[] }>('/facilities', session.token)
         setFacilities(res.items || [])
@@ -195,7 +210,6 @@ export default function Assessment() {
     }
     loadFacilities()
   }, [session?.token, session?.demo, online])
-
   const selectedFacility = facilities.find((f) => f.id === form.facilityId) || null
 
   async function submit() {
@@ -203,7 +217,6 @@ export default function Assessment() {
       Alert.alert(tr('needsOnline'), tr('connectivityRequired'))
       return
     }
-
     const errs: Record<string, string> = {}
     if (!form.patientCode.trim()) {
       errs.patientCode = 'Patient ID or code is required'
@@ -290,6 +303,23 @@ export default function Assessment() {
       payload.symptoms_other_note = form.otherSymptoms.trim()
     }
 
+    if (isDemo) {
+      // Offline Demo: the SAME local validation passed; finalize as a local
+      // synthetic demo assessment. No server write is attempted and the
+      // record can never upload.
+      const record = saveDemoRecord({
+        kind: 'assessment',
+        label: `Clinical assessment — ${form.patientCode.trim() || 'Synthetic Patient (demo)'}`,
+        payload,
+      })
+      Alert.alert(
+        'Demo assessment saved locally',
+        `Reference: ${record.id}\nSaved on this device at ${new Date(record.created_at).toLocaleString()}.\n\nThis is SYNTHETIC DEMO data only; it has NOT been recorded in any clinic system and will never upload to a server.`,
+        [{ text: 'OK', onPress: () => router.replace('/dashboard') }]
+      )
+      return
+    }
+
     setPending(true)
     try {
       await api('/assessments', session!.token, {
@@ -325,13 +355,14 @@ export default function Assessment() {
       {!online && (
         <NoticeBanner type="offline" title={tr('offline')} message={tr('connectivityRequired')} />
       )}
-      {disabled && session?.token && isClinician && session?.demo ? (
+      {isDemo && <DemoBanner detail="Fill the clinician form as usual — the same field validation runs. Submitting finalizes a SYNTHETIC local demo assessment on this tablet; nothing is sent to any server." />}
+      {!isDemo && disabled && (
         <NoticeBanner
           type="info"
-          title="Demo session"
+          title="Clinician session required"
           message="Sign in with a provisioned clinician account to submit assessments."
         />
-      ) : null}
+      )}
 
       <Card title="General & Administrative" subtitle="Source questionnaire page 4">
         <WorkerLookupField

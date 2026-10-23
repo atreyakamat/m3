@@ -101,7 +101,11 @@ export function NotificationModal({
                 key={key}
                 accessibilityRole="button"
                 onPress={() => setFilter(key)}
-                style={[s.chip, filter === key && s.chipActive]}
+                style={({ pressed }) => [
+                  s.chip,
+                  filter === key && s.chipActive,
+                  pressed && s.chipPressed,
+                ]}
               >
                 <Text style={[s.chipText, filter === key && s.chipTextActive]}>{label}</Text>
               </Pressable>
@@ -122,7 +126,11 @@ export function NotificationModal({
                   key={n.id}
                   accessibilityRole="button"
                   onPress={() => markRead(n.id)}
-                  style={[s.item, !n.read_at && s.itemUnread]}
+                  style={({ pressed }) => [
+                    s.item,
+                    !n.read_at && s.itemUnread,
+                    pressed && s.itemPressed,
+                  ]}
                 >
                   <View style={s.itemTop}>
                     <Text style={[s.itemTitle, !n.read_at && s.itemTitleUnread]}>
@@ -196,6 +204,9 @@ const s = StyleSheet.create({
     backgroundColor: '#0f766e',
     borderColor: '#0f766e',
   },
+  chipPressed: {
+    opacity: 0.7,
+  },
   chipText: {
     fontSize: 13,
     fontWeight: '600',
@@ -219,6 +230,9 @@ const s = StyleSheet.create({
   itemUnread: {
     borderColor: '#bae6fd',
     backgroundColor: '#f0f9ff',
+  },
+  itemPressed: {
+    opacity: 0.7,
   },
   itemTop: {
     flexDirection: 'row',
