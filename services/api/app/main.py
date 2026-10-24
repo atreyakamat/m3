@@ -129,8 +129,16 @@ def effective(user, db):
 CONTACT_FIELDS = {"display_name", "dob", "age_as_on", "phone_e164", "alternate_contact", "id_type", "id_other_details", "address_present", "address_permanent"}
 HEALTH_CONTEXT_FIELDS = {"initial_symptoms"}
 
+# Research Lab explicit field allowlist (PRD/Phase B). "other number" is
+# undefined and must NEVER be added/exposed. Diagnosis/prescription fields are
+# surfaced only via dedicated restricted views (see research_restricted_patient).
+RESEARCH_ALLOWED_PATIENT_FIELDS = {"id", "patient_code", "display_name", "age_years", "gender", "updated_at"}
+RESEARCH_FORBIDDEN_PATIENT_FIELDS = {"occupation", "nativity", "phone_e164", "alternate_contact",
+                                     "id_type", "id_other_details", "address_present", "address_permanent",
+                                     "dob", "age_as_on", "age_flagged", "preferred_language", "initial_symptoms"}
+
 def patient_view(p: Patient, roles: set[str], own: bool = False):
-    """Role-filtered worker profile view; research/admin see pseudonymized fields (PRD 9)."""
+    """Role-filtered worker profile view."""
     data = {"id": p.id, "patient_code": p.patient_code, "age_years": p.age_years, "gender": p.gender, "occupation": p.occupation,
             "consent_status": p.consent_status, "updated_at": p.updated_at,
             # Screening state drives the single-screening rule in every client;
@@ -148,8 +156,10 @@ def patient_view(p: Patient, roles: set[str], own: bool = False):
     elif "contractor" in roles:
         data["display_name"] = p.display_name
     elif "research_lab" in roles:
-        data.pop("occupation", None)
-        data.pop("nativity", None)
+        data = {k: v for k, v in data.items() if k in RESEARCH_ALLOWED_PATIENT_FIELDS}
+        # Explicitly strip anything that might be added in future
+        for f in RESEARCH_FORBIDDEN_PATIENT_FIELDS:
+            data.pop(f, None)
     return data
 
 def sample_view(s, roles=None):
@@ -167,7 +177,38 @@ def sample_view(s, roles=None):
                                     "positive": f.positive, "positive_day": f.positive_day, "updated_at": f.updated_at,
                                     "not_received_reason": f.not_received_reason, "other_reason": f.other_reason}
                                    for f in s.slide_followups]
+    elif "research_lab" in (roles or set()):
+        # Research Lab sees sample/test metadata needed to link to positive
+        # RDT/microscopy results; no facility/slide followups or contact fields.
+        pass
     return data
+
+def _research_restricted_diagnosis(db: Session, patient_id: str):
+    """Specifically approved diagnosis/prescription-like info for eligible cases."""
+    # Pull latest clinical assessment and any linked cases without serialising
+    # the full model. Only non-sensitive, case-relevant fields.
+    from sqlalchemy import select
+    from .models import ClinicalAssessment, Case
+    rows = db.scalars(select(ClinicalAssessment).where(ClinicalAssessment.patient_id == patient_id)
+                      .order_by(ClinicalAssessment.encounter_at.desc()).limit(5)).all()
+    assessments = []
+    for a in rows:
+        assessments.append({
+            "id": a.id,
+            "encounter_at": a.encounter_at,
+            "admission_status": a.admission_status,
+            "admission_species": a.admission_species,
+            "outcome": a.outcome,
+            "treatment_given": a.treatment_given,
+            "follow_up_assigned": a.follow_up_assigned,
+            # treatment_documentation is the existing documented plan field;
+            # exposed only if present and is the approved "prescription info"
+            # placeholder until a structured Prescription model is added.
+            "treatment_documentation": a.treatment_documentation,
+        })
+    cases = db.scalars(select(Case).where(Case.patient_id == patient_id).order_by(Case.created_at.desc()).limit(5)).all()
+    case_items = [{"id": c.id, "case_code": c.case_code, "status": c.status, "urgent": c.urgent} for c in cases]
+    return {"assessments": assessments, "cases": case_items}
 
 def resolve_patient(db: Session, identifier: str) -> Patient | None:
     if not identifier: return None
@@ -692,9 +733,17 @@ def workers(q: str | None = None, offset: int = Query(0, ge=0), limit: int = Que
     elif "contractor" in roles and "clinician" not in roles and "pathologist" not in roles:
         visible = permissions.worker_ids_at_sites(db, permissions.contractor_site_ids(db, user))
         stmt = stmt.where(Patient.id.in_(visible or ["__none__"]))
-    elif "health_worker" in roles and "clinician" not in roles and "pathologist" not in roles:
+    elif "health_worker" in roles and "clinician" not in roles and "pathologist" not in roles and "admin" not in roles:
         visible = permissions.assigned_followup_patient_ids(db, user)
         stmt = stmt.where(Patient.id.in_(visible or ["__none__"]))
+    elif "research_lab" in roles and "clinician" not in roles and "pathologist" not in roles and "admin" not in roles:
+        eligible = permissions.eligible_research_sample_ids(db)
+        # Join via samples to find patients with eligible positive samples
+        from .models import Sample
+        if eligible:
+            stmt = stmt.join(Sample, Sample.patient_id == Patient.id).where(Sample.id.in_(eligible)).distinct()
+        else:
+            stmt = stmt.where(sa_false())
     elif not (roles & {"clinician", "pathologist", "admin", "research_lab", "health_worker", "contractor", "worker"}):
         raise HTTPException(403, "You do not have permission for this action")
     if q:
@@ -703,7 +752,8 @@ def workers(q: str | None = None, offset: int = Query(0, ge=0), limit: int = Que
         if roles & {"clinician", "pathologist", "health_worker", "admin", "research_lab"}:
             cond.append(Patient.display_name.ilike(like))
             # Health workers search by name, home state and phone without codes.
-            cond.append(Patient.nativity.ilike(like))
+            if "research_lab" not in roles or ("clinician" in roles or "admin" in roles):
+                cond.append(Patient.nativity.ilike(like))
         if roles & {"clinician", "pathologist", "contractor", "health_worker"}:
             cond.append(Patient.phone_e164.like(f"%{q.strip().lstrip('+')}%"))
         stmt = stmt.where(or_(*cond))
@@ -856,10 +906,18 @@ def worker_detail(patient_id: str, user: User = Depends(get_current_user), db: S
     roles = effective(user, db); own = user.patient_id == patient.id
     audit(db, user, "worker.viewed", "worker", patient.id); db.commit()
     result = patient_view(patient, roles, own=own)
-    if "research_lab" in roles and "clinician" not in roles:
-        result.pop("display_name", None)
-    if "admin" in roles:
+    if "admin" in roles and "clinician" not in roles and "pathologist" not in roles:
         result = {k: result[k] for k in ("id", "patient_code", "age_years", "gender", "consent_status", "updated_at")}
+    elif "research_lab" in roles and "clinician" not in roles and "pathologist" not in roles:
+        # Enforce eligibility again (defense in depth)
+        if not permissions.patient_is_research_eligible(db, patient.id):
+            raise HTTPException(403, "You do not have access to this record")
+        # Strip any accidental contact/other identifiers
+        for f in ("phone_e164", "alternate_contact", "id_type", "id_other_details", "address_present", "address_permanent",
+                  "dob", "age_as_on", "age_flagged", "preferred_language", "initial_symptoms", "occupation", "nativity"):
+            result.pop(f, None)
+        result["research"] = _research_restricted_diagnosis(db, patient.id)
+        return result
     else:
         reporter_scope = own or bool(roles & {"contractor", "clinician", "pathologist"})
         result["site_assignments"] = [
@@ -1253,7 +1311,12 @@ def samples(patient_id: str | None = None, user: User = Depends(require_roles("p
     if patient_id:
         patient = require_patient_scope(user, db, patient_id)
         stmt = stmt.where(Sample.patient_id == patient.id)
-    return {"items": [sample_view(x, roles) for x in db.scalars(stmt.limit(100)).all()]}
+    rows = db.scalars(stmt.limit(200)).all()
+    if "research_lab" in roles and "clinician" not in roles and "pathologist" not in roles:
+        eligible = permissions.eligible_research_sample_ids(db)
+        rows = [r for r in rows if r.id in eligible and permissions.patient_is_research_eligible(db, r.patient_id)]
+        # Extra safety: ensure patient scope still holds (require_patient_scope did above)
+    return {"items": [sample_view(x, roles) for x in rows]}
 
 @app.post("/api/v1/samples", status_code=201, tags=["pathology"])
 def create_sample(body: SampleCreate, user: User = Depends(require_roles("pathologist", "pathology")), db: Session = Depends(get_db)):
@@ -1310,6 +1373,14 @@ def create_sample(body: SampleCreate, user: User = Depends(require_roles("pathol
                                     title="Positive malaria test detected",
                                     body=f"POSITIVE result ({species_note}) recorded for worker sample {sample.sample_code}; no linked surveillance case.",
                                     delivered_at=now()))
+        # Research Lab notification for eligible positive cases (RDT/microscopy)
+        if body.method in ("rdt", "microscopy"):
+            rl_recipients = _research_lab_recipients(db)
+            for rl_id in rl_recipients:
+                db.add(Notification(recipient_user_id=rl_id, case_id=case.id if case else None, kind="research_eligible",
+                                    title="Eligible research case",
+                                    body="A positive RDT/microscopy result is available for review in the research workspace.",
+                                    body_minimal=True, delivered_at=now()))
         kafka_producer.emit_event("diagnostic.positive", {
             "sample_id": sample.id, "sample_code": sample.sample_code, "patient_id": patient.id,
             "case_id": case.id if case else None, "species": body.species, "method": body.method,
@@ -1365,7 +1436,7 @@ def list_followups(queue: str = Query("all", pattern="^(all|due|overdue|complete
                    user: User = Depends(require_roles("health_worker", "clinician", "admin")), db: Session = Depends(get_db)):
     roles = effective(user, db)
     stmt = select(FollowUp)
-    if "health_worker" in roles and "clinician" not in roles:
+    if "health_worker" in roles and "clinician" not in roles and "admin" not in roles:
         stmt = stmt.where(FollowUp.assigned_user_id == user.id)
     if queue == "due": stmt = stmt.where(FollowUp.status == "due", FollowUp.due_at >= now())
     elif queue == "overdue": stmt = stmt.where(FollowUp.status == "due", FollowUp.due_at < now())
@@ -1375,7 +1446,7 @@ def list_followups(queue: str = Query("all", pattern="^(all|due|overdue|complete
     audit(db, user, "followup.list_viewed", "follow_up", detail={"queue": queue}); db.commit()
     return {"items": [{"id": x.id, "patient_id": x.patient_id, "assigned_user_id": x.assigned_user_id, "due_at": x.due_at,
                        "scheduled_day": x.scheduled_day, "status": x.status, "adherence": x.adherence,
-                       "outcome": x.outcome, "notes": x.notes, "case_id": x.case_id} for x in rows]}
+                       "outcome": x.outcome, "notes": x.notes, "case_id": x.case_id, "updated_at": getattr(x, "updated_at", None)} for x in rows]}
 
 @app.post("/api/v1/follow-ups", status_code=201, tags=["follow ups"])
 def create_followup(body: FollowUpCreate, user: User = Depends(require_roles("clinician", "health_worker")), db: Session = Depends(get_db)):
@@ -1386,11 +1457,13 @@ def create_followup(body: FollowUpCreate, user: User = Depends(require_roles("cl
             raise HTTPException(422, "An assigned health worker is required")
         patient = require_patient_scope(user, db, body.patient_id)
         assignee = db.get(User, body.assigned_user_id)
-        if not assignee or not permissions.effective_roles(active_roles(assignee, db)) & {"health_worker"}:
+        if not assignee or not (permissions.effective_roles(active_roles(assignee, db)) & {"health_worker"}):
             raise HTTPException(422, "Assignee must be an active health worker account")
         data = body.model_dump(); data["patient_id"] = patient.id; data["created_by_user_id"] = user.id
         followup = FollowUp(**data)
     elif "health_worker" in roles:
+        _die_forbidden_write()
+    else:
         _die_forbidden_write()
     if followup.status == "completed": followup.completed_at = now()
     case_id = data.get("case_id")
@@ -1414,19 +1487,95 @@ def create_followup(body: FollowUpCreate, user: User = Depends(require_roles("cl
     audit(db, user, "followup.created", "followup", followup.id); db.commit()
     return {"id": followup.id, "assigned_user_id": followup.assigned_user_id, "case_id": followup.case_id}
 
+
+@app.patch("/api/v1/follow-ups/{follow_up_id}", tags=["follow ups"])
+@app.put("/api/v1/follow-ups/{follow_up_id}", tags=["follow ups"])
+def update_followup(follow_up_id: str, body: FollowUpUpdate, user: User = Depends(require_roles("health_worker", "clinician")), db: Session = Depends(get_db)):
+    roles = effective(user, db)
+    _assert_write_role(user, db, "followup_update")
+    followup = db.get(FollowUp, follow_up_id)
+    if not followup:
+        raise HTTPException(404, "Follow-up not found")
+    patient = db.get(Patient, followup.patient_id)
+    if not patient:
+        raise HTTPException(404, "Patient record not found")
+    # Scope: must be assigned to this health worker, or clinician managing it
+    if "health_worker" in roles and "clinician" not in roles:
+        if followup.assigned_user_id != user.id:
+            raise HTTPException(403, "You do not have access to this follow-up")
+    if not permissions.can_read_patient(db, user, patient, roles):
+        raise HTTPException(403, "You do not have access to this record")
+    if hasattr(body, "base_updated_at"):
+        _assert_not_stale(getattr(body, "base_updated_at"), followup.updated_at)
+    updates = body.model_dump(exclude_unset=True)
+    updates.pop("base_updated_at", None)
+    # Never allow changing ownership/assignment/case linkage
+    for forbidden in ("patient_id", "assigned_user_id", "case_id", "created_by_user_id", "due_at", "scheduled_day"):
+        if forbidden in updates:
+            raise HTTPException(422, f"{forbidden} cannot be changed")
+    if "status" in updates and updates["status"] == "completed" and followup.status != "completed":
+        followup.completed_at = now()
+    elif "status" in updates and updates["status"] != "completed":
+        followup.completed_at = None
+    for k, v in updates.items():
+        setattr(followup, k, v)
+    audit(db, user, "followup.updated", "followup", followup.id, detail={"fields": sorted(updates.keys())})
+    db.commit()
+    return {"id": followup.id, "status": followup.status, "adherence": followup.adherence,
+            "outcome": followup.outcome, "notes": followup.notes, "completed_at": followup.completed_at}
+
 # ---------------- Molecular / research ----------------
 
 @app.get("/api/v1/research-results", tags=["research laboratory"])
 def list_research_results(user: User = Depends(require_roles("research_lab", "clinician")), db: Session = Depends(get_db)):
+    roles = effective(user, db)
     stmt = select(MolecularResult).order_by(MolecularResult.created_at.desc()).limit(200)
-    return {"items": [{"id": x.id, "sample_id": x.sample_id, "pcr_status": x.pcr_status,
-                       "species_confirmation": x.species_confirmation, "parasite_density": x.parasite_density,
-                       "parasite_density_unit": x.parasite_density_unit, "gametocyte_presence": x.gametocyte_presence,
-                       "pfhrp2_status": x.pfhrp2_status, "pfhrp3_status": x.pfhrp3_status} for x in db.scalars(stmt).all()]}
+    rows = db.scalars(stmt).all()
+    if "research_lab" in roles and "clinician" not in roles:
+        eligible = permissions.eligible_research_sample_ids(db)
+        rows = [r for r in rows if r.sample_id in eligible]
+    items = [{"id": x.id, "sample_id": x.sample_id, "pcr_status": x.pcr_status,
+             "species_confirmation": x.species_confirmation, "parasite_density": x.parasite_density,
+             "parasite_density_unit": x.parasite_density_unit, "gametocyte_presence": x.gametocyte_presence,
+             "pfhrp2_status": x.pfhrp2_status, "pfhrp3_status": x.pfhrp3_status} for x in rows]
+    audit(db, user, "research_results.list_viewed", "research_result", detail={"count": len(items)}); db.commit()
+    return {"items": items}
 
 @app.post("/api/v1/research-results", status_code=201, tags=["research laboratory"])
-def create_research_result(body: MolecularCreate, user: User = Depends(require_roles()), db: Session = Depends(get_db)):
-    raise HTTPException(403, "Research Lab accounts are read-only in the initial release")
+def create_research_result(body: MolecularCreate, user: User = Depends(require_roles("research_lab")), db: Session = Depends(get_db)):
+    roles = effective(user, db)
+    _assert_write_role(user, db, "research")
+    sample = db.get(Sample, body.sample_id)
+    if not sample:
+        raise HTTPException(404, "Sample record not found")
+    patient = db.get(Patient, sample.patient_id)
+    if not patient:
+        raise HTTPException(404, "Patient record not found")
+    if not permissions.can_read_patient(db, user, patient, roles):
+        raise HTTPException(403, "You do not have access to this record")
+    if not permissions.sample_is_research_eligible(db, sample.id):
+        raise HTTPException(403, "Research Lab access is limited to eligible positive RDT/microscopy cases")
+    existing = db.scalar(select(MolecularResult).where(MolecularResult.sample_id == sample.id))
+    if existing:
+        raise HTTPException(409, "A molecular result already exists for this sample")
+    mr = MolecularResult(sample_id=sample.id, pcr_status=body.pcr_status,
+                         species_confirmation=body.species_confirmation,
+                         parasite_density=body.parasite_density,
+                         parasite_density_unit=body.parasite_density_unit,
+                         gametocyte_presence=body.gametocyte_presence,
+                         resistance_markers=body.resistance_markers,
+                         pfhrp2_status=body.pfhrp2_status,
+                         pfhrp3_status=body.pfhrp3_status,
+                         performed_by=user.id)
+    db.add(mr)
+    audit(db, user, "research_result.created", "research_result", mr.id, detail={"sample_id": sample.id})
+    db.commit()
+    db.refresh(mr)
+    return {"id": mr.id, "sample_id": mr.sample_id, "pcr_status": mr.pcr_status,
+            "species_confirmation": mr.species_confirmation, "parasite_density": mr.parasite_density,
+            "parasite_density_unit": mr.parasite_density_unit, "gametocyte_presence": mr.gametocyte_presence,
+            "resistance_markers": mr.resistance_markers, "pfhrp2_status": mr.pfhrp2_status,
+            "pfhrp3_status": mr.pfhrp3_status}
 
 @app.get("/api/v1/audit-events", tags=["administration"])
 def read_audit_events(action: str | None = None, entity_type: str | None = None, entity_id: str | None = None,
@@ -1455,7 +1604,24 @@ def dashboard(user: User = Depends(get_current_user), db: Session = Depends(get_
         site_ids = permissions.contractor_site_ids(db, user)
         workers = db.scalar(select(func.count(func.distinct(WorkerSiteAssignment.patient_id))).where(WorkerSiteAssignment.site_id.in_(site_ids or ["__none__"]), WorkerSiteAssignment.end_date.is_(None))) or 0
         return {"scope": "managed_sites", "workers": workers, "sites": len(site_ids), "note": "Roster totals only; clinical and research data are restricted."}
-    return {"scope": "authorized_operational", "workers": db.scalar(select(func.count()).select_from(Patient)) or 0, "samples_pending": db.scalar(select(func.count()).select_from(Sample).where(Sample.status == "pending")) or 0, "tests_positive": db.scalar(select(func.count()).select_from(DiagnosticTest).where(DiagnosticTest.result_status == "positive")) or 0, "followups_due": db.scalar(select(func.count()).select_from(FollowUp).where(FollowUp.status == "due")) or 0, "followups_overdue": db.scalar(select(func.count()).select_from(FollowUp).where(FollowUp.status == "due", FollowUp.due_at < now())) or 0, "note": "Synthetic operational counts. Not epidemiological rates."}
+    if "health_worker" in roles and not (roles & {"clinician", "admin", "pathologist"}):
+        assigned = permissions.assigned_followup_patient_ids(db, user)
+        followups_due = db.scalar(select(func.count()).select_from(FollowUp).where(FollowUp.assigned_user_id == user.id, FollowUp.status == "due")) or 0
+        followups_overdue = db.scalar(select(func.count()).select_from(FollowUp).where(FollowUp.assigned_user_id == user.id, FollowUp.status == "due", FollowUp.due_at < now())) or 0
+        return {"scope": "health_worker_assigned", "workers": len(assigned), "followups_due": followups_due, "followups_overdue": followups_overdue, "note": "Counts limited to assigned follow-ups and permitted workers."}
+    if "research_lab" in roles and not (roles & {"clinician", "admin", "pathologist"}):
+        eligible_samples = permissions.eligible_research_sample_ids(db)
+        eligible_patients = set()
+        if eligible_samples:
+            from .models import Sample
+            eligible_patients = set(db.scalars(select(Sample.patient_id).where(Sample.id.in_(eligible_samples))).all())
+        unread = db.scalar(select(func.count()).select_from(Notification).where(Notification.recipient_user_id == user.id, Notification.read_at.is_(None))) or 0
+        return {"scope": "research_eligible", "eligible_research_cases": len(eligible_patients), "eligible_samples": len(eligible_samples), "unread_notifications": unread, "note": "Restricted to positive RDT/microscopy cases only."}
+    if "admin" in roles and roles == {"admin"}:
+        unread = db.scalar(select(func.count()).select_from(Notification).where(Notification.recipient_user_id == user.id, Notification.read_at.is_(None))) or 0
+        return {"scope": "admin_readonly", "workers": db.scalar(select(func.count()).select_from(Patient)) or 0, "samples_pending": db.scalar(select(func.count()).select_from(Sample).where(Sample.status == "pending")) or 0, "tests_positive": db.scalar(select(func.count()).select_from(DiagnosticTest).where(DiagnosticTest.result_status == "positive")) or 0, "followups_due": db.scalar(select(func.count()).select_from(FollowUp).where(FollowUp.status == "due")) or 0, "followups_overdue": db.scalar(select(func.count()).select_from(FollowUp).where(FollowUp.status == "due", FollowUp.due_at < now())) or 0, "unread_notifications": unread, "note": "Admin is read-only; counts are operational totals."}
+    unread = db.scalar(select(func.count()).select_from(Notification).where(Notification.recipient_user_id == user.id, Notification.read_at.is_(None))) or 0
+    return {"scope": "authorized_operational", "workers": db.scalar(select(func.count()).select_from(Patient)) or 0, "samples_pending": db.scalar(select(func.count()).select_from(Sample).where(Sample.status == "pending")) or 0, "tests_positive": db.scalar(select(func.count()).select_from(DiagnosticTest).where(DiagnosticTest.result_status == "positive")) or 0, "followups_due": db.scalar(select(func.count()).select_from(FollowUp).where(FollowUp.status == "due")) or 0, "followups_overdue": db.scalar(select(func.count()).select_from(FollowUp).where(FollowUp.status == "due", FollowUp.due_at < now())) or 0, "unread_notifications": unread, "note": "Synthetic operational counts. Not epidemiological rates."}
 
 
 # ---------------- Cases: symptom reports, lifecycle, notifications (Phases 2-3) ----------------
@@ -1529,6 +1695,20 @@ def _clinician_recipients(db) -> list[str]:
 def _pathologist_recipients(db) -> list[str]:
     stmt = select(User.id).join(RoleAssignment, RoleAssignment.user_id == User.id).where(
         RoleAssignment.role.in_(("pathologist", "pathology")), RoleAssignment.revoked_at.is_(None), User.active)
+    return [r[0] for r in db.execute(stmt).all()]
+
+
+def _research_lab_recipients(db) -> list[str]:
+    stmt = select(User.id).join(RoleAssignment, RoleAssignment.user_id == User.id).where(
+        RoleAssignment.role == "research_lab", RoleAssignment.revoked_at.is_(None), User.active)
+    return [r[0] for r in db.execute(stmt).all()]
+
+
+def _health_worker_recipients(db, assigned_user_id: str | None = None) -> list[str]:
+    if assigned_user_id:
+        return [assigned_user_id]
+    stmt = select(User.id).join(RoleAssignment, RoleAssignment.user_id == User.id).where(
+        RoleAssignment.role == "health_worker", RoleAssignment.revoked_at.is_(None), User.active)
     return [r[0] for r in db.execute(stmt).all()]
 
 def _contractor_recipients(db, site: Site) -> list[str]:

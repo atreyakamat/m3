@@ -187,6 +187,16 @@ class FollowUpCreate(BaseModel):
     notes: str | None = Field(default=None, max_length=2000)
     scheduled_day: str | None = Field(default=None, max_length=20)
 
+
+class FollowUpUpdate(BaseModel):
+    """Health Worker may only update allowed completion/adherence fields."""
+    status: str | None = Field(default=None, pattern=r"^(due|completed|cancelled|missed)$")
+    adherence: str | None = Field(default=None, max_length=40)
+    outcome: str | None = Field(default=None, max_length=100)
+    notes: str | None = Field(default=None, max_length=2000)
+    # Optimistic concurrency guard
+    base_updated_at: datetime | None = None
+
 class MolecularCreate(BaseModel):
     sample_id: str
     pcr_status: str = "pending"

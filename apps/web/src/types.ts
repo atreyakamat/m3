@@ -191,7 +191,7 @@ export type WorkerListItem = {
   initial_symptoms?: string[]
 }
 
-/** /dashboard — three shapes scoped by role (see services/api main.py:1450). */
+/** /dashboard — role-scoped shapes (see services/api main.py). */
 export type DashboardOperational = {
   scope: "authorized_operational"
   workers: number
@@ -199,6 +199,7 @@ export type DashboardOperational = {
   tests_positive: number
   followups_due: number
   followups_overdue: number
+  unread_notifications?: number
   note: string
 }
 export type DashboardContractor = {
@@ -213,7 +214,37 @@ export type DashboardWorker = {
   followups_due: number
   note: string
 }
-export type DashboardPayload = DashboardOperational | DashboardContractor | DashboardWorker
+export type DashboardHealthWorker = {
+  scope: "health_worker_assigned"
+  workers: number
+  followups_due: number
+  followups_overdue: number
+  note: string
+}
+export type DashboardResearchLab = {
+  scope: "research_eligible"
+  eligible_research_cases: number
+  eligible_samples: number
+  unread_notifications?: number
+  note: string
+}
+export type DashboardAdmin = {
+  scope: "admin_readonly"
+  workers: number
+  samples_pending: number
+  tests_positive: number
+  followups_due: number
+  followups_overdue: number
+  unread_notifications?: number
+  note: string
+}
+export type DashboardPayload =
+  | DashboardOperational
+  | DashboardContractor
+  | DashboardWorker
+  | DashboardHealthWorker
+  | DashboardResearchLab
+  | DashboardAdmin
 
 export type PagePayload<T> = { items: T[]; total: number; offset: number; limit: number }
 export type ItemsPayload<T> = { items: T[] }

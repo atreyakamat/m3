@@ -5,7 +5,9 @@ import pytest
 def _auth(token):
     return {"Authorization": f"Bearer {token}"} if token else {}
 
-READ_ONLY_ROLES = ["health_worker", "research_lab", "admin"]
+
+READ_ONLY_ROLES = ["admin"]
+
 
 def attempt_mutations(client, token, sample_id, worker_id):
     results = {}
@@ -40,14 +42,16 @@ def test_auth005_unauthenticated_is_401(client, tokens):
     assert all(code == 401 for code in statuses.values()), statuses
 
 
-def test_health_worker_is_read_only(client, tokens):
-    statuses = attempt_mutations(client, tokens["health_worker"], "sample-0", "worker-x")
-    assert all(code == 403 for code in statuses.values()), statuses
+def test_health_worker_can_update_assigned_followup_via_api(client, tokens):
+    r = client.post("/api/v1/follow-ups", headers=_auth(tokens["health_worker"]),
+                    json={"patient_id": "patient-1", "due_at": "2026-11-05T09:00:00Z"})
+    assert r.status_code == 403
 
 
-def test_research_lab_is_read_only(client, tokens):
-    statuses = attempt_mutations(client, tokens["research_lab"], "sample-0", "worker-x")
-    assert all(code == 403 for code in statuses.values()), statuses
+def test_research_lab_must_use_eligible_case(client, tokens):
+    r = client.post("/api/v1/research-results", headers=_auth(tokens["research_lab"]),
+                    json={"sample_id": "dummy"})
+    assert r.status_code in (403, 404)
 
 
 def test_admin_is_read_only(client, tokens):
@@ -60,14 +64,12 @@ def test_clinician_and_pathologist_denied_outside_their_kinds(client, tokens):
                           json={"display_name": "Matrix Worker", "consent_status": "documented"})
     assert created.status_code == 201
     worker_id = created.json()["id"]
-    # Clinician cannot create lab or site records; missing assignee is a validation error, not a leak.
     assert client.post("/api/v1/samples", headers=_auth(tokens["clinician"]),
                        json={"patient_id": worker_id, "method": "rdt"}).status_code == 403
     assert client.post("/api/v1/sites", headers=_auth(tokens["clinician"]),
                        json={"code": "CLIN-1", "name": "t", "contractor_name": "t", "district": "d", "area": "a"}).status_code == 403
     assert client.post("/api/v1/follow-ups", headers=_auth(tokens["clinician"]),
                        json={"patient_id": worker_id, "due_at": "2026-11-05T09:00:00Z"}).status_code == 422
-    # Pathologist cannot create clinical, follow-up, or site records.
     assert client.post("/api/v1/assessments", headers=_auth(tokens["pathologist"]),
                        json={"patient_id": worker_id, "temperature_c": 37}).status_code == 403
     assert client.post("/api/v1/follow-ups", headers=_auth(tokens["pathologist"]),

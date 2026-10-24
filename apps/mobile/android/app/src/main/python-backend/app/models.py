@@ -359,6 +359,33 @@ class MolecularResult(Timestamped, Base):
     pfhrp3_status: Mapped[str] = mapped_column(String(30), default="not_tested")
     performed_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
 
+
+class Prescription(Timestamped, Base):
+    """Structured prescriptions with history preservation (additive).
+
+    Never overwrites history; revisions are new rows linked via
+    supersedes_prescription_id with status changes. Clinician-only writes
+    enforced at API level.
+    """
+    __tablename__ = "prescriptions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    patient_id: Mapped[str] = mapped_column(ForeignKey("patients.id"), index=True)
+    case_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    assessment_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    prescriber_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    medicine_name: Mapped[str] = mapped_column(String(160))
+    dose: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    unit: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    frequency: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    duration: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    start_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="active", index=True)
+    supersedes_prescription_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    revised_by_prescription_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    patient: Mapped[Patient] = relationship()
+
+
 class Session(Timestamped, Base):
     __tablename__ = "sessions"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
