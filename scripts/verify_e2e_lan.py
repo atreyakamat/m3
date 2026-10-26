@@ -109,10 +109,13 @@ def main():
     assert status == 403, f"Expected 403 for health_worker on /follow-ups, got {status}"
     print(f"PASS: Health Worker strictly read-only on POST /follow-ups (403)")
 
-    # Research Lab is strictly read-only on mutations (403)
+    # Research Lab: molecular-result creation is permitted ONLY for eligible
+    # positive RDT/microscopy samples (Phase B). A missing sample -> 404; an
+    # ineligible (negative/pending) sample -> 403. Blanket read-only was removed
+    # in Phase B and this script's expectation was updated accordingly.
     status, res = req("/research-results", method="POST", body={"sample_id": "dummy", "pcr_status": "pending"}, token=tokens["research_lab"])
-    assert status == 403, f"Expected 403 for research_lab on /research-results, got {status}"
-    print(f"PASS: Research Lab strictly read-only on POST /research-results (403)")
+    assert status in (403, 404), f"Expected 403/404 for research_lab on ineligible/missing sample, got {status}"
+    print(f"PASS: Research Lab molecular result gated to eligible samples ({status})")
 
     # Admin is strictly read-only on mutations (403)
     status, res = req("/sites", method="POST", body={"code": "ADM-01", "name": "Admin Site", "contractor_name": "Admin", "district": "Goa", "area": "Panaji"}, token=tokens["admin"])

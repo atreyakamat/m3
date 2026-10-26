@@ -5,6 +5,7 @@ follow-ups; Research Lab may create molecular results only for eligible
 positive cases. Other mutations remain denied per role.
 """
 from datetime import datetime, timezone, timedelta
+import pytest
 from fastapi import HTTPException
 
 from app.database import SessionLocal

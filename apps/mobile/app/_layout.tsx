@@ -65,7 +65,7 @@ export default function Layout() {
   return (
     <Stack
       screenOptions={{
-        headerStyle: { backgroundColor: '#0f766e' },
+        headerStyle: { backgroundColor: '#059669' },
         headerTintColor: '#ffffff',
         contentStyle: { backgroundColor: '#f8fafc' },
         headerRight: () => <NotificationBell />,

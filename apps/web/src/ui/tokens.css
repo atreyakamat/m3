@@ -5,28 +5,28 @@
    ============================================================ */
 
 :root {
-  /* Brand — teal (aligned with the mobile app header). */
-  --brand-50:#f0fdfa;  --brand-100:#ccfbf1; --brand-200:#99f6e4;
-  --brand-300:#5eead4; --brand-400:#2dd4bf; --brand-500:#14b8a6;
-  --brand-600:#0d9488; --brand-700:#0f766e; --brand-800:#115e59;
-  --brand-900:#134e4a;
+  /* Brand — modern healthcare green */
+  --brand-50:#f6fff9;  --brand-100:#ecfdf5; --brand-200:#d1fae5;
+  --brand-300:#a7f3d0; --brand-400:#6ee7b7; --brand-500:#34d399;
+  --brand-600:#10b981; --brand-700:#059669; --brand-800:#047857;
+  --brand-900:#065f46;
 
-  /* Neutrals — slate ramp. */
-  --n-50:#f8fafc; --n-100:#f1f5f9; --n-200:#e2e8f0; --n-300:#cbd5e1;
-  --n-400:#94a3b8; --n-500:#64748b; --n-600:#475569; --n-700:#334155;
-  --n-800:#1e293b; --n-900:#0f172a; --n-950:#020617;
+  /* Neutrals — clean slate/gray ramp */
+  --n-50:#f8fafc; --n-100:#f1f5f9; --n-200:#e5e7eb; --n-300:#d1d5db;
+  --n-400:#9ca3af; --n-500:#6b7280; --n-600:#4b5563; --n-700:#374151;
+  --n-800:#1f2937; --n-900:#111827; --n-950:#030712;
 
   /* Semantic surfaces / text. */
-  --bg-app: var(--n-100);
+  --bg-app: #ffffff;
   --bg-surface: #ffffff;
-  --bg-surface-2: var(--n-50);
-  --bg-sidebar: var(--n-900);
-  --bg-inverse: var(--n-900);
+  --bg-surface-2: var(--brand-50);
+  --bg-sidebar: linear-gradient(180deg, #ffffff 0%, #f9fafb 100%);
+  --bg-inverse: var(--brand-900);
   --border: var(--n-200);
   --border-strong: var(--n-300);
   --text-1: var(--n-900);
-  --text-2: var(--n-600);
-  --text-3: var(--n-500);
+  --text-2: var(--n-700);
+  --text-3: var(--n-600);
   --text-inverse: #ffffff;
 
   /* Accent (semantic brand for interactive elements). */

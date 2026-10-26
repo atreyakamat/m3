@@ -353,3 +353,121 @@ def test_admin_case_metrics_real_counts(client, tokens, case_pending):
     assert sum(m["cases_by_status"].values()) >= 1
     # Non-admin denied.
     assert client.get("/api/v1/admin/case-metrics", headers=_h(tokens, "clinician")).status_code in (401, 403)
+
+
+def test_followup_update_lifecycle_and_case_progression(client, tokens, case_assigned):
+    case_id = case_assigned["case_id"]
+    patient_id = _case_patient(client, tokens, case_id)
+    hw_id = client.get("/api/v1/me", headers=_h(tokens, "health_worker")).json()["id"]
+
+    # Clinician advances case through clinical review to plan_recorded
+    t1 = client.post(f"/api/v1/cases/{case_id}/transition", headers=_h(tokens, "clinician"),
+                     json={"to_status": "in_assessment"})
+    assert t1.status_code == 200, t1.text
+    t2 = client.post(f"/api/v1/cases/{case_id}/transition", headers=_h(tokens, "clinician"),
+                     json={"to_status": "plan_recorded"})
+    assert t2.status_code == 200, t2.text
+
+    # Clinician assigns follow-up
+    due = datetime.now(timezone.utc) + timedelta(days=2)
+    r = client.post("/api/v1/follow-ups", headers=_h(tokens, "clinician"),
+                    json={"patient_id": patient_id, "due_at": due.isoformat(),
+                          "assigned_user_id": hw_id, "case_id": case_id})
+    assert r.status_code == 201, r.text
+    f_id = r.json()["id"]
+
+    # Case should now be in followup_due
+    c = client.get(f"/api/v1/cases/{case_id}", headers=_h(tokens, "clinician")).json()
+    assert c["status"] == "followup_due"
+
+    # Health worker views queue and fetches follow-up
+    fw_list = client.get("/api/v1/follow-ups", headers=_h(tokens, "health_worker")).json()
+    followup_item = next(x for x in fw_list["items"] if x["id"] == f_id)
+    current_updated_at = followup_item["updated_at"]
+
+    # 1. Health worker successfully updates adherence/notes
+    up = client.patch(f"/api/v1/follow-ups/{f_id}", headers=_h(tokens, "health_worker"),
+                      json={"adherence": "full_course", "notes": "Patient feeling better",
+                            "base_updated_at": current_updated_at})
+    assert up.status_code == 200, up.text
+    assert up.json()["adherence"] == "full_course"
+    assert up.json()["completed_at"] is None
+    new_updated_at = up.json()["updated_at"]
+
+    # 2. Stale edit with outdated base_updated_at fails with 409 Conflict
+    stale = client.patch(f"/api/v1/follow-ups/{f_id}", headers=_h(tokens, "health_worker"),
+                         json={"notes": "Stale edit attempt", "base_updated_at": current_updated_at})
+    assert stale.status_code == 409
+
+    # 3. Unauthorized field mutation rejected with 422
+    forbid = client.patch(f"/api/v1/follow-ups/{f_id}", headers=_h(tokens, "health_worker"),
+                          json={"assigned_user_id": "someone_else"})
+    assert forbid.status_code == 422
+
+    # 4. Another unassigned worker (contractor/worker/research_lab) is rejected
+    unauth = client.patch(f"/api/v1/follow-ups/{f_id}", headers=_h(tokens, "worker"),
+                          json={"notes": "Worker unauthorized edit"})
+    assert unauth.status_code in (401, 403)
+
+    # 5. Health worker completes the follow-up
+    comp = client.patch(f"/api/v1/follow-ups/{f_id}", headers=_h(tokens, "health_worker"),
+                        json={"status": "completed", "outcome": "worker_recovered",
+                              "base_updated_at": new_updated_at})
+    assert comp.status_code == 200, comp.text
+    assert comp.json()["status"] == "completed"
+    assert comp.json()["completed_at"] is not None
+
+    # 6. Case status should automatically advance to followup_completed
+    c_after = client.get(f"/api/v1/cases/{case_id}", headers=_h(tokens, "clinician")).json()
+    assert c_after["status"] == "followup_completed"
+
+    # 7. Clinician can close the case from followup_completed
+    close_r = client.post(f"/api/v1/cases/{case_id}/transition", headers=_h(tokens, "clinician"),
+                          json={"to_status": "closed", "note": "All follow-up complete, closing case."})
+    assert close_r.status_code == 200, close_r.text
+    c_closed = client.get(f"/api/v1/cases/{case_id}", headers=_h(tokens, "clinician")).json()
+    assert c_closed["status"] == "closed"
+
+
+def test_sample_retry_notification_deduplication(client, tokens, case_assigned):
+    case_id = case_assigned["case_id"]
+    patient_id = _case_patient(client, tokens, case_id)
+
+    # Pathologist submits positive sample
+    r1 = client.post("/api/v1/samples", headers=_h(tokens, "pathologist"),
+                     json={"patient_id": patient_id, "case_id": case_id,
+                           "method": "microscopy", "smear_type": "thick",
+                           "result_status": "positive", "species": "pf",
+                           "client_request_id": _crid()})
+    assert r1.status_code == 201, r1.text
+
+    # Clinician inbox has unread diagnostic_positive notification
+    cl1 = client.get("/api/v1/notifications", headers=_h(tokens, "clinician"),
+                     params={"unread_only": "true"}).json()
+    unread_diag_pos = [n for n in cl1["items"] if n["case_id"] == case_id and n["kind"] == "diagnostic_positive"]
+    assert len(unread_diag_pos) == 1
+
+    # Research lab inbox has unread research_eligible notification
+    rl1 = client.get("/api/v1/notifications", headers=_h(tokens, "research_lab"),
+                     params={"unread_only": "true"}).json()
+    unread_rl = [n for n in rl1["items"] if n["case_id"] == case_id and n["kind"] == "research_eligible"]
+    assert len(unread_rl) == 1
+
+    # Retried sample submission for the same case (e.g. outbox retry)
+    r2 = client.post("/api/v1/samples", headers=_h(tokens, "pathologist"),
+                     json={"patient_id": patient_id, "case_id": case_id,
+                           "method": "microscopy", "smear_type": "thick",
+                           "result_status": "positive", "species": "pf",
+                           "client_request_id": _crid()})
+    assert r2.status_code == 201, r2.text
+
+    # Verify clinician and research lab did NOT receive duplicate unread notifications
+    cl2 = client.get("/api/v1/notifications", headers=_h(tokens, "clinician"),
+                     params={"unread_only": "true"}).json()
+    unread_diag_pos_after = [n for n in cl2["items"] if n["case_id"] == case_id and n["kind"] == "diagnostic_positive"]
+    assert len(unread_diag_pos_after) == 1, "Duplicate unread notifications must be prevented"
+
+    rl2 = client.get("/api/v1/notifications", headers=_h(tokens, "research_lab"),
+                     params={"unread_only": "true"}).json()
+    unread_rl_after = [n for n in rl2["items"] if n["case_id"] == case_id and n["kind"] == "research_eligible"]
+    assert len(unread_rl_after) == 1, "Duplicate unread research notifications must be prevented"

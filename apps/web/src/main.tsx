@@ -10,6 +10,7 @@ import "./ui/index.css";
 import { AppShell } from "./app/AppShell";
 import { LoginScreen } from "./screens/LoginScreen";
 import { OverviewScreen } from "./screens/OverviewScreen";
+import { NotificationsCard } from "./screens/NotificationsCard";
 import { CasesScreen } from "./screens/CasesScreen";
 import { WorkersScreen } from "./screens/WorkersScreen";
 import { WorkerRecord } from "./screens/WorkerRecord";

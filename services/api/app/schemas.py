@@ -135,6 +135,7 @@ class SampleCreate(BaseModel):
     species_other_note: str | None = Field(default=None, max_length=200)
     smear_type: str | None = Field(default=None, max_length=30)
     notes: str | None = Field(default=None, max_length=2000)
+    client_request_id: str | None = Field(default=None, max_length=64)
 
     @field_validator("method")
     @classmethod
@@ -190,6 +191,7 @@ class FollowUpCreate(BaseModel):
 
 class FollowUpUpdate(BaseModel):
     """Health Worker may only update allowed completion/adherence fields."""
+    model_config = {"extra": "forbid"}  # assignment/ownership/linkage fields are immutable -> 422
     status: str | None = Field(default=None, pattern=r"^(due|completed|cancelled|missed)$")
     adherence: str | None = Field(default=None, max_length=40)
     outcome: str | None = Field(default=None, max_length=100)

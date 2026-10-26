@@ -21,7 +21,7 @@ from .models import (AuditEvent, Case, CaseEvent, ClinicalAssessment, Diagnostic
                      MolecularResult, Notification, Patient, QuestionnaireSubmission, RoleAssignment, Sample, Session,
                      Site, SymptomReport, SlideFollowUp, TravelEvent, User, WorkerQrToken, WorkerSiteAssignment,
                      now, uid)
-from .schemas import (AssessmentCreate, FollowUpCreate, LoginIn, MembershipCreate, MolecularCreate,
+from .schemas import (AssessmentCreate, FollowUpCreate, FollowUpUpdate, LoginIn, MembershipCreate, MolecularCreate,
                       ProvisionIn, QuestionnaireSave, QuestionnaireSubmitIn, ReportedStatusIn, SampleCreate,
                       SignupIn, SiteCreate, SiteWorkerAssignIn, SlideFollowUpSave, TokenOut, TravelEpisodeCreate, WorkerCreate)
 from .security import active_roles, audit, create_token, current_session, get_current_user, hash_pin, normalize_phone, require_roles, revoke_session, verify_pin
@@ -739,7 +739,7 @@ def workers(q: str | None = None, offset: int = Query(0, ge=0), limit: int = Que
     elif "research_lab" in roles and "clinician" not in roles and "pathologist" not in roles and "admin" not in roles:
         eligible = permissions.eligible_research_sample_ids(db)
         # Join via samples to find patients with eligible positive samples
-        from .models import Sample
+        # (Sample is imported at module level; a re-import here would shadow it).
         if eligible:
             stmt = stmt.join(Sample, Sample.patient_id == Patient.id).where(Sample.id.in_(eligible)).distinct()
         else:
@@ -1369,25 +1369,48 @@ def create_sample(body: SampleCreate, user: User = Depends(require_roles("pathol
                                 body=f"POSITIVE result ({species_note}) for case {case.case_code}. Workers may need follow-up.")
         else:
             for clinician_id in positive_recipients:
-                db.add(Notification(recipient_user_id=clinician_id, case_id=None, kind="diagnostic_positive",
-                                    title="Positive malaria test detected",
-                                    body=f"POSITIVE result ({species_note}) recorded for worker sample {sample.sample_code}; no linked surveillance case.",
-                                    delivered_at=now()))
+                existing_alert = db.scalar(
+                    select(Notification).where(
+                        Notification.recipient_user_id == clinician_id,
+                        Notification.case_id.is_(None),
+                        Notification.kind == "diagnostic_positive",
+                        Notification.read_at.is_(None),
+                        Notification.body.like(f"%{sample.sample_code}%")
+                    )
+                )
+                if existing_alert is None:
+                    db.add(Notification(recipient_user_id=clinician_id, case_id=None, kind="diagnostic_positive",
+                                        title="Positive malaria test detected",
+                                        body=f"POSITIVE result ({species_note}) recorded for worker sample {sample.sample_code}; no linked surveillance case.",
+                                        delivered_at=now()))
         # Research Lab notification for eligible positive cases (RDT/microscopy)
         if body.method in ("rdt", "microscopy"):
             rl_recipients = _research_lab_recipients(db)
+            target_case_id = case.id if case else None
             for rl_id in rl_recipients:
-                db.add(Notification(recipient_user_id=rl_id, case_id=case.id if case else None, kind="research_eligible",
-                                    title="Eligible research case",
-                                    body="A positive RDT/microscopy result is available for review in the research workspace.",
-                                    body_minimal=True, delivered_at=now()))
+                stmt = select(Notification).where(
+                    Notification.recipient_user_id == rl_id,
+                    Notification.kind == "research_eligible",
+                    Notification.read_at.is_(None)
+                )
+                if target_case_id:
+                    stmt = stmt.where(Notification.case_id == target_case_id)
+                else:
+                    stmt = stmt.where(Notification.case_id.is_(None))
+                if db.scalar(stmt) is None:
+                    db.add(Notification(recipient_user_id=rl_id, case_id=target_case_id, kind="research_eligible",
+                                        title="Eligible research case",
+                                        body="A positive RDT/microscopy result is available for review in the research workspace.",
+                                        body_minimal=True, delivered_at=now()))
         kafka_producer.emit_event("diagnostic.positive", {
             "sample_id": sample.id, "sample_code": sample.sample_code, "patient_id": patient.id,
             "case_id": case.id if case else None, "species": body.species, "method": body.method,
             "reported_by": user.id,
         })
         audit(db, user, "diagnostic.positive_alert", "sample", sample.id, detail={"species": body.species})
-    audit(db, user, "sample.created", "sample", sample.id); db.commit()
+    audit(db, user, "sample.created", "sample", sample.id,
+          detail={"client_request_id": body.client_request_id} if body.client_request_id else None)
+    db.commit()
     return sample_view(sample, effective(user, db))
 
 @app.put("/api/v1/samples/{sample_id}/slide-followup", tags=["pathology"])
@@ -1519,10 +1542,29 @@ def update_followup(follow_up_id: str, body: FollowUpUpdate, user: User = Depend
         followup.completed_at = None
     for k, v in updates.items():
         setattr(followup, k, v)
+    if followup.case_id and followup.status == "completed":
+        case = db.get(Case, followup.case_id)
+        if case and case.status == "followup_due" and case_transition_allowed(case.status, "followup_completed"):
+            other_pending = db.scalar(
+                select(func.count()).select_from(FollowUp).where(
+                    FollowUp.case_id == case.id,
+                    FollowUp.id != followup.id,
+                    FollowUp.status != "completed"
+                )
+            ) or 0
+            if other_pending == 0:
+                from_st = case.status
+                case.status = "followup_completed"
+                _record_case_event(db, user.id, case, from_st, "followup_completed",
+                                   "All follow-up tasks completed")
+                _notify_case_agents(db, case, "case_followup_completed", _clinician_recipients(db),
+                                    title="Case follow-up completed",
+                                    body=f"All follow-up tasks for case {case.case_code} have been completed.")
     audit(db, user, "followup.updated", "followup", followup.id, detail={"fields": sorted(updates.keys())})
     db.commit()
     return {"id": followup.id, "status": followup.status, "adherence": followup.adherence,
-            "outcome": followup.outcome, "notes": followup.notes, "completed_at": followup.completed_at}
+            "outcome": followup.outcome, "notes": followup.notes, "completed_at": followup.completed_at,
+            "updated_at": followup.updated_at}
 
 # ---------------- Molecular / research ----------------
 
@@ -1613,7 +1655,6 @@ def dashboard(user: User = Depends(get_current_user), db: Session = Depends(get_
         eligible_samples = permissions.eligible_research_sample_ids(db)
         eligible_patients = set()
         if eligible_samples:
-            from .models import Sample
             eligible_patients = set(db.scalars(select(Sample.patient_id).where(Sample.id.in_(eligible_samples))).all())
         unread = db.scalar(select(func.count()).select_from(Notification).where(Notification.recipient_user_id == user.id, Notification.read_at.is_(None))) or 0
         return {"scope": "research_eligible", "eligible_research_cases": len(eligible_patients), "eligible_samples": len(eligible_samples), "unread_notifications": unread, "note": "Restricted to positive RDT/microscopy cases only."}
@@ -1677,12 +1718,22 @@ def _record_case_event(db: Session, actor_id: str | None, case: Case, from_statu
 
 def _notify_case_agents(db: Session, case: Case, kind: str, recipients: list[str], body_minimal: bool = False,
                         title: str = "Case needs attention", body: str = ""):
-    """Persist one notification row per recipient, transactionally with the case change."""
+    """Persist one notification row per recipient, transactionally with the case change.
+    Deduplicates unread notifications so retries do not spam recipient inboxes."""
     for rid in set(recipients):
         if rid is None:
             continue
-        db.add(Notification(recipient_user_id=rid, case_id=case.id, kind=kind,
-                            title=title, body=body, body_minimal=body_minimal, delivered_at=now()))
+        existing_unread = db.scalar(
+            select(Notification).where(
+                Notification.recipient_user_id == rid,
+                Notification.case_id == case.id,
+                Notification.kind == kind,
+                Notification.read_at.is_(None)
+            )
+        )
+        if existing_unread is None:
+            db.add(Notification(recipient_user_id=rid, case_id=case.id, kind=kind,
+                                title=title, body=body, body_minimal=body_minimal, delivered_at=now()))
 
 def _clinician_recipients(db) -> list[str]:
     """District clinical routing: active clinicians without a narrower scope are

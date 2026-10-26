@@ -3,6 +3,7 @@
 import { Badge, Button, Card, ErrorState, Metric, PageHeader, Page, Skeleton } from "../ui/components";
 import type { DashboardPayload } from "../types";
 import { useSession } from "../lib/session";
+import { NotificationsCard } from "./NotificationsCard";
 
 export function OverviewScreen({ data, loading, error, requestId, onRetry, onGo }: {
   data: DashboardPayload | null; loading: boolean; error: string; requestId: string | null;
@@ -89,6 +90,11 @@ export function OverviewScreen({ data, loading, error, requestId, onRetry, onGo 
               This web console shows your personal status only — it doesn’t accept worker questionnaires.
             </p>
           </Card>
+        </div>
+      ) : null}
+      {!loading && data ? (
+        <div style={{ marginTop: "var(--sp-6)" }}>
+          <NotificationsCard onGo={onGo} />
         </div>
       ) : null}
       <div style={{ marginTop: "var(--sp-6)" }}>
