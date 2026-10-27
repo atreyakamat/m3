@@ -4,7 +4,7 @@
  *  HTTP methods, payload shapes and query parameters are byte-identical to
  *  the previous implementation. */
 import { createRoot } from "react-dom/client";
-import { Component, useCallback, useEffect, useState, type ErrorInfo, type ReactNode } from "react";
+import { Component, useCallback, useEffect, useRef, useState, type ErrorInfo, type ReactNode } from "react";
 import { api } from "./api";
 import "./ui/index.css";
 import { AppShell } from "./app/AppShell";
@@ -25,6 +25,7 @@ import { AnalyticsDashboard } from "./AnalyticsDashboard";
 import { Banner, Button, Page, ToastProvider, useToast } from "./ui/components";
 import { SessionProvider, useSession } from "./lib/session";
 import { hasWriteRole, isPathologist, type NavSection } from "./lib/roles";
+import { SearchSeq, SEARCH_DEBOUNCE_MS, isSearching, listPathFor, normalizeQuery } from "./lib/search";
 import type {
   AuditEventItem, CaseItem, DashboardPayload, DiagnosticSampleItem, FollowUpItem,
   PagePayload, ResearchResultItem, SiteItem, WorkerListItem,
@@ -81,6 +82,12 @@ function Console() {
   const [requestId, setRequestId] = useState<string | null>(null);
 
   const [query, setQuery] = useState("");
+  const [appliedQuery, setAppliedQuery] = useState("");
+  /** One shared sequence guard across tab + search loads: only the newest
+   *  outstanding response may commit, so a slow older answer (e.g. a search
+   *  issued before the user clicked refresh, or a tab switch) can never
+   *  overwrite newer results. */
+  const loadSeq = useRef(0);
   const [auditFilters, setAuditFilters] = useState<{ action: string; entityType: string }>({ action: "", entityType: "" });
   const [auditOffset, setAuditOffset] = useState(0);
 
@@ -94,10 +101,13 @@ function Console() {
   /* Endpoint map — identical to the previous loadData(): */
   const load = useCallback(async () => {
     if (!token) return;
+    // Stale-response guard: mark this load as newest; ignore the payload if a
+    // newer load has started by the time the response arrives.
+    const seq = ++loadSeq.current;
     let path = "/dashboard";
-    if (tab === "workers") path = `/workers?limit=50${query ? `&q=${encodeURIComponent(query)}` : ""}`;
+    if (tab === "workers") path = listPathFor("workers", appliedQuery);
     else if (tab === "cases") path = "/cases?limit=50";
-    else if (tab === "samples") path = "/samples?limit=50";
+    else if (tab === "samples") path = listPathFor("samples", appliedQuery);
     else if (tab === "followups") path = "/follow-ups?limit=50";
     else if (tab === "sites") path = "/sites";
     else if (tab === "research") path = "/research-results";
@@ -116,6 +126,7 @@ function Console() {
     setRequestId(null);
     try {
       const res = await api(path, token);
+      if (seq !== loadSeq.current) return; // a newer request already won
       switch (tab) {
         case "cases": setCases(res as PagePayload<CaseItem>); break;
         case "workers": setWorkers(res as PagePayload<WorkerListItem>); break;
@@ -127,15 +138,30 @@ function Console() {
         default: setDashboard(res as DashboardPayload); break;
       }
     } catch (e) {
+      if (seq !== loadSeq.current) return; // stale error belongs to an older query
       const anyErr = e as { requestId?: string | null };
       setError(e instanceof Error ? e.message : "Failed to fetch data");
       setRequestId(anyErr?.requestId ?? null);
     } finally {
-      setLoading(false);
+      if (seq === loadSeq.current) setLoading(false);
     }
-  }, [token, tab, query, auditFilters.action, auditFilters.entityType, auditOffset]);
+  }, [token, tab, appliedQuery, auditFilters.action, auditFilters.entityType, auditOffset]);
 
   useEffect(() => { void load(); }, [load]);
+
+  /* Debounce name search: typing updates the field immediately; the server is
+   * queried once after the user pauses. One request per query, not per
+   * keystroke. */
+  useEffect(() => {
+    if (!token) return;
+    const t = setTimeout(() => {
+      setAppliedQuery((prev) => {
+        const next = normalizeQuery(query);
+        return prev === next ? prev : next;
+      });
+    }, SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [query, token]);
 
   function go(next: string) {
     // Returning to a tab invalidates its last payload so fresh data loads.
@@ -145,7 +171,10 @@ function Console() {
     if (t === "samples") setSamples(null);
     if (t === "followups") setFollowups(null);
     if (t === "audit") setAudit(null);
-    if (t !== "workers") setQuery("");
+    // Name search is per-tab state: the query field clears unless the list
+    // being opened keeps using it (Workers / Diagnostics preserve their own
+    // search while refreshing, i.e. page loads don't reset it either).
+    if (t !== "workers" && t !== "samples") { setQuery(""); setAppliedQuery(""); }
     setTab(t);
   }
 
@@ -190,7 +219,7 @@ function Console() {
             onOpen={(id) => setSelectedWorkerId(id)} />
         ) : tab === "samples" ? (
           <SamplesScreen page={samples} loading={loading} error={error} requestId={requestId}
-            onRefresh={load} canSlideFollowup={canSlide}
+            onRefresh={load} query={query} onQuery={setQuery} canSlideFollowup={canSlide}
             onSlideFollowup={(s) => setSlideTarget(s)}
             onOpenPatient={(patientId) => setSelectedWorkerId(patientId)} />
         ) : tab === "followups" ? (

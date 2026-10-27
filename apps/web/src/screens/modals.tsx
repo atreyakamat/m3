@@ -3,7 +3,7 @@
  *  POST /follow-ups, POST /samples, PUT /samples/{id}/slide-followup,
  *  POST /workers/{id}/membership, PUT /workers/{id}/reported-status) are
  *  preserved verbatim; presentation now uses the M3 design system. */
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { api } from "../api";
 import {
   Button, Field, FormGrid, Input, Modal, Select, TextArea, Toggle,
@@ -191,6 +191,11 @@ export function ScheduleFollowupModal({
   const [notes, setNotes] = useState("Check chloroquine compliance, fever resolution, and adverse symptoms");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  // Entity idempotency key for POST /follow-ups (defect D2). Minted at the
+  // first submit of this logical task. A failed submit keeps the key so a
+  // retry resolves to the same task; a confirmed create closes the modal and
+  // unmounts the ref, so the next task mints a fresh key.
+  const requestIdRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     async function fetchHW() {
@@ -218,6 +223,9 @@ export function ScheduleFollowupModal({
     try {
       const days = parseInt(dueDaysAhead) || 3;
       const dueDate = new Date(Date.now() + days * 86400000).toISOString();
+      if (!requestIdRef.current) {
+        requestIdRef.current = `fup_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      }
       await api("/follow-ups", token, {
         method: "POST",
         body: JSON.stringify({
@@ -226,6 +234,7 @@ export function ScheduleFollowupModal({
           scheduled_day: scheduledDay,
           due_at: dueDate,
           notes,
+          client_request_id: requestIdRef.current,
         }),
       });
       onSuccess();
@@ -304,12 +313,20 @@ export function PathologistSampleModal({
   const [notes, setNotes] = useState("Giemsa stained thick and thin blood films evaluated under 100x oil immersion");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  // Entity idempotency key for POST /samples (defect D1). Minted at the first
+  // submit of this logical lab result. A failed submit keeps the key so a
+  // retry resolves to the same result row; a confirmed create closes the
+  // modal and unmounts the ref, so the next result mints a fresh key.
+  const requestIdRef = useRef<string | undefined>(undefined);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     setLoading(true);
     setError("");
     try {
+      if (!requestIdRef.current) {
+        requestIdRef.current = `smp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      }
       await api("/samples", token, {
         method: "POST",
         body: JSON.stringify({
@@ -320,6 +337,7 @@ export function PathologistSampleModal({
           smear_type: method === "microscopy" ? smearType : undefined,
           specimen_type: specimenType,
           notes,
+          client_request_id: requestIdRef.current,
         }),
       });
       onSuccess();

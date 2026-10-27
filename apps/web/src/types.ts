@@ -86,6 +86,9 @@ export type DiagnosticSampleItem = {
   id: string
   sample_code: string
   patient_id: string
+  /** Canonical linked-worker name (pathologist lab scope only; the research
+   *  surface stays PII-stripped and never receives it). */
+  patient_display_name?: string
   facility_id?: string
   specimen_type: string
   status: string

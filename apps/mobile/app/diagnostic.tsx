@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import {
   Alert,
   StyleSheet,
@@ -62,6 +62,12 @@ export default function Diagnostic() {
   const [activeTab, setActiveTab] = useState<'sample' | 'slide_followup'>('sample')
   const [facilities, setFacilities] = useState<{ id: string; name: string; district: string }[]>([])
   const [selectedFacilityId, setSelectedFacilityId] = useState('')
+
+  // Entity idempotency key for POST /samples (defect D1). Minted at the first
+  // Submit of a logical sample recording, reused on every retry until the
+  // server confirms, then released so the next recording mints a fresh key.
+  // After a success the screen navigates away, which also resets the ref.
+  const sampleRequestId = useRef<string | undefined>(undefined)
 
   // Slide follow-up state
   const [slideSampleId, setSlideSampleId] = useState('')
@@ -170,6 +176,12 @@ export default function Diagnostic() {
     if (values.method === 'other' && (values.other_method_note || '').trim()) {
       payload.other_method_note = (values.other_method_note || '').trim()
     }
+    // Send the stable replay key: a network failure after send or a second
+    // press must not record a second lab result (server resolves the key).
+    if (!sampleRequestId.current) {
+      sampleRequestId.current = `smp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    }
+    payload.client_request_id = sampleRequestId.current
     // Patient identity linkage (name/mobile) is appended to the lab notes;
     // the authoritative demographic link is patient_id itself.
     const identityNote = `Recorded by ${pathologistName || 'pathologist'}; patient: ${
@@ -200,6 +212,8 @@ export default function Diagnostic() {
         body: JSON.stringify(payload),
       })
 
+      // Server confirmed: release the key so a NEW recording mints a fresh one.
+      sampleRequestId.current = undefined
       Alert.alert(
         tr('saved'),
         `Sample recorded: ${res.sample_code || 'Success'}\nStatus: ${res.result_status?.toUpperCase()}`,

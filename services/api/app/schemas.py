@@ -187,6 +187,9 @@ class FollowUpCreate(BaseModel):
     outcome: str | None = Field(default=None, max_length=100)
     notes: str | None = Field(default=None, max_length=2000)
     scheduled_day: str | None = Field(default=None, max_length=20)
+    # Offline-replay idempotency key (defect D2). Same format as every other
+    # client_request_id in this API; optional so existing callers keep working.
+    client_request_id: str | None = Field(default=None, max_length=64)
 
 
 class FollowUpUpdate(BaseModel):

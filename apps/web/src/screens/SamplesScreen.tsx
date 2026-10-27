@@ -2,7 +2,7 @@
  *  legacy `samples` records table: sample code, patient, specimen, test
  *  results (method / result / species), slide follow-up state. Row actions
  *  are gated at the parent (canRecord / canSlideFollowup). */
-import { Badge, Button, DataTable, EmptyState, ErrorState, Page, PageHeader, StatusBadge } from "../ui/components";
+import { Badge, Button, DataTable, EmptyState, ErrorState, Page, PageHeader, SearchInput, StatusBadge } from "../ui/components";
 import type { DiagnosticSampleItem, PagePayload } from "../types";
 
 /** Tone parity with the legacy sample result badge: positive = danger,
@@ -16,15 +16,26 @@ function resultTone(sample: DiagnosticSampleItem, resultStatus?: string): "ok" |
 const SAMPLE_EMPTY: React.ReactNode = <EmptyState title="Lab queue is clear"
   message="No diagnostic samples awaiting results or slide follow-up right now. New samples appear as clinicians request testing." />;
 
-export function SamplesScreen({ page, loading, error, requestId, onRefresh, canRecord, onRecord, onSlideFollowup, canSlideFollowup, onOpenPatient }:
+export function SamplesScreen({ page, loading, error, requestId, onRefresh, query, onQuery, canRecord, onRecord, onSlideFollowup, canSlideFollowup, onOpenPatient }:
   {
     page: PagePayload<DiagnosticSampleItem> | null; loading: boolean; error: string; requestId: string | null;
-    onRefresh: () => void; canRecord?: boolean; onRecord?: () => void;
+    onRefresh: () => void;
+    /** Server-backed name search (de-identifiable linked worker's name). The
+     *  query state lives in the parent so a refresh preserves it. */
+    query: string; onQuery: (q: string) => void;
+    canRecord?: boolean; onRecord?: () => void;
     onSlideFollowup: (s: DiagnosticSampleItem) => void; canSlideFollowup: boolean;
     /** Row click: open the patient's worker record (sample recording happens in worker context). */
     onOpenPatient?: (patientId: string) => void;
   }) {
   const rows = page?.items ?? [];
+  const searching = query.trim().length > 0;
+
+  /** Empty state differs: a search with no result is not the same as a clear queue. */
+  const emptyState = searching ? (
+    <EmptyState title="No samples match"
+      message={`No diagnostic sample belongs to a worker whose name matches “${query.trim()}” for your scope.`} />
+  ) : SAMPLE_EMPTY;
 
   return (
     <Page>
@@ -39,13 +50,22 @@ export function SamplesScreen({ page, loading, error, requestId, onRefresh, canR
           {!error ? <Badge tone="neutral" dot={false}>{rows.length} of {page?.total ?? 0} sample(s)</Badge> : null}
         </>} />
 
+      <div style={{ maxWidth: 340, marginBottom: "var(--sp-4)" }}>
+        <SearchInput
+          label="Search diagnostics"
+          value={query}
+          onChange={onQuery}
+          placeholder="Search diagnostics by name..."
+          aria-label="Search diagnostics by the linked worker's name" />
+      </div>
+
       {error ? <ErrorState message={error} onRetry={onRefresh} requestId={requestId} /> : null}
       <DataTable
         loading={loading && !page}
         caption="Diagnostic samples (pathologist scope)"
         rows={rows}
         rowKey={(s) => s.id}
-        emptyState={SAMPLE_EMPTY}
+        emptyState={emptyState}
         columns={[
           {
             key: "sample_code", label: "Sample",
@@ -53,7 +73,9 @@ export function SamplesScreen({ page, loading, error, requestId, onRefresh, canR
           },
           {
             key: "patient", label: "Patient",
-            render: (s) => <span className="m3-hint">{s.patient_id.slice(0, 8)}…</span>,
+            render: (s) => (s.patient_display_name
+              ? <span style={{ overflowWrap: "anywhere" }}>{s.patient_display_name}</span>
+              : <span className="m3-hint">{s.patient_id.slice(0, 8)}…</span>),
           },
           {
             key: "specimen", label: "Specimen / Smear",
@@ -107,7 +129,9 @@ export function SamplesScreen({ page, loading, error, requestId, onRefresh, canR
         ]}
       />
       {page ? <p className="m3-hint" style={{ marginTop: 8 }}>
-        Showing {page.items.length} of {page.total} sample(s). Slide follow-up is required for every positive result.
+        Showing {page.items.length} of {page.total} sample(s){searching ? ` matching “${query.trim()}”` : ""}.
+        Search re-queries the server with the linked worker's name — no local filtering, research-scope records stay PII-stripped.
+        Slide follow-up is required for every positive result.
       </p> : null}
     </Page>
   );

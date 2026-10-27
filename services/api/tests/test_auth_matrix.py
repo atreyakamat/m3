@@ -1,4 +1,6 @@
 """AUTH-001..005: server-enforced role matrix incl. read-only roles and unauthenticated access."""
+import os
+
 import pytest
 
 
@@ -92,3 +94,39 @@ def test_read_only_roles_can_read_workers_list(client, tokens):
         response = client.get("/api/v1/workers", headers=_auth(tokens[role]))
         assert response.status_code == 200, (role, response.text)
         assert "items" in response.json()
+
+
+def test_research_lab_workers_list_with_eligible_sample_no_postgres_json_distinct_error(client, tokens):
+    """Regression: research-lab worker listing/search broke on PostgreSQL.
+
+    The research-scoped branch used JOIN + SELECT DISTINCT across a JSON column
+    (patients.initial_symptoms). PostgreSQL has no equality operator for json,
+    so the query raised a ProgrammingError and the API returned HTTP 500 once a
+    genuinely eligible (positive RDT/microscopy) sample existed. The fix filters
+    through a one-column IN subquery; this test seeds one directly so the
+    eligibility set is non-empty in both SQLite and PostgreSQL runs.
+    """
+    from tests.conftest import SessionLocal
+    from app import models
+
+    db = SessionLocal()
+    try:
+        sample = models.Sample(sample_code="SYN-RLSEARCH-" + os.urandom(4).hex(), patient_id="patient-1",
+                               facility_id="fac-1", status="positive")
+        db.add(sample)
+        db.flush()
+        db.add(models.DiagnosticTest(sample_id=sample.id, method="rdt", result_status="positive",
+                                     species="pf", operator_id="pathologist-1"))
+        db.commit()
+    finally:
+        db.close()
+
+    for query in ("", "?q=Ravi"):
+        response = client.get("/api/v1/workers" + query, headers=_auth(tokens["research_lab"]))
+        assert response.status_code == 200, (query, response.text)
+        body = response.json()
+        assert body["total"] >= 1, body
+        # The eligible worker is visible (scope may include other eligible
+        # patients created by sibling tests) with no identity fields exposed.
+        assert any(item["id"] == "patient-1" for item in body["items"]), body["items"]
+        assert all("phone_e164" not in item for item in body["items"]), body["items"]

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState, useCallback, useRef } from 'react'
 import {
   Alert,
   StyleSheet,
@@ -75,6 +75,12 @@ export default function Followup() {
   const [notes, setNotes] = useState('')
   const [pending, setPending] = useState(false)
   const [formError, setFormError] = useState('')
+
+  // Entity idempotency key for POST /follow-ups (defect D2). Minted at the
+  // first Assign of a logical task, reused on every retry until the server
+  // confirms, then released. A success leaves the form, and the next task
+  // mints a fresh key.
+  const followupRequestId = useRef<string | undefined>(undefined)
 
   const load = useCallback(async () => {
     if (session?.demo) {
@@ -182,6 +188,9 @@ export default function Followup() {
 
     setPending(true)
     try {
+      if (!followupRequestId.current) {
+        followupRequestId.current = `fup_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+      }
       await api('/follow-ups', session.token, {
         method: 'POST',
         body: JSON.stringify({
@@ -190,8 +199,11 @@ export default function Followup() {
           scheduled_day: `+${scheduledDay}d`,
           due_at: dueDateFor(scheduledDay),
           notes: notes.trim() || undefined,
+          client_request_id: followupRequestId.current,
         }),
       })
+      // Server confirmed: release the key so a NEW assignment mints a fresh one.
+      followupRequestId.current = undefined
       Alert.alert(
         tr('saved'),
         `Follow-up visit scheduled for +${scheduledDay} day${scheduledDay === 1 ? '' : 's'} (${new Date(dueDateFor(scheduledDay)).toLocaleDateString()}). The assigned Health Worker sees it in their queue.`

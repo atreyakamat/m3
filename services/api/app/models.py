@@ -211,6 +211,18 @@ class Sample(Timestamped, Base):
     case_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     specimen_type: Mapped[str] = mapped_column(String(60), default="blood")
     status: Mapped[str] = mapped_column(String(30), default="pending")
+    client_request_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    __table_args__ = (
+        # Offline-replay backstop (defect D1): a retried sample-result recording
+        # with the same client_request_id must resolve to the ORIGINAL row.
+        # The application-level replay check cannot win an insert race alone;
+        # this partial unique index makes a concurrent duplicate loser fail
+        # loudly instead of silently doubling a lab result. Partial so legacy
+        # rows (NULL key) and genuinely new clusters keep working.
+        Index("uq_samples_client_request_id", client_request_id, unique=True,
+              postgresql_where=sa_text("client_request_id IS NOT NULL"),
+              sqlite_where=sa_text("client_request_id IS NOT NULL")),
+    )
     patient: Mapped[Patient] = relationship(back_populates="samples")
     tests: Mapped[list["DiagnosticTest"]] = relationship(back_populates="sample", cascade="all, delete-orphan")
     slide_followups: Mapped[list["SlideFollowUp"]] = relationship(back_populates="sample", cascade="all, delete-orphan")
@@ -259,6 +271,17 @@ class FollowUp(Timestamped, Base):
     outcome: Mapped[str | None] = mapped_column(String(100), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    client_request_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    __table_args__ = (
+        # Offline-replay backstop (defect D2): a retried follow-up assignment
+        # with the same client_request_id must resolve to the ORIGINAL task.
+        # Concurrent duplicates lose the insert race loudly (unique index)
+        # instead of silently doubling the field task; partial so legacy rows
+        # (NULL key) and legitimately distinct assignments keep working.
+        Index("uq_follow_ups_client_request_id", client_request_id, unique=True,
+              postgresql_where=sa_text("client_request_id IS NOT NULL"),
+              sqlite_where=sa_text("client_request_id IS NOT NULL")),
+    )
     patient: Mapped[Patient] = relationship(back_populates="followups")
 
 class Case(Timestamped, Base):

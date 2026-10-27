@@ -70,12 +70,22 @@ export function Toggle({ label, checked, onChange, hint }: { label: ReactNode; c
 export function SearchInput({ value, onChange, placeholder, label = "Search", ...rest }:
   { value: string; onChange: (v: string) => void; placeholder?: string; label?: string } & Omit<InputHTMLAttributes<HTMLInputElement>, "onChange" | "value">) {
   const id = useId();
+  /** One accessible clear control whenever the field has content; the clear
+   *  button is focusable and restores the unfiltered list (server re-query). */
+  const clear = (e: React.MouseEvent) => {
+    e.preventDefault();
+    onChange("");
+    (document.getElementById(id) as HTMLInputElement | null)?.focus();
+  };
   return (
     <Field label={label} htmlFor={id} hint={rest["aria-label"] ? undefined : undefined}>
       <div className="m3-search">
         <input id={id} className="m3-input" type="search" role="searchbox"
           value={value} placeholder={placeholder}
           onChange={(e) => onChange(e.target.value)} {...rest} />
+        {value ? (
+          <button type="button" className="m3-search-clear" aria-label="Clear search" onClick={clear}>✕</button>
+        ) : null}
       </div>
     </Field>);
 }
@@ -267,15 +277,30 @@ export function FormGrid({ cols = 2, children }: { cols?: 1 | 2; children: React
     </div>);
 }
 
-export function Metric({ label, value, unit, tone, hint }: {
+export function Metric({ label, value, unit, tone, hint, onClick, ariaLabel }: {
   label: string; value: ReactNode; unit?: string; tone?: Tone; hint?: string;
+  /** Count cards with an authorized list destination are one accessible
+   *  pressable: card, value and hint are all inside a single <button>.
+   *  Cards without a destination stay non-interactive divs. */
+  onClick?: () => void; ariaLabel?: string;
 }) {
+  const body = (<>
+    <div className="metric-label">{label}</div>
+    <div className="metric-value">{value}{unit ? <span className="u">{unit}</span> : null}</div>
+    {hint ? <div className="metric-hint">{hint}</div> : null}
+  </>);
+  if (!onClick) {
+    return (
+      <div className={["metric", tone ? `tone-${tone}` : ""].filter(Boolean).join(" ")}>
+        {body}
+      </div>);
+  }
   return (
-    <div className={["metric", tone ? `tone-${tone}` : ""].filter(Boolean).join(" ")}>
-      <div className="metric-label">{label}</div>
-      <div className="metric-value">{value}{unit ? <span className="u">{unit}</span> : null}</div>
-      {hint ? <div className="metric-hint">{hint}</div> : null}
-    </div>);
+    <button type="button" className={["metric", "metric-clickable", tone ? `tone-${tone}` : ""].filter(Boolean).join(" ")}
+      onClick={onClick} aria-label={ariaLabel ?? label}>
+      {body}
+      <span className="metric-open" aria-hidden="true">View list →</span>
+    </button>);
 }
 
 /* ------------------------------------------------- identity / case chips */

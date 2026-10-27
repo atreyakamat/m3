@@ -3,6 +3,7 @@ import {
   Alert,
   Modal,
   Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -10,6 +11,7 @@ import {
 } from 'react-native'
 import { router } from 'expo-router'
 import { api, removeToken, base } from '@/src/api'
+import { destinationHint, metricDestination, type MetricKey } from '@/src/metricNav'
 import {
   DEMO_OWNER,
   readLastSync,
@@ -484,11 +486,14 @@ export default function Dashboard() {
         />
       ) : null}
 
-      {/* Metrics Row */}
+      {/* Metrics Row — each card is ONE accessible pressable (card, count and
+          label all inside it) that opens the matching role-scoped record list;
+          roles without an authorized list destination get an inert card
+          (report §24). */}
       <View style={s.metricsRow}>
-        <MetricCard label={tr('workers')} value={summary?.workers} />
-        <MetricCard label={tr('pathology')} value={summary?.samples_pending} />
-        <MetricCard label={tr('followups')} value={summary?.followups_due} />
+        <MetricCard metricKey="workers" label={tr('workers')} value={summary?.workers} roles={roles} />
+        <MetricCard metricKey="pathology" label={tr('pathology')} value={summary?.samples_pending} roles={roles} />
+        <MetricCard metricKey="followups" label={tr('followups')} value={summary?.followups_due} roles={roles} />
       </View>
 
       {/* Role-Specific Quick Actions */}
@@ -1037,17 +1042,36 @@ export default function Dashboard() {
 }
 
 function MetricCard({
+  metricKey,
   label,
   value,
+  roles,
 }: {
+  metricKey: MetricKey
   label: string
   value: number | undefined
+  roles: string[]
 }) {
+  const destination = metricDestination(metricKey, roles)
+  const body = (<>
+    <Text style={s.metricLabel}>{label}</Text>
+    <Text style={s.metricNumber}>{value !== undefined ? value : '—'}</Text>
+    {/* Affordance: same pressable carries the reachable-list hint. */}
+    <Text style={s.metricOpen}>{destination ? 'View list →' : ' '}</Text>
+  </>)
+  if (!destination) {
+    return <View style={s.metricCard}>{body}</View>
+  }
   return (
-    <View style={s.metricCard}>
-      <Text style={s.metricLabel}>{label}</Text>
-      <Text style={s.metricNumber}>{value !== undefined ? value : '—'}</Text>
-    </View>
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${label} — ${destinationHint(metricKey)}`}
+      accessibilityHint={destinationHint(metricKey)}
+      onPress={() => router.push(destination as never)}
+      style={({ pressed }) => [s.metricCard, s.metricCardClickable, pressed && s.metricCardPressed]}
+    >
+      {body}
+    </Pressable>
   )
 }
 
@@ -1145,6 +1169,24 @@ const s = StyleSheet.create({
     color: '#0f766e',
     marginTop: 4,
     letterSpacing: -0.5,
+  },
+  // Tappable count card affordances (report §24): same card surface, plus a
+  // visible interactive hint and a pressed state. Native accessibility
+  // (role=label+hint) keeps screen readers announcing the destination.
+  metricCardClickable: {
+    borderColor: '#99f6e4',
+    minHeight: 72,
+    justifyContent: 'center',
+  },
+  metricCardPressed: {
+    backgroundColor: '#f0fdfa',
+    borderColor: '#14b8a6',
+  },
+  metricOpen: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#0f766e',
+    marginTop: 6,
   },
   section: {
     gap: 10,

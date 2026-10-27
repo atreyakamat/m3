@@ -1,5 +1,6 @@
 import logging
 import secrets
+import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, status
@@ -162,7 +163,7 @@ def patient_view(p: Patient, roles: set[str], own: bool = False):
             data.pop(f, None)
     return data
 
-def sample_view(s, roles=None):
+def sample_view(s, roles=None, patient_name: str | None = None):
     tests = [{"id": t.id, "method": t.method, "other_method_note": t.other_method_note, "result_status": t.result_status,
               "species": t.species, "species_other_note": t.species_other_note, "smear_type": t.smear_type,
               "performed_at": t.performed_at} for t in s.tests]
@@ -173,6 +174,12 @@ def sample_view(s, roles=None):
             "case_id": s.case_id, "tests": tests}
     if "pathologist" in (roles or set()):
         data["facility_id"] = s.facility_id
+        # The linked worker's canonical display name. Approved lab-read-surface
+        # data: the same viewer already resolves the full patient record and the
+        # sample list links to the worker detail; name search needs a visible
+        # match field. Research Lab branches below stay PII-stripped.
+        if patient_name is not None:
+            data["patient_display_name"] = patient_name
         data["slide_followups"] = [{"id": f.id, "scheduled_day": f.scheduled_day, "due_date": f.due_date, "received": f.received,
                                     "positive": f.positive, "positive_day": f.positive_day, "updated_at": f.updated_at,
                                     "not_received_reason": f.not_received_reason, "other_reason": f.other_reason}
@@ -747,9 +754,12 @@ def workers(q: str | None = None, offset: int = Query(0, ge=0), limit: int = Que
     elif not (roles & {"clinician", "pathologist", "admin", "research_lab", "health_worker", "contractor", "worker"}):
         raise HTTPException(403, "You do not have permission for this action")
     if q:
-        like = f"%{q}%"
+        like = f"%{q.strip()}%"
         cond = [Patient.patient_code.ilike(like)]
-        if roles & {"clinician", "pathologist", "health_worker", "admin", "research_lab"}:
+        # Name search mirrors what each role ALREADY reads: contractors see
+        # roster display names; research_lab sees canonical display names.
+        # Nothing new is exposed — the WHERE clause above keeps the same scope.
+        if roles & {"clinician", "pathologist", "health_worker", "admin", "research_lab", "contractor"}:
             cond.append(Patient.display_name.ilike(like))
             # Health workers search by name, home state and phone without codes.
             if "research_lab" not in roles or ("clinician" in roles or "admin" in roles):
@@ -1305,23 +1315,139 @@ def create_assessment(body: AssessmentCreate, user: User = Depends(get_current_u
 # ---------------- Pathology ----------------
 
 @app.get("/api/v1/samples", tags=["pathology"])
-def samples(patient_id: str | None = None, user: User = Depends(require_roles("pathologist", "pathology", "research_lab"), ), db: Session = Depends(get_db)):
+def samples(patient_id: str | None = None,
+            q: str | None = Query(None, max_length=100),
+            offset: int = Query(0, ge=0), limit: int = Query(200, ge=1, le=200),
+            user: User = Depends(require_roles("pathologist", "pathology", "research_lab"), ), db: Session = Depends(get_db)):
     roles = effective(user, db)
     stmt = select(Sample).options(selectinload(Sample.tests), selectinload(Sample.slide_followups)).order_by(Sample.collected_at.desc())
     if patient_id:
         patient = require_patient_scope(user, db, patient_id)
         stmt = stmt.where(Sample.patient_id == patient.id)
-    rows = db.scalars(stmt.limit(200)).all()
-    if "research_lab" in roles and "clinician" not in roles and "pathologist" not in roles:
+    # Optional name search: by the linked worker's canonical display name.
+    # A many-to-one correlated subquery keeps one row per sample — filtering
+    # through the join cannot produce duplicate sample rows.
+    search = (q or "").strip()
+    if search:
+        stmt = stmt.where(Sample.patient_id.in_(
+            select(Patient.id).where(Patient.display_name.ilike(f"%{search}%"))))
+    # Research Lab: eligibility is applied BEFORE paging so the limit cannot
+    # page out eligible rows (or keep ineligible rows the post-filter below
+    # would have dropped, which would shrink/corrupt the page).
+    research_only = bool("research_lab" in roles and "clinician" not in roles and "pathologist" not in roles)
+    if research_only:
         eligible = permissions.eligible_research_sample_ids(db)
-        rows = [r for r in rows if r.id in eligible and permissions.patient_is_research_eligible(db, r.patient_id)]
-        # Extra safety: ensure patient scope still holds (require_patient_scope did above)
-    return {"items": [sample_view(x, roles) for x in rows]}
+        stmt = stmt.where(Sample.id.in_(eligible) if eligible else sa_false())
+    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    rows = db.scalars(stmt.offset(offset).limit(limit)).all()
+    if research_only:
+        # Extra safety: patient-level eligibility still holds (the sample-level
+        # filter above only narrows; nothing new can appear here).
+        rows = [r for r in rows if r.id in permissions.eligible_research_sample_ids(db)
+                and permissions.patient_is_research_eligible(db, r.patient_id)]
+    items = [sample_view(x, roles) for x in rows]
+    if items and "pathologist" in roles:
+        # One batched query per page: canonical linked-worker names for the lab
+        # list. research_lab viewers never receive names (PII-stripped branch).
+        name_map = dict(db.execute(
+            select(Patient.id, Patient.display_name).where(
+                Patient.id.in_({r.patient_id for r in rows}))).all())
+        items = [{**item, "patient_display_name": name_map.get(item["patient_id"])}
+                 for item in items]
+    return {"items": items,
+            "total": total, "offset": offset, "limit": limit}
+
+def _norm_replay_value(value):
+    """Normalize a create-payload value for replay comparison: blank == None."""
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    return value
+
+
+def _replay_payload_conflict(db, user, operation, request_id, detail=None):
+    """Same authenticated principal reuses a key with DIFFERENT content.
+
+    Not merely foreign replay (the owner's key) but a coherent client bug: the
+    retry would silently attach different data to the original entity. Audit
+    (admin-visible), commit the audit, answer with a generic conflict."""
+    audit(db, user, "idempotency.payload_conflict", "request", None,
+          {"operation": operation, "client_request_id": request_id, "detail": detail or {}})
+    db.commit()
+    raise HTTPException(
+        status_code=409,
+        detail="This request identifier was already used with different content. Generate a new identifier and retry.")
+
+
+def _ts_replay_equal(a, b):
+    """Timestamp equality tolerant of naive/aware round-trips across dialects."""
+    if a is None or b is None:
+        return a is None and b is None
+    if a.tzinfo is None:
+        a = a.replace(tzinfo=timezone.utc)
+    if b.tzinfo is None:
+        b = b.replace(tzinfo=timezone.utc)
+    return abs((a - b).total_seconds()) < 1e-6
+
+
+def _sample_replay_conflict(sample, test, body):
+    """Compare the stored result against the replayed payload. Every field the
+    endpoint persists must match; any difference means the key is being reused
+    for genuinely different content (client bug), not a retry."""
+    mismatch = []
+    if sample.patient_id != body.patient_id: mismatch.append("patient_id")
+    if (sample.case_id or None) != (body.case_id or None): mismatch.append("case_id")
+    if body.facility_id is not None and (sample.facility_id or None) != (body.facility_id or None): mismatch.append("facility_id")
+    if sample.specimen_type != (body.specimen_type or "blood"): mismatch.append("specimen_type")
+    if sample.status != body.result_status: mismatch.append("result_status")
+    if test is not None:
+        if test.method != body.method: mismatch.append("method")
+        if test.result_status != body.result_status: mismatch.append("result_status")
+        if _norm_replay_value(test.species) != _norm_replay_value(body.species): mismatch.append("species")
+        if _norm_replay_value(test.smear_type) != _norm_replay_value(body.smear_type): mismatch.append("smear_type")
+        if _norm_replay_value(test.other_method_note) != _norm_replay_value(body.other_method_note): mismatch.append("other_method_note")
+        if _norm_replay_value(test.species_other_note) != _norm_replay_value(body.species_other_note): mismatch.append("species_other_note")
+        if _norm_replay_value(test.notes) != _norm_replay_value(body.notes): mismatch.append("notes")
+    return mismatch
+
+
+def _sample_replay_winner(db, request_id):
+    """Sample + its originating DiagnosticTest row for a replayed key."""
+    sample = db.scalar(select(Sample).where(Sample.client_request_id == request_id))
+    if sample is None:
+        return None, None
+    test = db.scalars(select(DiagnosticTest).where(DiagnosticTest.sample_id == sample.id)
+                      .order_by(DiagnosticTest.created_at, DiagnosticTest.id)).first()
+    return sample, test
+
 
 @app.post("/api/v1/samples", status_code=201, tags=["pathology"])
-def create_sample(body: SampleCreate, user: User = Depends(require_roles("pathologist", "pathology")), db: Session = Depends(get_db)):
+def create_sample(body: SampleCreate, response: Response = None,
+                  user: User = Depends(require_roles("pathologist", "pathology")), db: Session = Depends(get_db)):
+    """Record a lab sample/result. Idempotent by client_request_id (defect D1):
+    a same-key retry resolves to the ORIGINAL row — no second sample row, no
+    repeated notifications. Genuinely new requests (a NEW key) still create new
+    samples, including after earlier notifications were read. Concurrent
+    duplicates are settled by the partial unique index uq_samples_client_request_id."""
     _assert_write_role(user, db, "lab")
     patient = require_patient_scope(user, db, body.patient_id)
+    # Idempotent replay by client_request_id (defect D1): a retried sample
+    # recording must resolve to the ORIGINAL row — no second sample row and no
+    # repeated alerts. Scope: the key belongs to the pathologist who recorded
+    # it; a different principal gets a non-disclosing 409, and the SAME
+    # principal replaying DIFFERENT content gets an explicit conflict.
+    if body.client_request_id:
+        prior_sample, prior_test = _sample_replay_winner(db, body.client_request_id)
+        if prior_sample is not None:
+            if prior_test is None or prior_test.operator_id != user.id:
+                _reject_foreign_replay(db, user, "samples.create", body.client_request_id)
+            mismatch = _sample_replay_conflict(prior_sample, prior_test, body)
+            if mismatch:
+                _replay_payload_conflict(db, user, "samples.create", body.client_request_id, {"fields": mismatch})
+            audit(db, user, "sample.replayed_no_duplicate", "sample", prior_sample.id); db.commit()
+            if response is not None: response.status_code = status.HTTP_200_OK
+            return {**sample_view(prior_sample, effective(user, db)), "duplicate": True}
     if body.facility_id and not db.get(Facility, body.facility_id):
         raise HTTPException(422, "Unknown facility reference")
     if body.method == "other" and not str(body.other_method_note or "").strip():
@@ -1338,8 +1464,36 @@ def create_sample(body: SampleCreate, user: User = Depends(require_roles("pathol
     if body.result_status == "positive" and not body.species:
         raise HTTPException(422, "Species is required when the result is positive")
     sample = Sample(sample_code="M3-S-" + secrets.token_hex(4).upper(), patient_id=patient.id,
-                    facility_id=body.facility_id, specimen_type=body.specimen_type, status=body.result_status)
-    db.add(sample); db.flush()
+                    facility_id=body.facility_id, specimen_type=body.specimen_type, status=body.result_status,
+                    client_request_id=body.client_request_id)
+    db.add(sample)
+    try:
+        db.flush()
+    except IntegrityError:
+        # Insert race lost (concurrent duplicate keyed request): the unique
+        # partial index uq_samples_client_request_id decided the winner, so
+        # reconcile to it instead of raising or duplicating. The original
+        # transaction was rolled back, so NOTHING from this attempt (second
+        # sample row or notifications) persisted.
+        db.rollback()
+        if not body.client_request_id:
+            raise
+        winner_sample, winner_test = None, None
+        for _ in range(40):
+            winner_sample, winner_test = _sample_replay_winner(db, body.client_request_id)
+            if winner_sample is not None and winner_test is not None:
+                break
+            time.sleep(0.05)
+        if winner_sample is None or winner_test is None:
+            raise
+        if winner_test.operator_id != user.id:
+            _reject_foreign_replay(db, user, "samples.create", body.client_request_id)
+        mismatch = _sample_replay_conflict(winner_sample, winner_test, body)
+        if mismatch:
+            _replay_payload_conflict(db, user, "samples.create", body.client_request_id, {"fields": mismatch})
+        audit(db, user, "sample.replayed_no_duplicate", "sample", winner_sample.id); db.commit()
+        if response is not None: response.status_code = status.HTTP_200_OK
+        return {**sample_view(winner_sample, effective(user, db)), "duplicate": True}
     test = DiagnosticTest(sample_id=sample.id, method=body.method, other_method_note=body.other_method_note,
                           result_status=body.result_status, species=body.species, species_other_note=body.species_other_note,
                           smear_type=body.smear_type, operator_id=user.id,
@@ -1471,23 +1625,61 @@ def list_followups(queue: str = Query("all", pattern="^(all|due|overdue|complete
                        "scheduled_day": x.scheduled_day, "status": x.status, "adherence": x.adherence,
                        "outcome": x.outcome, "notes": x.notes, "case_id": x.case_id, "updated_at": getattr(x, "updated_at", None)} for x in rows]}
 
+def _followup_replay_winner(db, request_id):
+    """FollowUp row created under an offline-replay key (defect D2)."""
+    return db.scalar(select(FollowUp).where(FollowUp.client_request_id == request_id))
+
+
+def _followup_replay_conflict(followup, body):
+    """Compare the stored task against the replayed payload; any difference
+    means the key is being reused for genuinely different content."""
+    mismatch = []
+    if followup.patient_id != body.patient_id: mismatch.append("patient_id")
+    if (followup.case_id or None) != (body.case_id or None): mismatch.append("case_id")
+    if (followup.assigned_user_id or None) != (body.assigned_user_id or None): mismatch.append("assigned_user_id")
+    if (followup.scheduled_day or None) != (body.scheduled_day or None): mismatch.append("scheduled_day")
+    if not _ts_replay_equal(followup.due_at, body.due_at): mismatch.append("due_at")
+    if followup.status != (body.status or "due"): mismatch.append("status")
+    if _norm_replay_value(followup.adherence) != _norm_replay_value(body.adherence): mismatch.append("adherence")
+    if _norm_replay_value(followup.outcome) != _norm_replay_value(body.outcome): mismatch.append("outcome")
+    if _norm_replay_value(followup.notes) != _norm_replay_value(body.notes): mismatch.append("notes")
+    return mismatch
+
+
 @app.post("/api/v1/follow-ups", status_code=201, tags=["follow ups"])
-def create_followup(body: FollowUpCreate, user: User = Depends(require_roles("clinician", "health_worker")), db: Session = Depends(get_db)):
+def create_followup(body: FollowUpCreate, response: Response = None,
+                    user: User = Depends(require_roles("clinician", "health_worker")), db: Session = Depends(get_db)):
+    """Assign a follow-up task. Idempotent by client_request_id (defect D2):
+    a same-key retry resolves to the ORIGINAL task — no second FollowUp row, no
+    repeated assignment notification, no repeated case transition. Concurrent
+    duplicates are settled by the partial unique index
+    uq_follow_ups_client_request_id; the loser reconciles to the winner."""
     roles = effective(user, db)
-    if "clinician" in roles:
-        _assert_write_role(user, db, "followup_assign")
-        if not body.assigned_user_id:
-            raise HTTPException(422, "An assigned health worker is required")
-        patient = require_patient_scope(user, db, body.patient_id)
-        assignee = db.get(User, body.assigned_user_id)
-        if not assignee or not (permissions.effective_roles(active_roles(assignee, db)) & {"health_worker"}):
-            raise HTTPException(422, "Assignee must be an active health worker account")
-        data = body.model_dump(); data["patient_id"] = patient.id; data["created_by_user_id"] = user.id
-        followup = FollowUp(**data)
-    elif "health_worker" in roles:
+    if "clinician" not in roles:
+        # health_worker and other roles stay forbidden from creating tasks
         _die_forbidden_write()
-    else:
-        _die_forbidden_write()
+    _assert_write_role(user, db, "followup_assign")
+    # Idempotent replay by client_request_id, scoped to the creating clinician.
+    if body.client_request_id:
+        prior = _followup_replay_winner(db, body.client_request_id)
+        if prior is not None:
+            if prior.created_by_user_id != user.id:
+                _reject_foreign_replay(db, user, "followups.create", body.client_request_id)
+            mismatch = _followup_replay_conflict(prior, body)
+            if mismatch:
+                _replay_payload_conflict(db, user, "followups.create", body.client_request_id, {"fields": mismatch})
+            audit(db, user, "followup.replayed_no_duplicate", "followup", prior.id); db.commit()
+            if response is not None: response.status_code = status.HTTP_200_OK
+            return {"id": prior.id, "assigned_user_id": prior.assigned_user_id,
+                    "case_id": prior.case_id, "duplicate": True}
+    if not body.assigned_user_id:
+        raise HTTPException(422, "An assigned health worker is required")
+    patient = require_patient_scope(user, db, body.patient_id)
+    assignee = db.get(User, body.assigned_user_id)
+    if not assignee or not (permissions.effective_roles(active_roles(assignee, db)) & {"health_worker"}):
+        raise HTTPException(422, "Assignee must be an active health worker account")
+    data = body.model_dump(); data["patient_id"] = patient.id; data["created_by_user_id"] = user.id
+    followup = FollowUp(**data)
     if followup.status == "completed": followup.completed_at = now()
     case_id = data.get("case_id")
     if case_id:
@@ -1507,6 +1699,32 @@ def create_followup(body: FollowUpCreate, user: User = Depends(require_roles("cl
                                 title="Follow-up task assigned",
                                 body=f"A follow-up for case {case.case_code} was assigned to you (due {followup.due_at:%Y-%m-%d}).")
     db.add(followup)
+    try:
+        db.flush()
+    except IntegrityError:
+        # Insert race lost: reconcile to the winning row. The rollback removed
+        # this attempt's partial writes (status transition, notifications), so
+        # a replay can never double-notify or double-advance the case.
+        db.rollback()
+        if not body.client_request_id:
+            raise
+        winner = None
+        for _ in range(40):
+            winner = _followup_replay_winner(db, body.client_request_id)
+            if winner is not None:
+                break
+            time.sleep(0.05)
+        if winner is None:
+            raise
+        if winner.created_by_user_id != user.id:
+            _reject_foreign_replay(db, user, "followups.create", body.client_request_id)
+        mismatch = _followup_replay_conflict(winner, body)
+        if mismatch:
+            _replay_payload_conflict(db, user, "followups.create", body.client_request_id, {"fields": mismatch})
+        audit(db, user, "followup.replayed_no_duplicate", "followup", winner.id); db.commit()
+        if response is not None: response.status_code = status.HTTP_200_OK
+        return {"id": winner.id, "assigned_user_id": winner.assigned_user_id,
+                "case_id": winner.case_id, "duplicate": True}
     audit(db, user, "followup.created", "followup", followup.id); db.commit()
     return {"id": followup.id, "assigned_user_id": followup.assigned_user_id, "case_id": followup.case_id}
 

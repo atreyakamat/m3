@@ -1,8 +1,10 @@
 /** Overview — role-tailored landing. Uses /dashboard payload shapes from API.
  * No fabricated metrics: show explicit states on loading/error/empty. */
 import { Badge, Button, Card, ErrorState, Metric, PageHeader, Page, Skeleton } from "../ui/components";
+import { useMemo } from "react";
 import type { DashboardPayload } from "../types";
 import { useSession } from "../lib/session";
+import { destinationLabel, metricDestination } from "../lib/metricNav";
 import { NotificationsCard } from "./NotificationsCard";
 
 export function OverviewScreen({ data, loading, error, requestId, onRetry, onGo }: {
@@ -14,6 +16,21 @@ export function OverviewScreen({ data, loading, error, requestId, onRetry, onGo 
   const { session } = useSession();
   const roles = session?.user?.roles ?? [];
   const scope = data?.scope;
+  // Count-card destinations (report §24): each card opens the tab carrying the
+  // matching record list, strictly when the role's server authorization
+  // permits it. All three tap targets (card, number, label) live inside one
+  // accessible <button> rendered by <Metric>.
+  const dest = useMemo(() => ({
+    workers: metricDestination("workers", roles),
+    samples: metricDestination("samples", roles),
+    testsPositive: metricDestination("tests_positive", roles),
+    followups: metricDestination("followups", roles),
+    followupsOverdue: metricDestination("followups_overdue", roles),
+    cases: metricDestination("cases", roles),
+    research: metricDestination("research", roles),
+    sites: metricDestination("sites", roles),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [roles.join(",")]);
   const title =
     roles.includes("admin") ? "Administrator Overview" :
     roles.includes("research_lab") ? "Research Workspace" :
@@ -38,42 +55,42 @@ export function OverviewScreen({ data, loading, error, requestId, onRetry, onGo 
       ) : null}
       {!loading && data && scope === "authorized_operational" && "samples_pending" in data ? (
         <div className="metric-grid">
-          <Metric label="Workers on record" value={(data as any).workers} hint="Registered patient profiles" />
-          <Metric label="Samples pending" value={(data as any).samples_pending} tone={(data as any).samples_pending > 0 ? "warn" : undefined} hint="Awaiting diagnostic results" />
-          <Metric label="Tests positive" value={(data as any).tests_positive} tone="danger" hint="Cumulative lab-confirmed positives" />
-          <Metric label="Follow-ups due" value={(data as any).followups_due} tone={(data as any).followups_due > 0 ? "warn" : "ok"} />
-          <Metric label="Overdue" value={(data as any).followups_overdue} tone={(data as any).followups_overdue > 0 ? "danger" : "ok"} />
+          <Metric label="Workers on record" value={(data as any).workers} hint="Registered patient profiles" onClick={dest.workers ? () => onGo(dest.workers!) : undefined} ariaLabel={dest.workers ? `Workers on record ${(data as any).workers} — ${destinationLabel(dest.workers)}` : undefined} />
+          <Metric label="Samples pending" value={(data as any).samples_pending} tone={(data as any).samples_pending > 0 ? "warn" : undefined} hint="Awaiting diagnostic results" onClick={dest.samples ? () => onGo(dest.samples!) : undefined} ariaLabel={dest.samples ? `Samples pending ${(data as any).samples_pending} — ${destinationLabel(dest.samples)}` : undefined} />
+          <Metric label="Tests positive" value={(data as any).tests_positive} tone="danger" hint="Cumulative lab-confirmed positives" onClick={dest.testsPositive ? () => onGo(dest.testsPositive!) : undefined} ariaLabel={dest.testsPositive ? `Tests positive ${(data as any).tests_positive} — ${destinationLabel(dest.testsPositive)}` : undefined} />
+          <Metric label="Follow-ups due" value={(data as any).followups_due} tone={(data as any).followups_due > 0 ? "warn" : "ok"} onClick={dest.followups ? () => onGo(dest.followups!) : undefined} ariaLabel={dest.followups ? `Follow-ups due ${(data as any).followups_due} — ${destinationLabel(dest.followups)}` : undefined} />
+          <Metric label="Overdue" value={(data as any).followups_overdue} tone={(data as any).followups_overdue > 0 ? "danger" : "ok"} onClick={dest.followupsOverdue ? () => onGo(dest.followupsOverdue!) : undefined} ariaLabel={dest.followupsOverdue ? `Overdue follow-ups ${(data as any).followups_overdue} — ${destinationLabel(dest.followupsOverdue)}` : undefined} />
           {(data as any).unread_notifications !== undefined ? <Metric label="Unread notifications" value={(data as any).unread_notifications} /> : null}
         </div>
       ) : null}
       {!loading && data && scope === "health_worker_assigned" && "followups_due" in data ? (
         <div className="metric-grid">
-          <Metric label="Assigned workers" value={(data as any).workers} hint="Patients with assigned follow-ups" />
-          <Metric label="Follow-ups due" value={(data as any).followups_due} tone={(data as any).followups_due > 0 ? "warn" : "ok"} />
-          <Metric label="Overdue" value={(data as any).followups_overdue} tone={(data as any).followups_overdue > 0 ? "danger" : "ok"} />
+          <Metric label="Assigned workers" value={(data as any).workers} hint="Patients with assigned follow-ups" onClick={dest.workers ? () => onGo(dest.workers!) : undefined} ariaLabel={dest.workers ? `Assigned workers ${(data as any).workers} — ${destinationLabel(dest.workers)}` : undefined} />
+          <Metric label="Follow-ups due" value={(data as any).followups_due} tone={(data as any).followups_due > 0 ? "warn" : "ok"} onClick={dest.followups ? () => onGo(dest.followups!) : undefined} ariaLabel={dest.followups ? `Follow-ups due ${(data as any).followups_due} — ${destinationLabel(dest.followups)}` : undefined} />
+          <Metric label="Overdue" value={(data as any).followups_overdue} tone={(data as any).followups_overdue > 0 ? "danger" : "ok"} onClick={dest.followupsOverdue ? () => onGo(dest.followupsOverdue!) : undefined} ariaLabel={dest.followupsOverdue ? `Overdue follow-ups ${(data as any).followups_overdue} — ${destinationLabel(dest.followupsOverdue)}` : undefined} />
         </div>
       ) : null}
       {!loading && data && scope === "research_eligible" && "eligible_research_cases" in data ? (
         <div className="metric-grid">
-          <Metric label="Eligible research cases" value={(data as any).eligible_research_cases} hint="Positive RDT/microscopy cases" />
+          <Metric label="Eligible research cases" value={(data as any).eligible_research_cases} hint="Positive RDT/microscopy cases" onClick={dest.research ? () => onGo(dest.research!) : undefined} ariaLabel={dest.research ? `Eligible research cases ${(data as any).eligible_research_cases} — ${destinationLabel(dest.research)}` : undefined} />
           <Metric label="Eligible samples" value={(data as any).eligible_samples} />
           {(data as any).unread_notifications !== undefined ? <Metric label="Unread notifications" value={(data as any).unread_notifications} /> : null}
         </div>
       ) : null}
       {!loading && data && scope === "admin_readonly" && "workers" in data ? (
         <div className="metric-grid">
-          <Metric label="Workers on record" value={(data as any).workers} hint="Registered patient profiles" />
+          <Metric label="Workers on record" value={(data as any).workers} hint="Registered patient profiles" onClick={dest.workers ? () => onGo(dest.workers!) : undefined} ariaLabel={dest.workers ? `Workers on record ${(data as any).workers} — ${destinationLabel(dest.workers)}` : undefined} />
           <Metric label="Samples pending" value={(data as any).samples_pending} tone={(data as any).samples_pending > 0 ? "warn" : undefined} />
           <Metric label="Tests positive" value={(data as any).tests_positive} tone="danger" />
-          <Metric label="Follow-ups due" value={(data as any).followups_due} tone={(data as any).followups_due > 0 ? "warn" : "ok"} />
-          <Metric label="Overdue" value={(data as any).followups_overdue} tone={(data as any).followups_overdue > 0 ? "danger" : "ok"} />
+          <Metric label="Follow-ups due" value={(data as any).followups_due} tone={(data as any).followups_due > 0 ? "warn" : "ok"} onClick={dest.followups ? () => onGo(dest.followups!) : undefined} ariaLabel={dest.followups ? `Follow-ups due ${(data as any).followups_due} — ${destinationLabel(dest.followups)}` : undefined} />
+          <Metric label="Overdue" value={(data as any).followups_overdue} tone={(data as any).followups_overdue > 0 ? "danger" : "ok"} onClick={dest.followupsOverdue ? () => onGo(dest.followupsOverdue!) : undefined} ariaLabel={dest.followupsOverdue ? `Overdue follow-ups ${(data as any).followups_overdue} — ${destinationLabel(dest.followupsOverdue)}` : undefined} />
           {(data as any).unread_notifications !== undefined ? <Metric label="Unread notifications" value={(data as any).unread_notifications} /> : null}
         </div>
       ) : null}
       {!loading && data && scope === "managed_sites" ? (
         <div className="metric-grid">
-          <Metric label="Active sites" value={(data as any).sites} hint="Sites under your management" />
-          <Metric label="Workers on roster" value={(data as any).workers} hint="Currently assigned at your sites" />
+          <Metric label="Active sites" value={(data as any).sites} hint="Sites under your management" onClick={dest.sites ? () => onGo(dest.sites!) : undefined} ariaLabel={dest.sites ? `Active sites ${(data as any).sites} — ${destinationLabel(dest.sites)}` : undefined} />
+          <Metric label="Workers on roster" value={(data as any).workers} hint="Currently assigned at your sites" onClick={dest.workers ? () => onGo(dest.workers!) : undefined} ariaLabel={dest.workers ? `Workers on roster ${(data as any).workers} — ${destinationLabel(dest.workers)}` : undefined} />
         </div>
       ) : null}
       {!loading && data && scope === "own" ? (

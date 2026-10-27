@@ -10,6 +10,7 @@ import json
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
+import pytest
 from sqlalchemy import func, select
 
 from app import models
@@ -191,3 +192,245 @@ def test_offline_registration_retry_after_partial_failure(client):
     again_q = client.post("/api/v1/questionnaires/submit", headers=_h(tok), json=q_body)
     assert again_reg.status_code == 200 and again_q.status_code == 200 and again_q.json()["duplicate"]
     assert _count(models.Patient) == patients and _count(models.QuestionnaireSubmission) == subs + 1
+
+
+# ---------- lab samples (defect D1) & follow-up assignments (defect D2) ----------
+
+def _other_pathologist(client):
+    """Second pathologist (seeded via extra users, PIN 1234)."""
+    r = client.post("/api/v1/auth/login", json={"phone": "+919000000004", "pin": "1234"})
+    assert r.status_code == 200, r.text
+    return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+
+def _other_clinician(client):
+    """Second clinician (seeded via extra users, PIN 1234)."""
+    r = client.post("/api/v1/auth/login", json={"phone": "+919000000003", "pin": "1234"})
+    assert r.status_code == 200, r.text
+    return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+
+def _contractor_a(client):
+    r = client.post("/api/v1/auth/login", json={"phone": "+919000000028", "pin": "2468"})
+    assert r.status_code == 200, r.text
+    return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+
+def _unread_kinds(client, token, case_id):
+    r = client.get(f"/api/v1/notifications?case_id={case_id}&unread_only=true",
+                   headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200, r.text
+    return [n["kind"] for n in r.json()["items"]]
+
+
+@pytest.fixture(scope="module")
+def sample_case(client, tokens):
+    """A registered worker (site-a member) with one clinically-acknowledged case."""
+    tok, pat = _signup(client)
+    m = client.post(f"/api/v1/workers/{pat}/membership", headers=_contractor_a(client),
+                    json={"site_id": "site-a"})
+    assert m.status_code in (200, 201), m.text
+    r = client.post("/api/v1/symptom-reports", headers=_h(tok),
+                    json={"symptoms": ["fever"], "client_request_id": "case-" + uuid.uuid4().hex})
+    assert r.status_code == 201, r.text
+    case_id = r.json()["case_id"]
+    a = client.post(f"/api/v1/cases/{case_id}/acknowledge",
+                    headers={"Authorization": f"Bearer {tokens['clinician']}"})
+    assert a.status_code == 200, a.text
+    return {"worker_token": tok, "patient_id": pat, "case_id": case_id}
+
+
+def _sample_body(sample_case, key, **over):
+    body = {"patient_id": sample_case["patient_id"], "case_id": sample_case["case_id"],
+            "method": "rdt", "result_status": "negative", "notes": "IDEM-RESULT", "client_request_id": key}
+    return {**body, **over}
+
+
+def _followup_body(hw_id, sample_case, key, **over):
+    body = {"patient_id": sample_case["patient_id"], "case_id": sample_case["case_id"],
+            "assigned_user_id": hw_id, "scheduled_day": "Day 3",
+            "due_at": "2099-01-05T00:00:00+00:00", "notes": "IDEM-TASK", "client_request_id": key}
+    return {**body, **over}
+
+
+def test_sample_first_creates_and_same_key_replay_returns_original(client, tokens, sample_case):
+    key = "smp-" + uuid.uuid4().hex
+    body = _sample_body(sample_case, key)
+    first = client.post("/api/v1/samples", headers=_h(tokens["pathologist"]), json=body)
+    assert first.status_code == 201, first.text
+
+    again = client.post("/api/v1/samples", headers=_h(tokens["pathologist"]), json=body)
+    assert again.status_code == 200 and again.json()["duplicate"] is True
+    assert again.json()["id"] == first.json()["id"]
+    assert again.json()["sample_code"] == first.json()["sample_code"]
+
+    # genuinely NEW key -> distinct legitimate sample
+    new = client.post("/api/v1/samples", headers=_h(tokens["pathologist"]),
+                      json=_sample_body(sample_case, "smp-" + uuid.uuid4().hex))
+    assert new.status_code == 201 and new.json()["id"] != first.json()["id"]
+
+
+def test_sample_conflicting_payload_same_key_rejected(client, tokens, sample_case):
+    key = "smp-" + uuid.uuid4().hex
+    body = _sample_body(sample_case, key)
+    first = client.post("/api/v1/samples", headers=_h(tokens["pathologist"]), json=body)
+    assert first.status_code == 201, first.text
+    before = first.json()
+    conflict = client.post("/api/v1/samples", headers=_h(tokens["pathologist"]),
+                           json=_sample_body(sample_case, key, result_status="positive", species="pf"))
+    assert conflict.status_code == 409, conflict.text
+    # context is never silently overwritten
+    assert conflict.json()["detail"].count("different content") == 1
+    still = client.post("/api/v1/samples", headers=_h(tokens["pathologist"]), json=body)
+    assert still.status_code == 200 and still.json()["sample_code"] == before["sample_code"]
+
+
+def test_sample_cross_user_key_never_collides_or_leaks(client, tokens, sample_case):
+    key = "smp-" + uuid.uuid4().hex
+    body = _sample_body(sample_case, key)
+    first = client.post("/api/v1/samples", headers=_h(tokens["pathologist"]), json=body)
+    assert first.status_code == 201, first.text
+
+    foreign = client.post("/api/v1/samples", headers=_other_pathologist(client),
+                          json=_sample_body(sample_case, key))
+    assert foreign.status_code == 409, foreign.text
+    _no_leak(foreign.text, first.json()["id"], first.json()["sample_code"], "IDEM-RESULT")
+    # the owner still resolves normally afterwards
+    assert client.post("/api/v1/samples", headers=_h(tokens["pathologist"]), json=body).status_code == 200
+
+
+def test_sample_concurrent_replays_yield_one_row(client, tokens, sample_case):
+    key = "smp-" + uuid.uuid4().hex
+    body = _sample_body(sample_case, key)
+    before_total = _count(models.Sample)
+    with ThreadPoolExecutor(4) as ex:
+        rs = list(ex.map(lambda _: client.post("/api/v1/samples", headers=_h(tokens["pathologist"]), json=body), range(4)))
+    codes = sorted(r.status_code for r in rs)
+    assert set(codes) <= {200, 201} and codes.count(201) == 1, codes
+    assert len({r.json()["id"] for r in rs}) == 1
+    assert _count(models.Sample) == before_total + 1
+
+
+def test_sample_notifications_not_duplicated_by_replay(client, tokens, sample_case):
+    key = "smp-" + uuid.uuid4().hex
+    body = _sample_body(sample_case, key, result_status="positive", species="pv", case_id=sample_case["case_id"])
+    first = client.post("/api/v1/samples", headers=_h(tokens["pathologist"]), json=body)
+    assert first.status_code == 201, first.text
+    cl_unread = [n["id"] for n in _unread_kinds_raw(client, tokens["clinician"], sample_case["case_id"])]
+    assert cl_unread, "positive result must alert the clinician first"
+
+    client.post("/api/v1/samples", headers=_h(tokens["pathologist"]), json=body)
+    client.post("/api/v1/samples", headers=_h(tokens["pathologist"]), json=body)
+    cl_after = [n["id"] for n in _unread_kinds_raw(client, tokens["clinician"], sample_case["case_id"])]
+    assert cl_after == cl_unread, "replays must not mint extra clinician notifications"
+
+
+def _unread_kinds_raw(client, token, case_id):
+    r = client.get("/api/v1/notifications?unread_only=true&limit=200",
+                   headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200, r.text
+    return [n for n in r.json()["items"] if n.get("case_id") == case_id]
+
+
+# ---------- follow-up assignment (defect D2) ----------
+
+
+def test_followup_first_replay_conflict_and_new_key(client, tokens, sample_case, whoami):
+    hw_id = whoami("health_worker")
+    key = "fu-" + uuid.uuid4().hex
+    body = _followup_body(hw_id, sample_case, key)
+    first = client.post("/api/v1/follow-ups", headers=_h(tokens["clinician"]), json=body)
+    assert first.status_code == 201, first.text
+
+    again = client.post("/api/v1/follow-ups", headers=_h(tokens["clinician"]), json=body)
+    assert again.status_code == 200 and again.json()["duplicate"] is True
+    assert again.json()["id"] == first.json()["id"]
+
+    conflict = client.post("/api/v1/follow-ups", headers=_h(tokens["clinician"]),
+                           json=_followup_body(hw_id, sample_case, key, notes="CHANGED-CONTENT"))
+    assert conflict.status_code == 409, conflict.text
+
+    new = client.post("/api/v1/follow-ups", headers=_h(tokens["clinician"]),
+                      json=_followup_body(hw_id, sample_case, "fu-" + uuid.uuid4().hex))
+    assert new.status_code == 201 and new.json()["id"] != first.json()["id"]
+
+    # notification semantics: one unread per task creation, replay adds none,
+    # and a genuinely NEW assignment (new key) still notifies after the
+    # recipient has read the earlier one.
+    hw_token = _h(tokens["health_worker"])
+    unread = _unread_kinds_raw(client, tokens["health_worker"], sample_case["case_id"])
+    assign_unread = [n["id"] for n in unread if n["kind"] == "followup_assigned"]
+    assert len(assign_unread) >= 1
+    for n in unread:  # recipient reads own notifications
+        rk = client.post("/api/v1/notifications/read", headers=hw_token, json={"ids": [n["id"]]})
+        assert rk.status_code in (200, 204), rk.text
+    third = client.post("/api/v1/follow-ups", headers=_h(tokens["clinician"]),
+                        json=_followup_body(hw_id, sample_case, "fu-" + uuid.uuid4().hex))
+    assert third.status_code == 201, third.text
+    unread_after = [n["id"] for n in _unread_kinds_raw(client, tokens["health_worker"], sample_case["case_id"])
+                    if n["kind"] == "followup_assigned"]
+    assert unread_after, "new assignment after read must produce a fresh unread notification"
+
+
+def test_followup_cross_user_key_never_collides_or_leaks(client, tokens, sample_case, whoami):
+    hw_id = whoami("health_worker")
+    key = "fu-" + uuid.uuid4().hex
+    body = _followup_body(hw_id, sample_case, key)
+    first = client.post("/api/v1/follow-ups", headers=_h(tokens["clinician"]), json=body)
+    assert first.status_code == 201, first.text
+
+    foreign = client.post("/api/v1/follow-ups", headers=_other_clinician(client), json=body)
+    assert foreign.status_code == 409, foreign.text
+    _no_leak(foreign.text, first.json()["id"], "IDEM-TASK")
+
+    # cross-OPERATION: the same key value in the OTHER entity's table is not a
+    # collision (keys are scoped per operation/table, no cross-table steal).
+    other_op = client.post("/api/v1/samples", headers=_h(tokens["pathologist"]),
+                           json=_sample_body(sample_case, key))
+    assert other_op.status_code == 201, other_op.text
+
+
+def test_followup_concurrent_replays_yield_one_task(client, tokens, sample_case, whoami):
+    hw_id = whoami("health_worker")
+    key = "fu-" + uuid.uuid4().hex
+    body = _followup_body(hw_id, sample_case, key)
+    before = _count(models.FollowUp)
+    with ThreadPoolExecutor(4) as ex:
+        rs = list(ex.map(lambda _: client.post("/api/v1/follow-ups", headers=_h(tokens["clinician"]), json=body), range(4)))
+    codes = sorted(r.status_code for r in rs)
+    assert set(codes) <= {200, 201} and codes.count(201) == 1, codes
+    assert len({r.json()["id"] for r in rs}) == 1
+    assert _count(models.FollowUp) == before + 1
+
+
+def test_offline_retry_after_partial_failure_samples_and_followups(client, tokens, sample_case, whoami):
+    """Outbox-style retry: an attempt that fails BEFORE persisting (validation)
+    releases the key; the completed attempt records once; later replays never
+    duplicate; a replay of a STALE state machine swipe (completed task) still
+    resolves cleanly."""
+    hw_id = whoami("health_worker")
+    bad_sample = client.post("/api/v1/samples", headers=_h(tokens["pathologist"]),
+                             json=_sample_body(sample_case, "smp-" + uuid.uuid4().hex,
+                                               result_status="positive"))  # positive without species -> 422, key unused
+    assert bad_sample.status_code == 422
+    s_key = "smp-" + uuid.uuid4().hex
+    bad2 = client.post("/api/v1/samples", headers=_h(tokens["pathologist"]),
+                       json=_sample_body(sample_case, s_key, result_status="positive"))
+    assert bad2.status_code == 422
+    ok = client.post("/api/v1/samples", headers=_h(tokens["pathologist"]),
+                     json=_sample_body(sample_case, s_key, result_status="positive", species="pf"))
+    assert ok.status_code == 201, ok.text
+    replay = client.post("/api/v1/samples", headers=_h(tokens["pathologist"]),
+                         json=_sample_body(sample_case, s_key, result_status="positive", species="pf"))
+    assert replay.status_code == 200 and replay.json()["duplicate"] and replay.json()["id"] == ok.json()["id"]
+
+    f_key = "fu-" + uuid.uuid4().hex
+    bad_f = client.post("/api/v1/follow-ups", headers=_h(tokens["clinician"]),
+                        json=_followup_body(hw_id, sample_case, f_key, assigned_user_id=None))
+    assert bad_f.status_code == 422  # fails before persisting; key still unused
+    ok_f = client.post("/api/v1/follow-ups", headers=_h(tokens["clinician"]),
+                       json=_followup_body(hw_id, sample_case, f_key))
+    assert ok_f.status_code == 201, ok_f.text
+    replay_f = client.post("/api/v1/follow-ups", headers=_h(tokens["clinician"]),
+                           json=_followup_body(hw_id, sample_case, f_key))
+    assert replay_f.status_code == 200 and replay_f.json()["duplicate"] and replay_f.json()["id"] == ok_f.json()["id"]

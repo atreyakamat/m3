@@ -81,6 +81,9 @@ export default function Layout() {
       <Stack.Screen name="sites" options={{ title: 'Construction sites' }} />
       <Stack.Screen name="symptom" options={{ title: 'Health report' }} />
       <Stack.Screen name="mycases" options={{ title: 'My cases' }} />
+      {/* Report §24: record-list destinations behind tappable dashboard counts. */}
+      <Stack.Screen name="workers" options={{ title: 'Workers' }} />
+      <Stack.Screen name="samples" options={{ title: 'Diagnostic samples' }} />
     </Stack>
   )
 }

@@ -22,9 +22,14 @@ def test_gate_passes_on_migrated_db_and_fails_when_uniqueness_missing(tmp_path):
     url = f"sqlite:///{db}"
     up = _run([sys.executable, "-m", "alembic", "upgrade", "head"], url, API)
     assert up.returncode == 0, up.stderr
+    # The gate script was extended to 11 gates (§22.12: D1/D2 replay-race
+    # indexes); the migrated gate must report the full count it now runs.
     gate = [sys.executable, str(ROOT / "scripts" / "check_deployment_gates.py")]
     ok = _run(gate, url, ROOT)
-    assert ok.returncode == 0 and "7/7 gates passed" in ok.stdout, ok.stdout
+    assert ok.returncode == 0, ok.stdout
+    assert "gates passed" in ok.stdout, ok.stdout
+    assert "11/11 gates passed" in ok.stdout, ok.stdout
+    assert "FAIL" not in ok.stdout, ok.stdout
 
     con = sqlite3.connect(db)
     con.execute("DROP INDEX uq_users_patient_id")

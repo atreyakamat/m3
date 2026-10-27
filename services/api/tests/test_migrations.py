@@ -377,4 +377,125 @@ def test_postgres_legacy_upgrade_rehearsal():
         idx_names = {idx["name"] for idx in inspect(engine).get_indexes("patients")}
         assert "ix_patients_client_request_id" in idx_names
         assert "uq_patients_client_request_id" in idx_names
+
+        # Verify the samples/follow-ups idempotency-key columns and indexes
+        # (revision 20261029_01) were added additively to the legacy schema.
+        sample_cols = {c["name"] for c in inspect(engine).get_columns("samples")}
+        follow_cols = {c["name"] for c in inspect(engine).get_columns("follow_ups")}
+        assert "client_request_id" in sample_cols
+        assert "client_request_id" in follow_cols
+        sample_idx = {idx["name"] for idx in inspect(engine).get_indexes("samples")}
+        follow_idx = {idx["name"] for idx in inspect(engine).get_indexes("follow_ups")}
+        assert "uq_samples_client_request_id" in sample_idx
+        assert "uq_follow_ups_client_request_id" in follow_idx
+    engine.dispose()
+
+
+# ---------- samples/follow-ups idempotency keys (revision 20261029_01) ----------
+
+def _run_idempotency_upgrade(engine, db_url, api_dir):
+    from alembic.config import Config as AlembicConfig
+    from alembic import command as alembic_command
+    cfg = AlembicConfig(str(api_dir / "alembic.ini"))
+    cfg.set_main_option("script_location", str(api_dir / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", db_url)
+    alembic_command.upgrade(cfg, "head")
+
+
+def _legacy_samples_followups(conn):
+    """Minimal 20261028-stamped legacy tables for the 20261029_01 revision."""
+    from sqlalchemy import text
+    conn.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY);"))
+    conn.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20261028_01');"))
+    for spec in (
+        """CREATE TABLE samples (
+            id VARCHAR(36) PRIMARY KEY, sample_code VARCHAR(32) NOT NULL UNIQUE,
+            patient_id VARCHAR(36), case_id VARCHAR(36), facility_id VARCHAR(36),
+            collected_at TIMESTAMP NOT NULL, specimen_type VARCHAR(20) NOT NULL DEFAULT 'blood',
+            status VARCHAR(30) NOT NULL DEFAULT 'pending',
+            created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL)""",
+        """CREATE TABLE follow_ups (
+            id VARCHAR(36) PRIMARY KEY, patient_id VARCHAR(36), assigned_user_id VARCHAR(36),
+            created_by_user_id VARCHAR(36), scheduled_day VARCHAR(20),
+            due_at TIMESTAMP NOT NULL, status VARCHAR(30) NOT NULL DEFAULT 'due',
+            case_id VARCHAR(36), adherence VARCHAR(40), outcome VARCHAR(100), notes TEXT,
+            completed_at TIMESTAMP,
+            created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL)""",
+    ):
+        conn.execute(text(spec))
+
+
+def test_idempotency_key_upgrade_on_legacy_sqlite_is_additive(tmp_path):
+    """Legacy rows (NULL keys) survive; columns + indexes are added; no row changes."""
+    from sqlalchemy import text
+    import sqlalchemy as sa
+    db_path = tmp_path / "leg.db"
+    db_url = f"sqlite:///{db_path}"
+    engine = sa.create_engine(db_url)
+    with engine.connect() as conn:
+        _legacy_samples_followups(conn)
+        conn.execute(text("INSERT INTO samples (id, sample_code, patient_id, collected_at, specimen_type, status, created_at, updated_at) "
+                          "VALUES ('s-1','M3-S-LEG1','p-1','2026-10-01','blood','pending','2026-10-01','2026-10-01')"))
+        conn.execute(text("INSERT INTO follow_ups (id, patient_id, assigned_user_id, due_at, status, notes, created_at, updated_at) "
+                          "VALUES ('f-1','p-1','hw-1','2026-11-01','due','keep','2026-10-01','2026-10-01')"))
+        conn.commit()
+        pre_sample = conn.execute(text("SELECT id, sample_code, status FROM samples WHERE id='s-1'")).mappings().fetchone()
+        pre_follow = conn.execute(text("SELECT id, patient_id, status, notes FROM follow_ups WHERE id='f-1'")).mappings().fetchone()
+    api_dir = Path(__file__).resolve().parent.parent
+    _run_idempotency_upgrade(engine, db_url, api_dir)
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "20261029_01"
+        post_sample = conn.execute(text("SELECT id, sample_code, status FROM samples WHERE id='s-1'")).mappings().fetchone()
+        assert dict(post_sample) == dict(pre_sample)
+        post_follow = conn.execute(text("SELECT id, patient_id, status, notes FROM follow_ups WHERE id='f-1'")).mappings().fetchone()
+        assert dict(post_follow) == dict(pre_follow)
+        assert conn.execute(text("SELECT client_request_id FROM samples WHERE id='s-1'")).scalar() is None
+        assert conn.execute(text("SELECT client_request_id FROM follow_ups WHERE id='f-1'")).scalar() is None
+        for table, idx, uidx in (("samples", "ix_samples_client_request_id", "uq_samples_client_request_id"),
+                                 ("follow_ups", "ix_follow_ups_client_request_id", "uq_follow_ups_client_request_id")):
+            names = {i["name"] for i in sa.inspect(engine).get_indexes(table)}
+            assert idx in names and uidx in names, (table, names)
+        # legacy rows (NULL key) plus a keyed row coexist; NOT-NULL uniqueness enforced
+        conn.execute(text("INSERT INTO samples (id, sample_code, patient_id, collected_at, specimen_type, status, client_request_id, created_at, updated_at) "
+                          "VALUES ('s-2','M3-S-LEG2','p-1','2026-10-02','blood','pending','key-aa','2026-10-02','2026-10-02')"))
+        conn.execute(text("INSERT INTO follow_ups (id, patient_id, assigned_user_id, due_at, status, client_request_id, created_at, updated_at) "
+                          "VALUES ('f-2','p-1','hw-1','2026-11-02','due','key-aa','2026-10-02','2026-10-02')"))
+        import pytest as _pytest
+        with _pytest.raises(Exception):  # IntegrityError — same key already used in that table
+            conn.execute(sa.text("INSERT INTO follow_ups (id, patient_id, assigned_user_id, due_at, status, client_request_id, created_at, updated_at) "
+                                 "VALUES ('f-3','p-1','hw-1','2026-11-03','due','key-aa','2026-10-03','2026-10-03')"))
+        with _pytest.raises(Exception):  # IntegrityError — same key already used in samples
+            conn.execute(sa.text("INSERT INTO samples (id, sample_code, patient_id, collected_at, specimen_type, status, client_request_id, created_at, updated_at) "
+                                 "VALUES ('s-3','M3-S-LEG3','p-1','2026-10-02','blood','pending','key-aa','2026-10-02','2026-10-02')"))
+        # cross-table independence (per-table key scoping) is proven by s-2:
+        # samples accepted 'key-aa' while follow_ups already held 'key-aa'.
+        conn.commit()
+    engine.dispose()
+
+
+def test_idempotency_key_upgrade_reports_existing_duplicates_and_completes(tmp_path):
+    """If duplicate keys already exist the unique index is skipped (reported,
+    never auto-deleted), the lookup index is created, and upgrade still finishes."""
+    from sqlalchemy import text
+    import sqlalchemy as sa
+    db_path = tmp_path / "dup.db"
+    db_url = f"sqlite:///{db_path}"
+    engine = sa.create_engine(db_url)
+    with engine.connect() as conn:
+        _legacy_samples_followups(conn)
+        # Pre-existing keyed duplicates (e.g. an operator backfilled the column)
+        conn.execute(text("ALTER TABLE follow_ups ADD COLUMN client_request_id VARCHAR(64)"))
+        conn.execute(text("INSERT INTO follow_ups (id, patient_id, assigned_user_id, due_at, status, client_request_id, created_at, updated_at) "
+                          "VALUES ('dup-1','p-1','hw-1','2026-11-01','due','quartz-key-01','2026-10-01','2026-10-01')"))
+        conn.execute(text("INSERT INTO follow_ups (id, patient_id, assigned_user_id, due_at, status, client_request_id, created_at, updated_at) "
+                          "VALUES ('dup-2','p-1','hw-1','2026-11-02','due','quartz-key-01','2026-10-02','2026-10-02')"))
+        conn.commit()
+    api_dir = Path(__file__).resolve().parent.parent
+    _run_idempotency_upgrade(engine, db_url, api_dir)  # must NOT fail
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "20261029_01"
+        names = {i["name"] for i in sa.inspect(engine).get_indexes("follow_ups")}
+        assert "ix_follow_ups_client_request_id" in names
+        assert "uq_follow_ups_client_request_id" not in names  # deferred, duplicates reported
+        assert conn.execute(text("SELECT COUNT(*) FROM follow_ups WHERE client_request_id='quartz-key-01'")).scalar() == 2
     engine.dispose()
