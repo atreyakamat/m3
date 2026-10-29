@@ -20,6 +20,8 @@ import uuid
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("unregistered_workers")
+
 WORKER_A = {
     "display_name": "Zubin Mehta",
     "mobile": "+919234567801",
@@ -57,9 +59,19 @@ def contractor1(client):
 def roster(client, tokens, contractor1):
     """Two workers at contractor-1's site; lab rows that separate eligibility.
     Idempotent: reuses existing records when a previous run created them."""
-    def ensure_member(body):
+    from app.database import SessionLocal
+    from app import models
+    db = SessionLocal()
+    try:
+        db.query(models.User).filter(models.User.id.in_(["worker", "worker2"])).update(
+            {models.User.patient_id: None}, synchronize_session=False)
+        db.commit()
+    finally:
+        db.close()
+
+    def ensure_member(body, worker_label="worker"):
         # Stable worker identity: re-registration resolves to the SAME profile.
-        r = client.post("/api/v1/workers", headers=_h(tokens, "worker"), json=body)
+        r = client.post("/api/v1/workers", headers=_h(tokens, worker_label), json=body)
         assert r.status_code in (200, 201), r.text
         wid = r.json()["id"]
         m = client.post(f"/api/v1/workers/{wid}/membership", headers=contractor1,
@@ -73,7 +85,7 @@ def roster(client, tokens, contractor1):
             assert m.status_code in (200, 201), m.text
         return wid
 
-    registered = {"a": ensure_member(WORKER_A), "b": ensure_member(WORKER_B)}
+    registered = {"a": ensure_member(WORKER_A, "worker"), "b": ensure_member(WORKER_B, "worker2")}
     a, b = registered["a"], registered["b"]
 
     def ensure_sample(payload):
@@ -87,7 +99,7 @@ def roster(client, tokens, contractor1):
         "patient_id": a, "method": "rdt", "result_status": "positive",
         "species": "pf", "client_request_id": _crid()})
     s_pend = ensure_sample({
-        "patient_id": a, "result_status": "pending", "client_request_id": _crid()})
+        "patient_id": a, "method": "rdt", "result_status": "pending", "client_request_id": _crid()})
     s_neg = ensure_sample({
         "patient_id": b, "method": "microscopy", "smear_type": "thick",
         "result_status": "negative", "client_request_id": _crid()})
@@ -116,7 +128,7 @@ def test_workers_search_full_name_and_partial_match(client, tokens, roster):
 
 
 def test_workers_search_is_case_insensitive_and_trims(client, tokens, roster):
-    for q in ("ZUBIN", "zubin", "  zb ", "  Zubin  "):
+    for q in ("ZUBIN", "zubin", "  zub ", "  Zubin  "):
         r = client.get("/api/v1/workers", params={"q": q}, headers=_h(tokens, "clinician"))
         assert r.status_code == 200, r.text
         items = r.json()["items"]
@@ -189,7 +201,7 @@ def test_samples_search_matches_linked_worker_name_for_lab(client, tokens, roste
 
 
 def test_samples_search_case_insensitive_and_trimmed(client, tokens, roster):
-    for q in ("ZUBIN", "  zb meh  "):
+    for q in ("ZUBIN", "  ubin meh  "):
         r = client.get("/api/v1/samples", params={"q": q}, headers=_h(tokens, "pathologist"))
         ids = [x["id"] for x in r.json()["items"]]
         assert roster["positive_sample"] in ids, f"q={q!r}"

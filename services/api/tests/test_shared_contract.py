@@ -8,7 +8,14 @@ from pathlib import Path
 
 from app.permissions import ROLES
 
-DOMAIN_TS = Path(__file__).resolve().parents[3] / "packages" / "shared" / "src" / "domain.ts"
+def _find_domain_ts() -> Path:
+    for p in Path(__file__).resolve().parents:
+        cand = p / "packages" / "shared" / "src" / "domain.ts"
+        if cand.exists():
+            return cand
+    return Path(__file__).resolve().parents[-1] / "packages" / "shared" / "src" / "domain.ts"
+
+DOMAIN_TS = _find_domain_ts()
 
 
 def _ts_const(name: str) -> list[str]:

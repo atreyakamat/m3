@@ -5,8 +5,18 @@ import sqlite3
 import subprocess
 import sys
 
-ROOT = pathlib.Path(__file__).resolve().parents[3]
-API = ROOT / "services" / "api"
+def _find_repo_root():
+    for p in pathlib.Path(__file__).resolve().parents:
+        if (p / "scripts" / "check_deployment_gates.py").exists():
+            return p
+    for p in pathlib.Path(__file__).resolve().parents:
+        if (p / "check_deployment_gates.py").exists():
+            return p
+    return pathlib.Path(__file__).resolve().parents[-1]
+
+ROOT = _find_repo_root()
+API = ROOT / "services" / "api" if (ROOT / "services" / "api").exists() else ROOT
+GATE_SCRIPT = ROOT / "scripts" / "check_deployment_gates.py" if (ROOT / "scripts" / "check_deployment_gates.py").exists() else (ROOT / "check_deployment_gates.py")
 
 
 def _run(args, db_url, cwd):
@@ -24,7 +34,7 @@ def test_gate_passes_on_migrated_db_and_fails_when_uniqueness_missing(tmp_path):
     assert up.returncode == 0, up.stderr
     # The gate script was extended to 11 gates (§22.12: D1/D2 replay-race
     # indexes); the migrated gate must report the full count it now runs.
-    gate = [sys.executable, str(ROOT / "scripts" / "check_deployment_gates.py")]
+    gate = [sys.executable, str(GATE_SCRIPT)]
     ok = _run(gate, url, ROOT)
     assert ok.returncode == 0, ok.stdout
     assert "gates passed" in ok.stdout, ok.stdout

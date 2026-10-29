@@ -183,7 +183,18 @@ def test_signup_links_unclaimed_contractor_profile_and_audits(client):
 
 def _reconcile(*args):
     import os, pathlib, subprocess, sys
-    script = pathlib.Path(__file__).resolve().parents[3] / "scripts" / "reconcile_worker_identity.py"
+    script = None
+    for p in pathlib.Path(__file__).resolve().parents:
+        cand = p / "scripts" / "reconcile_worker_identity.py"
+        if cand.exists():
+            script = cand
+            break
+        cand_direct = p / "reconcile_worker_identity.py"
+        if cand_direct.exists():
+            script = cand_direct
+            break
+    if script is None:
+        script = pathlib.Path(__file__).resolve().parents[-1] / "scripts" / "reconcile_worker_identity.py"
     return subprocess.run([sys.executable, str(script), *args], capture_output=True, text=True,
                           env={**os.environ})
 

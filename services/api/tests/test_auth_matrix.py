@@ -116,7 +116,7 @@ def test_research_lab_workers_list_with_eligible_sample_no_postgres_json_distinc
         db.add(sample)
         db.flush()
         db.add(models.DiagnosticTest(sample_id=sample.id, method="rdt", result_status="positive",
-                                     species="pf", operator_id="pathologist-1"))
+                                     species="pf", operator_id="pathologist"))
         db.commit()
     finally:
         db.close()

@@ -812,6 +812,10 @@ for tag, method, path, payload in probes:
 
 # Admin read-only probes with the seeded demo admin (login only)
 st, res = req(None, "POST", "/auth/login", {"phone": "+919000000007", "pin": DEMO_PIN}, label="login:demo-admin", silent=True)
+if st != 200:
+    st, res = req(None, "POST", "/auth/login", {"phone": "+919000000027", "pin": DEMO_PIN}, label="login:demo-admin", silent=True)
+if st != 200:
+    st, res = req(None, "POST", "/auth/login", {"phone": "+919000000008", "pin": "1234"}, label="login:demo-admin", silent=True)
 admin_token = res.get("access_token") if st == 200 else None
 if admin_token:
     stx, body = req(admin_token, "POST", "/sites",

@@ -67,15 +67,34 @@ def main():
     print("\n--- 3. Role Authentication Tests (All 7 PRD Roles, PIN 2468) ---")
     tokens = {}
     users = {}
-    role_accounts = [
-        ("+919000000001", "worker"),
-        ("+919000000002", "clinician"),
-        ("+919000000003", "pathologist"),
-        ("+919000000004", "health_worker"),
-        ("+919000000005", "research_lab"),
-        ("+919000000006", "contractor"),
-        ("+919000000007", "admin"),
+    candidates = [
+        [
+            ("+919000000021", "worker"),
+            ("+919000000023", "clinician"),
+            ("+919000000024", "pathologist"),
+            ("+919000000025", "health_worker"),
+            ("+919000000026", "research_lab"),
+            ("+919000000028", "contractor"),
+            ("+919000000027", "admin"),
+        ],
+        [
+            ("+919000000001", "worker"),
+            ("+919000000002", "clinician"),
+            ("+919000000003", "pathologist"),
+            ("+919000000004", "health_worker"),
+            ("+919000000005", "research_lab"),
+            ("+919000000006", "contractor"),
+            ("+919000000007", "admin"),
+        ],
     ]
+    role_accounts = None
+    for cand in candidates:
+        st, _ = req("/auth/login", method="POST", body={"phone": cand[0][0], "pin": DEMO_PIN})
+        if st == 200:
+            role_accounts = cand
+            break
+    if not role_accounts:
+        role_accounts = candidates[0]
     for phone, role in role_accounts:
         status, res = req("/auth/login", method="POST", body={"phone": phone, "pin": DEMO_PIN})
         assert status == 200, f"Login failed for {role}: {status} {res}"
