@@ -745,10 +745,14 @@ def workers(q: str | None = None, offset: int = Query(0, ge=0), limit: int = Que
         stmt = stmt.where(Patient.id.in_(visible or ["__none__"]))
     elif "research_lab" in roles and "clinician" not in roles and "pathologist" not in roles and "admin" not in roles:
         eligible = permissions.eligible_research_sample_ids(db)
-        # Join via samples to find patients with eligible positive samples
-        # (Sample is imported at module level; a re-import here would shadow it).
+        # Filter through a one-column IN subquery: a JOIN with SELECT DISTINCT
+        # would break on PostgreSQL because patients.initial_symptoms is a JSON
+        # column with no equality operator (SQLite tolerated it and returned
+        # HTTP 500 on staging-grade Postgres).
         if eligible:
-            stmt = stmt.join(Sample, Sample.patient_id == Patient.id).where(Sample.id.in_(eligible)).distinct()
+            eligible_patients = set(db.scalars(
+                select(Sample.patient_id).where(Sample.id.in_(eligible))).all())
+            stmt = stmt.where(Patient.id.in_(eligible_patients or ["__none__"]))
         else:
             stmt = stmt.where(sa_false())
     elif not (roles & {"clinician", "pathologist", "admin", "research_lab", "health_worker", "contractor", "worker"}):
