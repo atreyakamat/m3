@@ -1,0 +1,85 @@
+:root {
+  --c-primary: #0E7C86;
+  --c-primary-dark: #0A5A62;
+  --c-primary-light: #3FA9B2;
+  --c-primary-soft: #E2F2F3;
+  --c-secondary: #3D5A80;
+  --c-accent: #F26457;
+  --c-bg: #F6F8FA;
+  --c-surface: #FFFFFF;
+  --c-surface-alt: #EEF2F5;
+  --c-border: #D9E1E7;
+  --c-text: #13232B;
+  --c-text-muted: #5A6B74;
+  --shadow-card: 0 2px 8px rgba(14, 34, 43, 0.12);
+  --shadow-raised: 0 6px 16px rgba(14, 34, 43, 0.12);
+  --radius: 16px;
+  --radius-sm: 8px;
+  --gutter: 16px;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--c-bg);
+  color: var(--c-text);
+  font-family: 'Segoe UI', system-ui, -apple-system, Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4 { margin: 0 0 0.4em; line-height: 1.25; }
+p { margin: 0 0 0.75em; }
+a { color: var(--c-primary); }
+
+button { font-family: inherit; cursor: pointer; }
+input, select, textarea { font-family: inherit; font-size: 16px; }
+
+.container {
+  width: 100%;
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 0 var(--gutter);
+}
+
+.page { padding: 20px 0 64px; }
+
+.grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+}
+
+.row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.spread { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.stack { display: flex; flex-direction: column; gap: 12px; }
+
+.muted { color: var(--c-text-muted); }
+.small { font-size: 14px; }
+
+.field-label { display: block; font-weight: 600; margin-bottom: 6px; font-size: 14px; }
+
+.app-main { min-height: 100%; display: flex; flex-direction: column; }
+
+.nav-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.nav-tab {
+  padding: 8px 14px; border-radius: 999px; border: 1px solid var(--c-border);
+  background: var(--c-surface); color: var(--c-text); text-decoration: none; font-size: 14px; font-weight: 600;
+}
+.nav-tab.active { color: #fff; border-color: transparent; }
+
+.spinner { padding: 40px; text-align: center; color: var(--c-text-muted); }
+
+.toast {
+  position: fixed; left: 50%; transform: translateX(-50%); bottom: 24px;
+  background: var(--c-text); color: #fff; padding: 12px 18px; border-radius: 12px;
+  box-shadow: var(--shadow-raised); z-index: 50; max-width: calc(100% - 32px);
+}
+
+@media (max-width: 520px) {
+  .grid { grid-template-columns: 1fr; }
+}

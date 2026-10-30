@@ -1,0 +1,317 @@
+// M3 Malaria Surveillance Platform — backend data model (PostgreSQL).
+// Enums mirror packages/shared so API, mobile and web stay in lockstep.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  WORKER
+  HEALTH_WORKER
+  CONTRACTOR
+  CLINICIAN
+  PATHOLOGIST
+  RESEARCH_LAB
+  ADMIN
+}
+
+enum Language {
+  en
+  hi
+  bn
+  mr
+}
+
+enum ScreeningStatus {
+  DRAFT
+  COMPLETE
+}
+
+enum EpisodeStatus {
+  SUSPECTED
+  CONFIRMED
+  RESOLVED
+}
+
+enum TestType {
+  RDT
+  MICROSCOPY
+}
+
+enum DiagnosticResultValue {
+  POSITIVE
+  NEGATIVE
+  INCONCLUSIVE
+}
+
+enum PlasmodiumSpecies {
+  P_FALCIPARUM
+  P_VIVAX
+  MIXED
+  OTHER
+  UNKNOWN
+}
+
+enum LocationLevel {
+  STATE
+  DISTRICT
+  TALUKA
+  AREA
+}
+
+enum TransferInitiator {
+  WORKER
+  CONTRACTOR
+}
+
+enum TransferStatus {
+  PENDING_WORKER_RESPONSE
+  PENDING_CURRENT_CONTRACTOR
+  PENDING_DESTINATION_CONTRACTOR
+  ACCEPTED
+  REJECTED
+  CANCELLED
+}
+
+enum Decision {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model User {
+  id           String   @id @default(uuid())
+  role         Role
+  displayName  String
+  username     String?  @unique
+  passwordHash String? // staff accounts
+  phone        String?  @unique
+  pinHash      String? // worker accounts
+  workerId     String?  @unique
+  worker       Worker?  @relation(fields: [workerId], references: [id])
+  contractorId String?  @unique
+  contractor   Contractor? @relation(fields: [contractorId], references: [id])
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([role])
+}
+
+model Worker {
+  id                String   @id @default(uuid())
+  // Human-facing stable Worker ID (e.g. M3-7F3K9A). Internal relations use id.
+  workerCode        String   @unique
+  name              String
+  phone             String   @unique
+  preferredLanguage Language @default(en)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user         User?
+  assignments  WorkerSiteAssignment[]
+  screening    InitialScreening?
+  episodes     MalariaEpisode[]
+  prescriptions Prescription[]
+  symptomReports SymptomReport[]
+  followUps    FollowUp[]
+  transfers    SiteTransferRequest[]
+
+  @@index([phone])
+}
+
+model Contractor {
+  id        String   @id @default(uuid())
+  name      String
+  createdAt DateTime @default(now())
+
+  user  User?
+  sites ConstructionSite[]
+}
+
+model LocationNode {
+  id       String        @id @default(uuid())
+  level    LocationLevel
+  name     String
+  parentId String?
+  parent   LocationNode?  @relation("LocationChildren", fields: [parentId], references: [id])
+  children LocationNode[] @relation("LocationChildren")
+  sites    ConstructionSite[]
+
+  @@index([level])
+  @@index([parentId])
+}
+
+model ConstructionSite {
+  id           String   @id @default(uuid())
+  siteCode     String   @unique
+  name         String
+  areaId       String
+  area         LocationNode @relation(fields: [areaId], references: [id])
+  contractorId String?
+  contractor   Contractor?  @relation(fields: [contractorId], references: [id])
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  assignments      WorkerSiteAssignment[]
+  transfersFrom    SiteTransferRequest[] @relation("TransferFromSite")
+  transfersTo      SiteTransferRequest[] @relation("TransferToSite")
+
+  @@index([areaId])
+  @@index([contractorId])
+}
+
+model WorkerSiteAssignment {
+  id        String    @id @default(uuid())
+  workerId  String
+  worker    Worker    @relation(fields: [workerId], references: [id])
+  siteId    String
+  site      ConstructionSite @relation(fields: [siteId], references: [id])
+  active    Boolean   @default(true)
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+  transferId String?
+  createdAt DateTime  @default(now())
+
+  @@index([workerId])
+  @@index([siteId])
+  // Partial unique index (one active assignment per worker) added in migration SQL.
+}
+
+model InitialScreening {
+  id          String          @id @default(uuid())
+  workerId    String          @unique
+  worker      Worker          @relation(fields: [workerId], references: [id])
+  status      ScreeningStatus @default(DRAFT)
+  version     String
+  consentGiven Boolean        @default(false)
+  answers     Json            @default("{}")
+  completedAt DateTime?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+}
+
+model MalariaEpisode {
+  id        String        @id @default(uuid())
+  workerId  String
+  worker    Worker        @relation(fields: [workerId], references: [id])
+  status    EpisodeStatus @default(SUSPECTED)
+  onsetDate DateTime?
+  createdAt DateTime      @default(now())
+
+  diagnostics   DiagnosticResult[]
+  prescriptions Prescription[]
+
+  @@index([workerId])
+}
+
+model DiagnosticResult {
+  id          String                @id @default(uuid())
+  episodeId   String
+  episode     MalariaEpisode        @relation(fields: [episodeId], references: [id])
+  testType    TestType
+  result      DiagnosticResultValue
+  species     PlasmodiumSpecies?
+  testDate    DateTime
+  createdById String?
+  createdAt   DateTime              @default(now())
+
+  @@index([episodeId])
+}
+
+model Prescription {
+  id          String   @id @default(uuid())
+  episodeId   String
+  episode     MalariaEpisode @relation(fields: [episodeId], references: [id])
+  workerId    String
+  worker      Worker   @relation(fields: [workerId], references: [id])
+  details     String
+  issuedAt    DateTime @default(now())
+  issuedById  String?
+  createdAt   DateTime @default(now())
+
+  @@index([workerId])
+  @@index([episodeId])
+}
+
+model SymptomReport {
+  id        String   @id @default(uuid())
+  workerId  String
+  worker    Worker   @relation(fields: [workerId], references: [id])
+  episodeId String?
+  symptoms  Json     @default("[]")
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@index([workerId])
+}
+
+model FollowUp {
+  id          String    @id @default(uuid())
+  workerId    String
+  worker      Worker    @relation(fields: [workerId], references: [id])
+  episodeId   String?
+  question    String
+  response    String?
+  note        String?
+  respondedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([workerId])
+}
+
+model SiteTransferRequest {
+  id                       String            @id @default(uuid())
+  workerId                 String
+  worker                   Worker            @relation(fields: [workerId], references: [id])
+  fromSiteId               String?
+  fromSite                 ConstructionSite? @relation("TransferFromSite", fields: [fromSiteId], references: [id])
+  toSiteId                 String
+  toSite                   ConstructionSite  @relation("TransferToSite", fields: [toSiteId], references: [id])
+  initiatorType            TransferInitiator
+  initiatorId              String
+  status                   TransferStatus    @default(PENDING_WORKER_RESPONSE)
+  workerDecision           Decision          @default(PENDING)
+  workerDecisionAt         DateTime?
+  fromContractorDecision   Decision          @default(PENDING)
+  fromContractorDecisionAt DateTime?
+  toContractorDecision     Decision          @default(PENDING)
+  toContractorDecisionAt   DateTime?
+  cancelledById            String?
+  cancelledAt              DateTime?
+  effectiveAt              DateTime?
+  note                     String?
+  createdAt                DateTime          @default(now())
+  updatedAt                DateTime          @updatedAt
+
+  @@index([workerId])
+  @@index([status])
+  // Partial unique index (one non-terminal transfer per worker) added in migration SQL.
+}
+
+model IdempotencyKey {
+  id        String   @id @default(uuid())
+  key       String
+  scope     String
+  userId    String?
+  entityId  String?
+  createdAt DateTime @default(now())
+
+  @@unique([scope, key])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  actorId    String?
+  action     String
+  entityType String
+  entityId   String?
+  metadata   Json     @default("{}")
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+}

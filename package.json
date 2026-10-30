@@ -1,0 +1,32 @@
+{
+  "name": "m3-malaria-surveillance",
+  "version": "2.0.0",
+  "private": true,
+  "description": "M3 Malaria Surveillance Platform — monorepo (NestJS API, Expo mobile, React web, shared package)",
+  "comment": "apps/mobile is a standalone Expo project (its own node_modules) to isolate the React Native dep tree; it is intentionally NOT an npm workspace member.",
+  "workspaces": [
+    "packages/shared",
+    "apps/api",
+    "apps/web"
+  ],
+  "scripts": {
+    "build:shared": "npm run build --workspace @m3/shared",
+    "dev:api": "npm run start:dev --workspace @m3/api",
+    "dev:web": "npm run dev --workspace @m3/web",
+    "test:api": "npm run test --workspace @m3/api",
+    "test:shared": "npm run test --workspace @m3/shared",
+    "test:web": "npm run test --workspace @m3/web",
+    "lint": "npm run lint --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "allowScripts": {
+    "@prisma/client@5.22.0": true,
+    "@prisma/engines@5.22.0": true,
+    "prisma@5.22.0": true,
+    "esbuild": true,
+    "@nestjs/core@10.4.22": true
+  }
+}

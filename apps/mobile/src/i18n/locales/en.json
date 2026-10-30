@@ -1,0 +1,96 @@
+{
+  "app": { "name": "M3 Worker" },
+  "language": {
+    "title": "Choose your language",
+    "subtitle": "You can change this later in your profile",
+    "continue": "Continue"
+  },
+  "auth": {
+    "welcome": "Welcome",
+    "newWorker": "New worker",
+    "returningWorker": "Sign in",
+    "name": "Full name",
+    "phone": "Phone number",
+    "pin": "PIN",
+    "register": "Register",
+    "signIn": "Sign in",
+    "haveAccount": "Already registered? Sign in",
+    "noAccount": "New here? Register",
+    "registering": "Registering…",
+    "signingIn": "Signing in…"
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "greeting": "Hello, {{name}}",
+    "workerId": "Worker ID",
+    "currentSite": "Current site",
+    "noSite": "No site selected",
+    "malariaStatus": "Malaria status",
+    "quickActions": "Quick actions"
+  },
+  "nav": {
+    "profile": "Profile",
+    "screening": "Initial screening",
+    "site": "Construction site",
+    "transfer": "Transfer",
+    "malaria": "Malaria status",
+    "diagnostics": "Diagnostic results",
+    "prescriptions": "Prescriptions",
+    "feelingUnwell": "Feeling unwell",
+    "followUps": "Follow-up check-ins",
+    "signOut": "Sign out"
+  },
+  "screening": {
+    "title": "Initial screening",
+    "resume": "Resume your saved draft",
+    "saveDraft": "Save draft",
+    "complete": "Complete screening",
+    "consent": "Informed consent",
+    "consentAck": "The worker has given informed consent to participate.",
+    "completed": "Screening completed",
+    "alreadyDone": "Your initial screening is complete.",
+    "missing": "Please complete the required fields."
+  },
+  "site": {
+    "title": "Select construction site",
+    "search": "Search sites",
+    "select": "Select this site",
+    "state": "State",
+    "district": "District",
+    "taluka": "Taluka",
+    "area": "Area"
+  },
+  "transfer": {
+    "title": "Site transfer",
+    "from": "From",
+    "to": "To",
+    "request": "Request transfer",
+    "myRequests": "My requests",
+    "accept": "Accept",
+    "reject": "Reject",
+    "cancel": "Cancel request",
+    "chooseDestination": "Choose destination site",
+    "onePending": "You already have a pending transfer request."
+  },
+  "unwell": {
+    "title": "Feeling unwell",
+    "intro": "Tell us how you are feeling. This is not a diagnosis.",
+    "symptoms": "Select your symptoms",
+    "note": "Anything else? (optional)",
+    "submit": "Submit report",
+    "submitted": "Report submitted"
+  },
+  "prescriptions": {
+    "current": "Current prescription",
+    "history": "History",
+    "none": "No prescription recorded"
+  },
+  "status": {
+    "savedLocally": "Saved on device",
+    "pendingSync": "Pending sync",
+    "synced": "Synced",
+    "failed": "Sync failed",
+    "offline": "You are offline. Changes are saved on your device."
+  },
+  "common": { "loading": "Loading…", "retry": "Retry", "back": "Back", "save": "Save", "submit": "Submit" }
+}

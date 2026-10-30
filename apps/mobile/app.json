@@ -1,0 +1,42 @@
+{
+  "expo": {
+    "name": "M3 Worker",
+    "slug": "m3-worker",
+    "version": "2.0.0",
+    "orientation": "portrait",
+    "scheme": "m3worker",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#0E7C86"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "android": {
+      "package": "org.m3.surveillance",
+      "adaptiveIcon": {
+        "backgroundColor": "#0E7C86"
+      }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-localization",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "_comment": "apiBaseUrl is the fallback. Prefer EXPO_PUBLIC_API_BASE_URL in apps/mobile/.env. 10.0.2.2 is the Android emulator alias for the host; a physical phone needs the host LAN IP.",
+      "apiBaseUrl": "http://10.0.2.2:8003/api/v1"
+    }
+  }
+}

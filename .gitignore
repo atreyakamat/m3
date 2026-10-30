@@ -3,10 +3,18 @@
 .env.*
 !.env.example
 
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
+# Node & build
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+.npm
+npm-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Prisma / DB
 *.sqlite
 *.sqlite3
 *.db
@@ -14,42 +22,27 @@ __pycache__/
 *.db-wal
 *.db-shm
 
-# C extensions
-*.so
+# Expo / React Native
+.expo/
+.expo-shared/
+# Native projects are generated on the build machine by `expo prebuild`.
+apps/mobile/android/
+apps/mobile/ios/
+*.apk
+*.aab
+*.keystore
+!debug.keystore
 
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
+# Vite / web
+apps/web/dist/
 
-# Virtual environments
-venv/
-.venv/
-ENV/
-env/
+# Python (legacy leftovers)
+__pycache__/
+*.py[cod]
+.pytest_cache/
+services/
 
-# Node & Frontend
-node_modules/
-.npm
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
-
-# IDE & Editors
+# IDE & OS
 .vscode/
 .idea/
 *.swp
@@ -57,12 +50,7 @@ yarn-error.log*
 *~
 .DS_Store
 
-# Testing & Coverage
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
-
 # Logs
 *.log
 logs/
+.m3/
