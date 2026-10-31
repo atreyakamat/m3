@@ -10,10 +10,29 @@ import {
 export const symptomReportSchema = z.object({
   symptoms: z.array(z.string()).default([]),
   note: z.string().max(1000).optional(),
+  voiceData: z.string().optional(), // audio Base64 or local URI/storage key
   episodeId: z.string().optional(),
   idempotencyKey: z.string().uuid().optional(),
 });
 export type SymptomReportInput = z.infer<typeof symptomReportSchema>;
+
+/** Recurring Travel record — Sections 9 & 15. */
+export const travelRecordSchema = z.object({
+  id: z.string().optional(),
+  planningTravel: z.boolean().default(false),
+  departureDate: z.string().optional().nullable(),
+  returnDate: z.string().optional().nullable(),
+  destination: z.string().optional().nullable(),
+  state: z.string().optional().nullable(),
+  hadFeverOrMalaria: z.boolean().default(false),
+  treatmentGiven: z.boolean().default(false),
+  completedCourse: z.boolean().default(false),
+  treatmentPlace: z.string().optional().nullable(),
+  status: z.string().default('SUBMITTED'),
+  createdAt: z.string().optional(),
+  idempotencyKey: z.string().uuid().optional(),
+});
+export type TravelRecordInput = z.infer<typeof travelRecordSchema>;
 
 /** Worker follow-up response — tap-based options plus optional text. */
 export const followUpResponseSchema = z.object({

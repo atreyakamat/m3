@@ -39,8 +39,23 @@ export async function apiFetch<T>(path: string, opts: RequestOptions = {}): Prom
       signal: opts.signal,
     });
   } catch (err) {
-    // Network failure — surfaced so callers can fall back to offline behaviour.
-    throw new ApiError(0, 'network_error', err);
+    // If primary endpoint fails, try localhost fallback (e.g. adb reverse over USB)
+    const fallbackBase = 'http://127.0.0.1:8003/api/v1';
+    if (baseUrl() !== fallbackBase) {
+      try {
+        res = await fetch(`${fallbackBase}${path}`, {
+          method: opts.method ?? 'GET',
+          headers,
+          body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+          signal: opts.signal,
+        });
+      } catch {
+        throw new ApiError(0, 'network_error', err);
+      }
+    } else {
+      // Network failure — surfaced so callers can fall back to offline behaviour.
+      throw new ApiError(0, 'network_error', err);
+    }
   }
 
   const text = await res.text();

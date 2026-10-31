@@ -1,5 +1,6 @@
 import { Body, Controller, ForbiddenException, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import type { Language } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../common/roles.guard';
 import { Roles } from '../common/roles.decorator';
@@ -27,6 +28,17 @@ export class WorkersController {
   async selectSite(@CurrentUser() user: RequestUser, @Body() body: { siteId: string }) {
     if (!user.workerId) throw new ForbiddenException('Not a worker account');
     return this.workers.assignInitialSite(user.workerId, body.siteId);
+  }
+
+  @Post('me/language')
+  @Roles('WORKER')
+  @ApiOperation({ summary: 'Update worker preferred language' })
+  async updateLanguage(
+    @CurrentUser() user: RequestUser,
+    @Body() body: { language: Language },
+  ) {
+    if (!user.workerId) throw new ForbiddenException('Not a worker account');
+    return this.workers.updatePreferredLanguage(user.workerId, body.language);
   }
 
   @Get('lookup/:workerCode')

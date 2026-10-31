@@ -3,6 +3,7 @@ import type {
   DiagnosticResultInput,
   FollowUpResponseInput,
   SymptomReportInput,
+  TravelRecordInput,
 } from '@m3/shared';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -65,6 +66,13 @@ export class RecordsService {
     });
   }
 
+  listTravelRecords(workerId: string) {
+    return this.prisma.travelRecord.findMany({
+      where: { workerId },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
   // ---- worker writes ------------------------------------------------------
 
   async submitSymptomReport(workerId: string, userId: string, input: SymptomReportInput) {
@@ -80,6 +88,7 @@ export class RecordsService {
         episodeId: input.episodeId ?? null,
         symptoms: (input.symptoms ?? []) as Prisma.InputJsonValue,
         note: input.note ?? null,
+        voiceData: input.voiceData ?? null,
       },
     });
     if (input.idempotencyKey) {
@@ -93,6 +102,41 @@ export class RecordsService {
       metadata: { workerId },
     });
     return report;
+  }
+
+  async submitTravelRecord(workerId: string, userId: string, input: TravelRecordInput) {
+    if (input.idempotencyKey) {
+      const prior = await this.idempotency.lookup('travel_record', input.idempotencyKey);
+      if (prior) {
+        return this.prisma.travelRecord.findUnique({ where: { id: prior } });
+      }
+    }
+    const record = await this.prisma.travelRecord.create({
+      data: {
+        workerId,
+        planningTravel: input.planningTravel ?? false,
+        departureDate: input.departureDate ? new Date(input.departureDate) : null,
+        returnDate: input.returnDate ? new Date(input.returnDate) : null,
+        destination: input.destination ?? null,
+        state: input.state ?? null,
+        hadFeverOrMalaria: input.hadFeverOrMalaria ?? false,
+        treatmentGiven: input.treatmentGiven ?? false,
+        completedCourse: input.completedCourse ?? false,
+        treatmentPlace: input.treatmentPlace ?? null,
+        status: input.status ?? 'SUBMITTED',
+      },
+    });
+    if (input.idempotencyKey) {
+      await this.idempotency.record('travel_record', input.idempotencyKey, userId, record.id);
+    }
+    await this.audit.record({
+      actorId: userId,
+      action: 'TRAVEL_RECORDED',
+      entityType: 'TravelRecord',
+      entityId: record.id,
+      metadata: { workerId },
+    });
+    return record;
   }
 
   async respondFollowUp(workerId: string, input: FollowUpResponseInput) {

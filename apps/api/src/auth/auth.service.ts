@@ -90,6 +90,7 @@ export class AuthService {
       workerId: worker.id,
       contractorId: null,
       displayName: worker.name,
+      preferredLanguage: worker.preferredLanguage,
     };
     return {
       token: this.signToken({ sub: user.userId, role: 'WORKER', workerId: worker.id, contractorId: null, name: worker.name }),
@@ -116,6 +117,7 @@ export class AuthService {
         workerId: user.worker.workerCode,
         contractorId: null,
         displayName: user.displayName,
+        preferredLanguage: user.worker.preferredLanguage,
       },
     };
   }

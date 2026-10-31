@@ -2,12 +2,13 @@
  * M3 Worker Initial Screening — versioned form definition.
  *
  * Transcribed from "Questionnaire Updated 1 Sept 2026.docx", Worker Sections
- * I–V. Do NOT invent or alter questions/answer options. Where the approved
- * source is ambiguous or defers a decision (consent wording, preferred-language
- * set), it is flagged with `needsApproval` / notes rather than fabricated.
+ * I–IV. Section V (Travel) has been separated into an independent recurring
+ * feature per project requirements.
  */
 
-export const QUESTIONNAIRE_VERSION = 'worker-screening-2026-09-01';
+import { LANGUAGES, LANGUAGE_LABELS } from './enums';
+
+export const QUESTIONNAIRE_VERSION = 'worker-screening-2026-10-31';
 
 export type FieldType =
   | 'text'
@@ -48,19 +49,44 @@ export interface QuestionSection {
   fields: QuestionField[];
 }
 
-const YES_NO: FieldOption[] = [
+export const YES_NO: FieldOption[] = [
   { value: 'yes', label: 'Yes' },
   { value: 'no', label: 'No' },
 ];
-const YES_NO_DK: FieldOption[] = [
-  { value: 'yes', label: 'Yes' },
-  { value: 'no', label: 'No' },
-  { value: 'dont_know', label: "Don't know" },
+
+export const MOBILE_BRAND_OPTIONS: FieldOption[] = [
+  { value: 'samsung', label: 'Samsung' },
+  { value: 'xiaomi', label: 'Xiaomi / Redmi' },
+  { value: 'vivo', label: 'Vivo' },
+  { value: 'realme', label: 'Realme' },
+  { value: 'oppo', label: 'Oppo' },
+  { value: 'oneplus', label: 'OnePlus' },
+  { value: 'apple', label: 'Apple (iPhone)' },
+  { value: 'motorola', label: 'Motorola' },
+  { value: 'poco', label: 'Poco' },
+  { value: 'nokia', label: 'Nokia' },
+  { value: 'lava', label: 'Lava' },
+  { value: 'micromax', label: 'Micromax' },
+  { value: 'tecno', label: 'Tecno' },
+  { value: 'infinix', label: 'Infinix' },
+  { value: 'itel', label: 'Itel' },
+  { value: 'other', label: 'Other', allowsOther: true },
 ];
-const YES_NO_NOTSURE: FieldOption[] = [
-  { value: 'yes', label: 'Yes' },
-  { value: 'no', label: 'No' },
-  { value: 'not_sure', label: 'Not sure' },
+
+export const QUALIFICATION_OPTIONS: FieldOption[] = [
+  { value: 'classes_1_5', label: 'Classes 1–5 completed' },
+  { value: 'classes_5_10', label: 'Classes 5–10' },
+  { value: 'twelfth_pass', label: '12th pass' },
+  { value: 'undergraduate', label: 'Undergraduate' },
+  { value: 'graduate', label: 'Graduate' },
+];
+
+export const DURATION_IN_GOA_OPTIONS: FieldOption[] = [
+  { value: '1_6_months', label: '1–6 months' },
+  { value: '6m_1y', label: '6 months to 1 year' },
+  { value: '1_3_years', label: '1–3 years' },
+  { value: '3_5_years', label: '3–5 years' },
+  { value: 'gt_5_years', label: 'More than 5 years' },
 ];
 
 export const WORKER_SCREENING_SECTIONS: QuestionSection[] = [
@@ -81,7 +107,7 @@ export const WORKER_SCREENING_SECTIONS: QuestionSection[] = [
           { value: 'female', label: 'Female' },
         ],
       },
-      { id: 'mobile_number', type: 'text', label: 'Mobile number', required: true },
+      { id: 'mobile_number', type: 'text', label: 'Mobile number (Registered)', required: true },
       { id: 'alternate_contact', type: 'text', label: 'Alternate contact number (optional)' },
       {
         id: 'gov_id_type',
@@ -93,20 +119,34 @@ export const WORKER_SCREENING_SECTIONS: QuestionSection[] = [
           { value: 'other', label: 'Other', allowsOther: true },
         ],
       },
-      { id: 'present_address', type: 'textarea', label: 'Present Address' },
-      { id: 'permanent_address', type: 'textarea', label: 'Permanent Address (Home Town)' },
+      { id: 'gov_id_number', type: 'text', label: 'Government ID number' },
+      {
+        id: 'present_address_type',
+        type: 'single',
+        label: 'Present Address',
+        options: [
+          { value: 'site_premises', label: 'Staying within construction site premises' },
+          { value: 'other_location', label: 'Staying at another location' },
+        ],
+      },
+      {
+        id: 'present_address_extra',
+        type: 'textarea',
+        label: 'Anything else you would like to specify?',
+        showIf: { field: 'present_address_type', equals: 'other_location' },
+      },
+      { id: 'permanent_address_pincode', type: 'text', label: 'Permanent Address PIN Code' },
+      { id: 'permanent_address_district', type: 'text', label: 'District' },
+      { id: 'permanent_address_state', type: 'text', label: 'State' },
+      { id: 'permanent_address_details', type: 'textarea', label: 'Additional Address Details (optional)' },
       {
         id: 'preferred_language',
         type: 'single',
         label: 'Preferred language for the app',
-        note: 'Source lists Hindi/English/Bengali/Other; platform i18n also supports Marathi. Confirm the official set.',
-        needsApproval: true,
-        options: [
-          { value: 'hi', label: 'Hindi' },
-          { value: 'en', label: 'English' },
-          { value: 'bn', label: 'Bengali' },
-          { value: 'other', label: 'Other', allowsOther: true },
-        ],
+        options: LANGUAGES.map((code) => ({
+          value: code,
+          label: LANGUAGE_LABELS[code],
+        })),
       },
     ],
   },
@@ -114,7 +154,7 @@ export const WORKER_SCREENING_SECTIONS: QuestionSection[] = [
     id: 'malaria_history',
     title: 'Section II — Past History of Malaria',
     fields: [
-      { id: 'diagnosed_malaria', type: 'tristate', label: 'Diagnosed with malaria?', options: YES_NO_DK },
+      { id: 'diagnosed_malaria', type: 'boolean', label: 'Have you ever been diagnosed with malaria?', options: YES_NO },
       {
         id: 'times_last_2_years',
         type: 'number',
@@ -125,16 +165,17 @@ export const WORKER_SCREENING_SECTIONS: QuestionSection[] = [
         id: 'last_detection',
         type: 'single',
         label: 'Date of last malaria detection (month/year)',
+        showIf: { field: 'diagnosed_malaria', equals: 'yes' },
         options: [
           { value: 'lte_1_year', label: '≤ 1 Year' },
           { value: '1_2_years', label: '1–2 Years' },
-          { value: 'dont_know', label: "Don't know" },
         ],
       },
       {
         id: 'treatment_place',
         type: 'single',
         label: 'Place where you received treatment for last malaria',
+        showIf: { field: 'diagnosed_malaria', equals: 'yes' },
         options: [
           { value: 'uhc_phc', label: 'UHC / PHC' },
           { value: 'private_clinic', label: 'Private clinic' },
@@ -143,12 +184,25 @@ export const WORKER_SCREENING_SECTIONS: QuestionSection[] = [
           { value: 'other', label: 'Others', allowsOther: true },
         ],
       },
-      { id: 'diagnosis_test_performed', type: 'boolean', label: 'Diagnosis test performed?', options: YES_NO },
-      { id: 'report_same_day', type: 'boolean', label: 'Did you receive your test report on the same day?', options: YES_NO },
+      {
+        id: 'diagnosis_test_performed',
+        type: 'boolean',
+        label: 'Was a diagnostic test performed?',
+        showIf: { field: 'diagnosed_malaria', equals: 'yes' },
+        options: YES_NO,
+      },
+      {
+        id: 'report_same_day',
+        type: 'boolean',
+        label: 'Did you receive your test report on the same day?',
+        showIf: { field: 'diagnosed_malaria', equals: 'yes' },
+        options: YES_NO,
+      },
       {
         id: 'test_type',
         type: 'single',
-        label: 'Test type',
+        label: 'Which test was performed?',
+        showIf: { field: 'diagnosed_malaria', equals: 'yes' },
         options: [
           { value: 'rdt', label: 'RDT (rapid test)' },
           { value: 'microscopy', label: 'Microscopy' },
@@ -158,49 +212,70 @@ export const WORKER_SCREENING_SECTIONS: QuestionSection[] = [
       {
         id: 'medication_period',
         type: 'single',
-        label: 'Medication / Treatment given period',
+        label: 'What was the treatment duration?',
+        showIf: { field: 'diagnosed_malaria', equals: 'yes' },
         options: [
           { value: '3_days', label: '3 Days' },
           { value: '14_days_pvivax', label: '14 Days (P. vivax)' },
           { value: '28_days_followup', label: '28 Days follow-up' },
-          { value: 'not_informed', label: "Not informed / Don't know" },
+          { value: 'not_informed', label: 'Not informed' },
         ],
       },
-      { id: 'completed_course', type: 'tristate', label: 'Completed full course of medicines?', options: YES_NO_NOTSURE },
-      { id: 'mobile_brand', type: 'text', label: 'Mobile Brand' },
-      { id: 'qualification', type: 'text', label: 'Qualification' },
-      { id: 'repellent', type: 'boolean', label: 'Repellent', options: YES_NO },
-      { id: 'mosquito_net', type: 'boolean', label: 'Mosquito Net', options: YES_NO },
+      {
+        id: 'completed_course',
+        type: 'single',
+        label: 'Was the full course of medicine completed?',
+        showIf: { field: 'diagnosed_malaria', equals: 'yes' },
+        options: [
+          { value: 'yes', label: 'Yes' },
+          { value: 'no', label: 'No' },
+          { value: 'not_sure', label: 'Not sure' },
+        ],
+      },
+      {
+        id: 'mobile_brand',
+        type: 'single',
+        label: 'Mobile Brand',
+        options: MOBILE_BRAND_OPTIONS,
+      },
+      {
+        id: 'qualification',
+        type: 'single',
+        label: 'Qualification',
+        options: QUALIFICATION_OPTIONS,
+      },
+      { id: 'repellent', type: 'boolean', label: 'Do you use mosquito repellent?', options: YES_NO },
+      { id: 'mosquito_net', type: 'boolean', label: 'Do you use a mosquito net?', options: YES_NO },
     ],
   },
   {
     id: 'clinical',
     title: 'Section III — Present Clinical Details',
     fields: [
-      { id: 'fever_today', type: 'tristate', label: 'Do you have fever today?', required: true, options: YES_NO_NOTSURE },
+      { id: 'fever_today', type: 'boolean', label: 'Do you have fever today?', required: true, options: YES_NO },
       {
         id: 'axillary_temperature',
         type: 'temperature',
-        label: 'If yes, measured temperature (if known)',
+        label: 'Measured temperature (if known)',
         unit: '°C',
-        note: 'Axillary temperature — emphasised by the research proposal.',
         showIf: { field: 'fever_today', equals: 'yes' },
       },
       {
         id: 'fever_duration',
         type: 'single',
         label: 'Duration of fever',
+        showIf: { field: 'fever_today', equals: 'yes' },
         options: [
           { value: '24_hours', label: '24 hours' },
           { value: '1_3_days', label: '1–3 days' },
           { value: 'more_than_3_days', label: 'More than 3 days' },
-          { value: 'not_required', label: 'Not required' },
         ],
       },
       {
         id: 'associated_symptoms',
         type: 'multi',
         label: 'Associated Symptoms',
+        showIf: { field: 'fever_today', equals: 'yes' },
         options: [
           { value: 'chills', label: 'Chills/shivering' },
           { value: 'headache', label: 'Headache' },
@@ -211,33 +286,40 @@ export const WORKER_SCREENING_SECTIONS: QuestionSection[] = [
           { value: 'none', label: 'No other symptoms' },
         ],
       },
-      { id: 'onset_date', type: 'date', label: 'Time of onset of current illness (date)' },
-      { id: 'breathing_difficulty', type: 'boolean', label: 'Any breathing difficulty, chest pain or confusion?', options: YES_NO },
+      {
+        id: 'onset_date',
+        type: 'date',
+        label: 'Date of onset of current illness',
+        showIf: { field: 'fever_today', equals: 'yes' },
+      },
+      {
+        id: 'breathing_difficulty',
+        type: 'boolean',
+        label: 'Breathing difficulty, chest pain or confusion?',
+        showIf: { field: 'fever_today', equals: 'yes' },
+        options: YES_NO,
+      },
       {
         id: 'able_to_go_testing',
         type: 'single',
-        label: 'Are you able to go for testing to the health centre today if advised?',
+        label: 'Are you able to go to the health centre today if advised?',
+        showIf: { field: 'fever_today', equals: 'yes' },
         options: [
           { value: 'yes', label: 'Yes' },
           { value: 'no', label: 'No' },
-          { value: 'not_required', label: 'Not required' },
         ],
       },
     ],
   },
   {
     id: 'migration',
-    title: 'Section IV — Migration and Travel History',
+    title: 'Section IV — Migration History',
     fields: [
       {
         id: 'duration_in_goa',
         type: 'single',
         label: 'How long have you been in Goa this time?',
-        options: [
-          { value: 'lte_1_month', label: '≤ 1 month' },
-          { value: '1_6_month', label: '1–6 month' },
-          { value: 'gte_6_month', label: '≥ 6 month' },
-        ],
+        options: DURATION_IN_GOA_OPTIONS,
       },
       { id: 'travelled_outside_3_months', type: 'boolean', label: 'Travelled outside Goa in the last 3 months?', options: YES_NO },
       {
@@ -258,33 +340,53 @@ export const WORKER_SCREENING_SECTIONS: QuestionSection[] = [
       },
       {
         id: 'fever_malaria_before_goa',
-        type: 'tristate',
+        type: 'boolean',
         label: 'Did you have fever or malaria in the last 3 months before coming to Goa?',
-        options: YES_NO_DK,
+        options: YES_NO,
       },
-    ],
-  },
-  {
-    id: 'travel',
-    title: 'Section V — Travel in and outside Goa',
-    fields: [
-      { id: 'planning_visit_outside', type: 'boolean', label: 'Are you planning to visit outside Goa?', options: YES_NO },
-      { id: 'departure_date', type: 'date', label: 'Date of departure (Out of Goa)', showIf: { field: 'planning_visit_outside', equals: true } },
-      { id: 'return_date', type: 'date', label: 'Date of return back (Into Goa)', showIf: { field: 'planning_visit_outside', equals: true } },
-      { id: 'places_visited', type: 'text', label: 'Place(s) / State(s) visited' },
-      { id: 'fever_during_travel', type: 'boolean', label: 'During this travel outside Goa, did you have fever or were you diagnosed with malaria?', options: YES_NO },
-      { id: 'treatment_given_travel', type: 'boolean', label: 'If yes (fever/malaria), was treatment given?', options: YES_NO, showIf: { field: 'fever_during_travel', equals: true } },
-      { id: 'full_course_completed_travel', type: 'boolean', label: 'If treatment given, was the full course of medicines completed?', options: YES_NO, showIf: { field: 'treatment_given_travel', equals: true } },
-      { id: 'place_of_treatment_travel', type: 'text', label: 'Place of treatment (if any)' },
     ],
   },
 ];
 
 /**
- * Consent gate. The exact consent/assent wording and evidence required by the
- * ethics approval are NOT yet supplied, so this is a configurable placeholder
- * acknowledgement that must be approved before production use — it is not
- * fabricated consent language.
+ * Travel Form Fields for recurring Travel feature (Section 9).
+ */
+export const TRAVEL_RECORD_FIELDS: QuestionField[] = [
+  { id: 'planning_travel', type: 'boolean', label: 'Are you planning to travel outside Goa?', required: true, options: YES_NO },
+  { id: 'departure_date', type: 'date', label: 'Date of departure' },
+  { id: 'return_date', type: 'date', label: 'Expected date of return' },
+  { id: 'destination', type: 'text', label: 'Destination city / town' },
+  { id: 'state', type: 'text', label: 'Destination state' },
+  {
+    id: 'had_fever_or_malaria',
+    type: 'boolean',
+    label: 'During this travel, did you have fever or were you diagnosed with malaria?',
+    options: YES_NO,
+  },
+  {
+    id: 'treatment_given',
+    type: 'boolean',
+    label: 'If yes, was treatment given?',
+    showIf: { field: 'had_fever_or_malaria', equals: 'yes' },
+    options: YES_NO,
+  },
+  {
+    id: 'completed_course',
+    type: 'boolean',
+    label: 'If treatment was given, was the full course completed?',
+    showIf: { field: 'treatment_given', equals: 'yes' },
+    options: YES_NO,
+  },
+  {
+    id: 'treatment_place',
+    type: 'text',
+    label: 'Place of treatment',
+    showIf: { field: 'treatment_given', equals: 'yes' },
+  },
+];
+
+/**
+ * Consent gate.
  */
 export const CONSENT_STEP = {
   id: 'consent',

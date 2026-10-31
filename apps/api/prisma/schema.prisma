@@ -25,6 +25,20 @@ enum Language {
   hi
   bn
   mr
+  kok
+  kn
+  or
+  te
+  ta
+  ml
+  bho
+  as
+  gu
+  pa
+  ur
+  mai
+  sat
+  hne
 }
 
 enum ScreeningStatus {
@@ -120,6 +134,7 @@ model Worker {
   symptomReports SymptomReport[]
   followUps    FollowUp[]
   transfers    SiteTransferRequest[]
+  travelRecords TravelRecord[]
 
   @@index([phone])
 }
@@ -154,6 +169,7 @@ model ConstructionSite {
   area         LocationNode @relation(fields: [areaId], references: [id])
   contractorId String?
   contractor   Contractor?  @relation(fields: [contractorId], references: [id])
+  address      String?
   active       Boolean  @default(true)
   createdAt    DateTime @default(now())
 
@@ -245,7 +261,28 @@ model SymptomReport {
   episodeId String?
   symptoms  Json     @default("[]")
   note      String?
+  voiceData String?
   createdAt DateTime @default(now())
+
+  @@index([workerId])
+}
+
+model TravelRecord {
+  id                String    @id @default(uuid())
+  workerId          String
+  worker            Worker    @relation(fields: [workerId], references: [id])
+  planningTravel    Boolean   @default(false)
+  departureDate     DateTime?
+  returnDate        DateTime?
+  destination       String?
+  state             String?
+  hadFeverOrMalaria Boolean   @default(false)
+  treatmentGiven    Boolean   @default(false)
+  completedCourse   Boolean   @default(false)
+  treatmentPlace    String?
+  status            String    @default("SUBMITTED")
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   @@index([workerId])
 }

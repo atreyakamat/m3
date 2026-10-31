@@ -28,6 +28,9 @@ export default function SignInScreen() {
         if (!parsed.success) return setFieldErrors(parsed.error);
         const res = await authApi.register(parsed.data);
         await signIn(res.token, res.user);
+        // Step 3: Worker selects the initial construction site immediately after registration
+        router.replace('/(worker)/site?initial=true');
+        return;
       } else {
         const parsed = loginSchema.safeParse({ phone, pin });
         if (!parsed.success) return setFieldErrors(parsed.error);

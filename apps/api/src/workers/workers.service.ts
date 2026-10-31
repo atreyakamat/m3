@@ -1,4 +1,5 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import type { Language } from '@prisma/client';
 import { deriveMalariaStatus, type MalariaStatus } from '@m3/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
@@ -86,6 +87,14 @@ export class WorkersService {
       episodeCount,
       prescriptionCount,
     };
+  }
+
+  async updatePreferredLanguage(workerId: string, language: Language) {
+    const worker = await this.prisma.worker.update({
+      where: { id: workerId },
+      data: { preferredLanguage: language },
+    });
+    return { preferredLanguage: worker.preferredLanguage };
   }
 
   /** Minimal confirmation details a contractor may see when entering a Worker ID. */

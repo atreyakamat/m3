@@ -23,6 +23,7 @@ export default function WorkerLayout() {
       <Stack.Screen name="profile" options={{ title: t('nav.profile') }} />
       <Stack.Screen name="screening" options={{ title: t('nav.screening') }} />
       <Stack.Screen name="site" options={{ title: t('nav.site') }} />
+      <Stack.Screen name="travel" options={{ title: t('nav.travel') }} />
       <Stack.Screen name="transfer" options={{ title: t('nav.transfer') }} />
       <Stack.Screen name="malaria" options={{ title: t('nav.malaria') }} />
       <Stack.Screen name="prescriptions" options={{ title: t('nav.prescriptions') }} />

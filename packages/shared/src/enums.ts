@@ -1,12 +1,67 @@
 /** Domain enums shared across API, mobile and web. */
 
-export const LANGUAGES = ['en', 'hi', 'bn', 'mr'] as const;
+export const LANGUAGES = [
+  'en',
+  'hi',
+  'bn',
+  'mr',
+  'kok',
+  'kn',
+  'or',
+  'te',
+  'ta',
+  'ml',
+  'bho',
+  'as',
+  'gu',
+  'pa',
+  'ur',
+  'mai',
+  'sat',
+  'hne',
+] as const;
 export type Language = (typeof LANGUAGES)[number];
 export const LANGUAGE_LABELS: Record<Language, string> = {
   en: 'English',
   hi: 'हिन्दी (Hindi)',
   bn: 'বাংলা (Bengali)',
   mr: 'मराठी (Marathi)',
+  kok: 'कोंकणी (Konkani)',
+  kn: 'ಕನ್ನಡ (Kannada)',
+  or: 'ଓଡ଼ିଆ (Odia)',
+  te: 'తెలుగు (Telugu)',
+  ta: 'தமிழ் (Tamil)',
+  ml: 'മലയാളം (Malayalam)',
+  bho: 'भोजपुरी (Bhojpuri)',
+  as: 'অসমীয়া (Assamese)',
+  gu: 'ગુજરાતી (Gujarati)',
+  pa: 'ਪੰਜਾਬੀ (Punjabi)',
+  ur: 'اردو (Urdu)',
+  mai: 'मैथिली (Maithili)',
+  sat: 'ᱥᱟᱱᱛᱟᱲᱤ (Santali)',
+  hne: 'छत्तीसगढ़ी (Chhattisgarhi)',
+};
+
+export const RTL_LANGUAGES = ['ur'] as const;
+export const LANGUAGE_SCRIPTS: Record<Language, { script: string; dir: 'ltr' | 'rtl' }> = {
+  en: { script: 'Latin', dir: 'ltr' },
+  hi: { script: 'Devanagari', dir: 'ltr' },
+  bn: { script: 'Bengali', dir: 'ltr' },
+  mr: { script: 'Devanagari', dir: 'ltr' },
+  kok: { script: 'Devanagari', dir: 'ltr' },
+  kn: { script: 'Kannada', dir: 'ltr' },
+  or: { script: 'Odia', dir: 'ltr' },
+  te: { script: 'Telugu', dir: 'ltr' },
+  ta: { script: 'Tamil', dir: 'ltr' },
+  ml: { script: 'Malayalam', dir: 'ltr' },
+  bho: { script: 'Devanagari', dir: 'ltr' },
+  as: { script: 'Assamese', dir: 'ltr' },
+  gu: { script: 'Gujarati', dir: 'ltr' },
+  pa: { script: 'Gurmukhi', dir: 'ltr' },
+  ur: { script: 'Perso-Arabic', dir: 'rtl' },
+  mai: { script: 'Devanagari', dir: 'ltr' },
+  sat: { script: 'Ol Chiki', dir: 'ltr' },
+  hne: { script: 'Devanagari', dir: 'ltr' },
 };
 
 /** Screening lifecycle. One completed baseline per worker. */

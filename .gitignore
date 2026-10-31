@@ -40,7 +40,7 @@ apps/web/dist/
 __pycache__/
 *.py[cod]
 .pytest_cache/
-services/
+/services/
 
 # IDE & OS
 .vscode/

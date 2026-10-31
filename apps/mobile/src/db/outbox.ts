@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, or } from 'drizzle-orm';
 import type { SyncState } from '@m3/shared';
 import { getDb } from './client';
 import { outbox, type OutboxRow } from './schema';
@@ -23,12 +23,31 @@ export interface EnqueueInput {
 export const outboxRepo = {
   enqueue(input: EnqueueInput): OutboxRow {
     const db = getDb();
+    const idempotencyKey = input.idempotencyKey ?? uuid();
+
+    // Prevent duplicate pending entries for the same idempotency key
+    const existing = db
+      .select()
+      .from(outbox)
+      .where(eq(outbox.idempotencyKey, idempotencyKey))
+      .all();
+    if (existing.length > 0) {
+      const row = existing[0];
+      if (row.syncState === 'PENDING') {
+        db.update(outbox)
+          .set({ payload: JSON.stringify(input.payload) })
+          .where(eq(outbox.id, row.id))
+          .run();
+        return { ...row, payload: JSON.stringify(input.payload) } as OutboxRow;
+      }
+    }
+
     const row = {
       id: uuid(),
       entityType: input.entityType,
       localId: input.localId,
       payload: JSON.stringify(input.payload),
-      idempotencyKey: input.idempotencyKey ?? uuid(),
+      idempotencyKey,
       syncState: 'PENDING' as SyncState,
       attempts: 0,
       lastError: null,
@@ -39,6 +58,14 @@ export const outboxRepo = {
 
   pending(): OutboxRow[] {
     return getDb().select().from(outbox).where(eq(outbox.syncState, 'PENDING')).all();
+  },
+
+  pendingOrFailed(): OutboxRow[] {
+    return getDb()
+      .select()
+      .from(outbox)
+      .where(or(eq(outbox.syncState, 'PENDING'), eq(outbox.syncState, 'FAILED')))
+      .all();
   },
 
   failed(): OutboxRow[] {

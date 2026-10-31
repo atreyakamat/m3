@@ -19,6 +19,23 @@ CREATE TABLE IF NOT EXISTS symptom_report (
   id TEXT PRIMARY KEY NOT NULL,
   symptoms TEXT NOT NULL DEFAULT '[]',
   note TEXT,
+  voice_data TEXT,
+  idempotency_key TEXT NOT NULL,
+  sync_state TEXT NOT NULL DEFAULT 'PENDING',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS travel_record (
+  id TEXT PRIMARY KEY NOT NULL,
+  planning_travel INTEGER NOT NULL DEFAULT 0,
+  departure_date TEXT,
+  return_date TEXT,
+  destination TEXT,
+  state TEXT,
+  had_fever_malaria INTEGER NOT NULL DEFAULT 0,
+  treatment_given INTEGER NOT NULL DEFAULT 0,
+  completed_course INTEGER NOT NULL DEFAULT 0,
+  treatment_place TEXT,
+  status TEXT NOT NULL DEFAULT 'SUBMITTED',
   idempotency_key TEXT NOT NULL,
   sync_state TEXT NOT NULL DEFAULT 'PENDING',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP

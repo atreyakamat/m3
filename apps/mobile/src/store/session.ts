@@ -3,6 +3,7 @@ import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { AuthUser, Language } from '@m3/shared';
 import { changeLanguage } from '@/i18n';
+import { workerApi } from '@/api';
 
 const TOKEN_KEY = 'm3_token';
 const USER_KEY = 'm3_user';
@@ -57,10 +58,17 @@ export const useSession = create<SessionState>((set, get) => ({
     } catch {
       /* non-fatal */
     }
+    const token = get().token;
+    if (token) {
+      void workerApi.updateLanguage(token, language).catch(() => {});
+    }
   },
 
   signIn: async (token, user) => {
     set({ token, user });
+    if (user.preferredLanguage) {
+      await get().setLanguage(user.preferredLanguage);
+    }
     try {
       await SecureStore.setItemAsync(TOKEN_KEY, token);
       await AsyncStorage.setItem(USER_KEY, JSON.stringify(user));

@@ -36,6 +36,12 @@ export const workerApi = {
   me: (token: string) => apiFetch<WorkerProfile>('/workers/me', { token }),
   selectSite: (token: string, siteId: string) =>
     apiFetch('/workers/me/site', { method: 'POST', token, body: { siteId } }),
+  updateLanguage: (token: string, language: Language) =>
+    apiFetch<{ preferredLanguage: Language }>('/workers/me/language', {
+      method: 'POST',
+      token,
+      body: { language },
+    }),
 };
 
 export interface SiteSummary {
@@ -74,11 +80,30 @@ export const screeningApi = {
     apiFetch('/screening/me/complete', { method: 'POST', token, body: { answers, consentGiven: true } }),
 };
 
+export interface TravelRecordDto {
+  id: string;
+  workerId: string;
+  planningTravel: boolean;
+  departureDate: string | null;
+  returnDate: string | null;
+  destination: string | null;
+  state: string | null;
+  hadFeverOrMalaria: boolean;
+  treatmentGiven: boolean;
+  completedCourse: boolean;
+  treatmentPlace: string | null;
+  status: string;
+  createdAt: string;
+}
+
 export const recordsApi = {
   diagnostics: (token: string) => apiFetch<unknown[]>('/records/me/diagnostics', { token }),
   currentPrescription: (token: string) => apiFetch<unknown>('/records/me/prescriptions/current', { token }),
   prescriptionHistory: (token: string) => apiFetch<unknown[]>('/records/me/prescriptions/history', { token }),
   followUps: (token: string) => apiFetch<unknown[]>('/records/me/follow-ups', { token }),
+  travel: (token: string) => apiFetch<TravelRecordDto[]>('/records/me/travel', { token }),
+  submitTravel: (token: string, body: Record<string, unknown>) =>
+    apiFetch<TravelRecordDto>('/records/me/travel', { method: 'POST', token, body }),
   submitSymptom: (token: string, body: SymptomReportInput) =>
     apiFetch('/records/me/symptom-reports', { method: 'POST', token, body }),
   respondFollowUp: (token: string, body: { followUpId: string; response: string; note?: string }) =>

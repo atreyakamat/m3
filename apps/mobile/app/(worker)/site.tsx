@@ -1,18 +1,21 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, ActivityIndicator, Alert } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { Screen, Card, TextField, SelectRow, Body, Button } from '@/components/ui';
-import { sitesApi, workerApi, type LocationNodeDto, type SiteSummary, ApiError } from '@/api';
+import { sitesApi, workerApi, type LocationNodeDto, type SiteSummary, type WorkerProfile, ApiError } from '@/api';
 import { useSession } from '@/store/session';
-import { palette, spacing, fontSize } from '@/theme';
+import { palette, spacing, fontSize, fontWeight } from '@/theme';
 
 const LEVELS = ['STATE', 'DISTRICT', 'TALUKA', 'AREA'] as const;
 
 export default function SiteScreen() {
   const { t } = useTranslation();
   const router = useRouter();
+  const { initial } = useLocalSearchParams<{ initial?: string }>();
   const { token } = useSession();
+
+  const [profile, setProfile] = useState<WorkerProfile | null>(null);
   const [levelIdx, setLevelIdx] = useState(0);
   const [nodes, setNodes] = useState<LocationNodeDto[]>([]);
   const [path, setPath] = useState<LocationNodeDto[]>([]);
@@ -20,6 +23,13 @@ export default function SiteScreen() {
   const [sites, setSites] = useState<SiteSummary[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!token) return;
+    void workerApi.me(token).then((p) => {
+      setProfile(p);
+    });
+  }, [token]);
 
   async function loadLevel(idx: number, parentId?: string) {
     if (!token) return;
@@ -64,15 +74,52 @@ export default function SiteScreen() {
     try {
       await workerApi.selectSite(token, siteId);
       Alert.alert(t('site.title'), t('site.select'));
-      router.replace('/(worker)/dashboard');
+      // Step 5: After initial site selection, advance to initial screening
+      router.replace('/(worker)/screening');
     } catch (e) {
       Alert.alert(t('site.title'), e instanceof ApiError ? e.message : 'Error');
     }
   }
 
+  // Section 3: Site selection happens only during initial registration.
+  // After registration, direct site change is blocked; worker must use Transfer.
+  if (profile?.currentSite && initial !== 'true' && profile.screening?.status === 'COMPLETE') {
+    return (
+      <Screen>
+        <Card accent={palette.info}>
+          <Text style={{ fontSize: fontSize.lg, fontWeight: '700', color: palette.text, marginBottom: spacing.xs }}>
+            {t('dashboard.currentSite')}
+          </Text>
+          <Text style={{ fontSize: fontSize.md, fontWeight: '600', color: palette.primaryDark }}>
+            {profile.currentSite.name} ({profile.currentSite.area})
+          </Text>
+          <Body muted style={{ marginTop: spacing.sm }}>
+            {t('site.directChangeNotice', 'Site selection is completed during initial registration. Direct changes are not permitted. To change your active construction site, please submit a transfer request.')}
+          </Body>
+        </Card>
+
+        <View style={{ marginTop: spacing.md, gap: spacing.sm }}>
+          <Button
+            label={t('transfer.request')}
+            onPress={() => router.replace('/(worker)/transfer')}
+            variant="primary"
+          />
+          <Button
+            label={t('dashboard.title')}
+            onPress={() => router.replace('/(worker)/dashboard')}
+            variant="ghost"
+          />
+        </View>
+      </Screen>
+    );
+  }
+
   return (
     <Screen>
       <Card accent={palette.secondary}>
+        <Text style={{ fontSize: fontSize.sm, fontWeight: '700', color: palette.textMuted, marginBottom: 2 }}>
+          {initial === 'true' ? t('site.step3') : t('site.title')}
+        </Text>
         <Body muted>{path.map((p) => p.name).join('  ›  ') || t('site.title')}</Body>
       </Card>
 
@@ -80,7 +127,7 @@ export default function SiteScreen() {
         label={t('site.search')}
         value={search}
         onChangeText={(v) => { setSearch(v); void loadSites(areaId, v); }}
-        placeholder="Site name or ID"
+        placeholder={t('site.searchPlaceholder')}
       />
 
       {loading ? <ActivityIndicator color={palette.primary} /> : null}

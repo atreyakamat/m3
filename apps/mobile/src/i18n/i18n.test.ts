@@ -2,7 +2,7 @@ import { resources, initI18n } from './index';
 import { LANGUAGES } from '@m3/shared';
 
 describe('i18n', () => {
-  it('provides all four supported languages', () => {
+  it('provides all 18 supported languages', () => {
     for (const lng of LANGUAGES) {
       expect(resources[lng]).toBeDefined();
       expect(resources[lng].translation).toBeDefined();

@@ -39,5 +39,6 @@ export const authUserSchema = z.object({
   workerId: z.string().nullable().optional(),
   contractorId: z.string().nullable().optional(),
   displayName: z.string(),
+  preferredLanguage: z.enum(LANGUAGES).optional(),
 });
 export type AuthUser = z.infer<typeof authUserSchema>;

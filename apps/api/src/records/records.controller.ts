@@ -5,6 +5,7 @@ import {
   diagnosticResultSchema,
   followUpResponseSchema,
   symptomReportSchema,
+  travelRecordSchema,
 } from '@m3/shared';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../common/roles.guard';
@@ -15,6 +16,7 @@ import { RecordsService } from './records.service';
 class SymptomReportDto extends createZodDto(symptomReportSchema) {}
 class FollowUpResponseDto extends createZodDto(followUpResponseSchema) {}
 class DiagnosticResultDto extends createZodDto(diagnosticResultSchema) {}
+class TravelRecordDto extends createZodDto(travelRecordSchema) {}
 
 @ApiTags('records')
 @ApiBearerAuth()
@@ -61,6 +63,20 @@ export class RecordsController {
   @ApiOperation({ summary: 'List follow-up check-ins for the worker' })
   followUps(@CurrentUser() u: RequestUser) {
     return this.records.listFollowUps(this.workerIdOf(u));
+  }
+
+  @Get('me/travel')
+  @Roles('WORKER')
+  @ApiOperation({ summary: 'List travel records for the worker' })
+  travel(@CurrentUser() u: RequestUser) {
+    return this.records.listTravelRecords(this.workerIdOf(u));
+  }
+
+  @Post('me/travel')
+  @Roles('WORKER')
+  @ApiOperation({ summary: 'Submit a new travel record' })
+  submitTravel(@CurrentUser() u: RequestUser, @Body() dto: TravelRecordDto) {
+    return this.records.submitTravelRecord(this.workerIdOf(u), u.userId, dto);
   }
 
   @Post('me/symptom-reports')
