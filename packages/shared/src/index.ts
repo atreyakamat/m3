@@ -3,6 +3,7 @@ export * from './enums';
 export * from './questionnaire';
 export * from './design/tokens';
 export * from './schemas/auth';
+export * from './schemas/admin';
 export * from './schemas/screening';
 export * from './schemas/transfer';
 export * from './schemas/health';

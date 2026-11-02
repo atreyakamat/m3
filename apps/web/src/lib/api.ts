@@ -16,9 +16,37 @@ export function setAuthToken(token: string | null): void {
   authToken = token;
 }
 
+function getAuthToken(): string | null {
+  if (authToken) return authToken;
+  try {
+    const raw = typeof window !== 'undefined' ? localStorage.getItem('m3.auth') : null;
+    if (raw) {
+      const parsed = JSON.parse(raw) as { token?: unknown };
+      if (parsed && typeof parsed.token === 'string') {
+        authToken = parsed.token;
+        return parsed.token;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+/** Pulls a human-readable message out of an unknown error body, without `any`. */
+function extractMessage(data: unknown): string | null {
+  if (data && typeof data === 'object' && 'message' in data) {
+    const m = (data as { message: unknown }).message;
+    if (Array.isArray(m)) return m.map(String).join(', ');
+    if (m !== null && m !== undefined) return String(m);
+  }
+  return null;
+}
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (authToken) headers.Authorization = `Bearer ${authToken}`;
+  const token = getAuthToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
 
   const res = await fetch(`${BASE_URL}${path}`, {
     method,
@@ -30,13 +58,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   const data = text ? JSON.parse(text) : null;
 
   if (!res.ok) {
-    const msg =
-      (data && typeof data === 'object' && 'message' in data
-        ? Array.isArray((data as any).message)
-          ? (data as any).message.join(', ')
-          : String((data as any).message)
-        : null) ?? `Request failed (${res.status})`;
-    throw new ApiError(res.status, msg, data);
+    throw new ApiError(res.status, extractMessage(data) ?? `Request failed (${res.status})`, data);
   }
   return data as T;
 }

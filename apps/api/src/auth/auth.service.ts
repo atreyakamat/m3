@@ -1,5 +1,7 @@
 import {
+  BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -7,6 +9,7 @@ import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
 import { randomUUID } from 'crypto';
 import type { AuthUser, Language, LoginInput, StaffLoginInput, WorkerRegisterInput } from '@m3/shared';
+import { adminPasswordSchema, pinSchema } from '@m3/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
 import type { JwtPayload } from './jwt.strategy';
@@ -122,22 +125,166 @@ export class AuthService {
     };
   }
 
-  async staffLogin(input: StaffLoginInput): Promise<{ token: string; user: AuthUser }> {
-    const user = await this.prisma.user.findUnique({ where: { username: input.username } });
-    if (!user || !user.passwordHash || user.role === 'WORKER') {
-      throw new UnauthorizedException('Invalid username or password');
+  async loginAny(input: LoginInput): Promise<{ token: string; user: AuthUser }> {
+    const user = await this.prisma.user.findFirst({
+      where: { phone: input.phone },
+      include: { worker: true, contractor: true },
+    });
+    if (!user) throw new UnauthorizedException('Invalid phone number or PIN');
+    if (!user.active) {
+      throw new ForbiddenException('This account has been deactivated by the administrator');
     }
-    const ok = await bcrypt.compare(input.password, user.passwordHash);
-    if (!ok) throw new UnauthorizedException('Invalid username or password');
 
+    if (user.role === 'WORKER') {
+      if (!user.pinHash || !user.worker) throw new UnauthorizedException('Invalid phone number or PIN');
+      const ok = await bcrypt.compare(input.pin, user.pinHash);
+      if (!ok) throw new UnauthorizedException('Invalid phone number or PIN');
+      return {
+        token: this.signToken({ sub: user.id, role: 'WORKER', workerId: user.worker.id, contractorId: null, name: user.displayName }),
+        user: {
+          userId: user.id,
+          role: 'WORKER',
+          workerId: user.worker.workerCode,
+          contractorId: null,
+          displayName: user.displayName,
+          preferredLanguage: user.worker.preferredLanguage,
+        },
+      };
+    }
+
+    // Contractor or other staff account
+    if (!user.passwordHash) throw new UnauthorizedException('Invalid phone number or PIN');
+    const ok = await bcrypt.compare(input.pin, user.passwordHash);
+    if (!ok) throw new UnauthorizedException('Invalid phone number or PIN');
+
+    const pending = user.mustChangeCredential;
+    const token = this.signToken({
+      sub: user.id,
+      role: user.role,
+      workerId: null,
+      contractorId: user.contractorId,
+      name: user.displayName,
+      ...(pending ? { pendingCredentialChange: true } : {}),
+    });
     return {
-      token: this.signToken({ sub: user.id, role: user.role, workerId: null, contractorId: user.contractorId, name: user.displayName }),
+      token,
+      role: user.role,
+      credentialChangeRequired: pending ? true : undefined,
       user: {
         userId: user.id,
         role: user.role,
         workerId: null,
         contractorId: user.contractorId,
         displayName: user.displayName,
+        ...(pending ? { credentialChangeRequired: true } : {}),
+      },
+    } as any;
+  }
+
+  async staffLogin(input: StaffLoginInput): Promise<{ token: string; user: AuthUser }> {
+    const identifier = input.username.trim();
+    // Identifier may be a provisioned username OR the account's registered
+    // phone number (Admin-created stakeholders log in with phone + temp PIN).
+    const user = await this.prisma.user.findFirst({
+      where: {
+        OR: [{ username: identifier }, ...(identifier.length === 10 ? [{ phone: identifier }] : [])],
+        role: { not: 'WORKER' },
+      },
+      include: { contractor: true },
+    });
+    if (!user || !user.passwordHash || user.role === 'WORKER') {
+      throw new UnauthorizedException('Invalid username or password');
+    }
+    const ok = await bcrypt.compare(input.password, user.passwordHash);
+    if (!ok) throw new UnauthorizedException('Invalid username or password');
+    if (!user.active) {
+      throw new ForbiddenException('This account has been deactivated by the administrator');
+    }
+
+    const pending = user.mustChangeCredential;
+    const token = this.signToken({
+      sub: user.id,
+      role: user.role,
+      workerId: null,
+      contractorId: user.contractorId,
+      name: user.displayName,
+      ...(pending ? { pendingCredentialChange: true } : {}),
+    });
+    return {
+      token,
+      role: user.role,
+      credentialChangeRequired: pending ? true : undefined,
+      user: {
+        userId: user.id,
+        role: user.role,
+        workerId: null,
+        contractorId: user.contractorId,
+        displayName: user.displayName,
+        ...(pending ? { credentialChangeRequired: true } : {}),
+      },
+    } as any;
+  }
+
+  /**
+   * Mandatory first-login credential change (spec §8).
+   * Strength rules are role-based: ADMIN sets a strong password, all other
+   * admin-provisioned stakeholders set a 4–6 digit PIN. Never stores or
+   * returns plaintext credentials.
+   */
+  async changeCredential(
+    userId: string,
+    input: { newCredential: string; confirmCredential: string },
+  ): Promise<{ token: string; user: AuthUser }> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user || !user.passwordHash) {
+      throw new UnauthorizedException('Invalid credential change request');
+    }
+    if (user.role === 'WORKER') {
+      throw new BadRequestException('Workers manage their PIN through the worker app');
+    }
+    if (input.newCredential !== input.confirmCredential) {
+      throw new BadRequestException('New credential and confirmation do not match');
+    }
+
+    const credential =
+      user.role === 'ADMIN'
+        ? (adminPasswordSchema.safeParse(input.newCredential) as { success: boolean; error?: { issues: { message: string }[] } })
+        : (pinSchema.safeParse(input.newCredential) as { success: boolean; error?: { issues: { message: string }[] } });
+    if (!credential.success) {
+      throw new BadRequestException(credential.error?.issues[0]?.message ?? 'Credential does not meet the strength requirements');
+    }
+
+    const passwordHash = await bcrypt.hash(input.newCredential, 10);
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const u = await tx.user.update({
+        where: { id: user.id },
+        data: { passwordHash, mustChangeCredential: false },
+      });
+      await this.audit.record({
+        actorId: user.id,
+        action: user.role === 'ADMIN' ? 'ADMIN_PASSWORD_CHANGED' : 'STAKEHOLDER_PIN_CHANGED',
+        entityType: 'User',
+        entityId: user.id,
+        tx,
+      });
+      return u;
+    });
+
+    const token = this.signToken({
+      sub: updated.id,
+      role: updated.role,
+      workerId: null,
+      contractorId: updated.contractorId,
+      name: updated.displayName,
+    });
+    return {
+      token,
+      user: {
+        userId: updated.id,
+        role: updated.role,
+        workerId: null,
+        contractorId: updated.contractorId,
+        displayName: updated.displayName,
       },
     };
   }

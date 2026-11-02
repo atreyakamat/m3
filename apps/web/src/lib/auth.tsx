@@ -1,67 +1,30 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import type { Role } from '@m3/shared';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, setAuthToken } from './api';
+import { AuthContext, load, save, type AuthState, type AuthUser } from './authContext';
 
-export interface AuthUser {
-  userId: string;
-  role: Role;
-  workerId: string | null;
-  contractorId: string | null;
-  displayName: string;
-}
-
-interface AuthState {
-  token: string | null;
-  user: AuthUser | null;
-  loginWorker: (phone: string, pin: string) => Promise<AuthUser>;
-  registerWorker: (input: { name: string; phone: string; pin: string; preferredLanguage: string }) => Promise<AuthUser>;
-  loginStaff: (username: string, password: string) => Promise<AuthUser>;
-  logout: () => void;
-}
-
-const STORAGE_KEY = 'm3.auth';
-const AuthContext = createContext<AuthState | null>(null);
-
-function load(): { token: string; user: AuthUser } | null {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
-function save(data: { token: string; user: AuthUser } | null): void {
-  try {
-    if (data) localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    else localStorage.removeItem(STORAGE_KEY);
-  } catch {
-    /* ignore storage errors */
-  }
-}
+export type { AuthState, AuthUser } from './authContext';
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [token, setToken] = useState<string | null>(null);
-  const [user, setUser] = useState<AuthUser | null>(null);
+  // Restore the persisted session synchronously so the first render already
+  // reflects it — no setState-in-effect hydration cascade.
+  const [restored] = useState(load);
+  const [token, setToken] = useState<string | null>(restored?.token ?? null);
+  const [user, setUser] = useState<AuthUser | null>(restored?.user ?? null);
 
+  // Keep the api module's auth header in sync with the current token.
   useEffect(() => {
-    const existing = load();
-    if (existing) {
-      setToken(existing.token);
-      setUser(existing.user);
-      setAuthToken(existing.token);
-    }
-  }, []);
+    setAuthToken(token);
+  }, [token]);
 
-  const apply = (res: { token: string; user: AuthUser }): AuthUser => {
-    setToken(res.token);
-    setUser(res.user);
-    setAuthToken(res.token);
-    save(res);
-    return res.user;
-  };
-
-  const value = useMemo<AuthState>(
-    () => ({
+  const value = useMemo<AuthState>(() => {
+    const apply = (res: { token: string; user: AuthUser }): AuthUser => {
+      setToken(res.token);
+      setUser(res.user);
+      setAuthToken(res.token);
+      save(res);
+      return res.user;
+    };
+    return {
       token,
       user,
       loginWorker: async (phone, pin) =>
@@ -70,21 +33,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         apply(await api.post('/auth/worker/register', input)),
       loginStaff: async (username, password) =>
         apply(await api.post('/auth/staff/login', { username, password })),
+      changeCredential: async (newCredential, confirmCredential) => {
+        const c = await apply(await api.post('/auth/change-credential', { newCredential, confirmCredential }));
+        return c;
+      },
       logout: () => {
         setToken(null);
         setUser(null);
         setAuthToken(null);
         save(null);
       },
-    }),
-    [token, user],
-  );
+    };
+  }, [token, user]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
-}
-
-export function useAuth(): AuthState {
-  const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error('useAuth must be used within AuthProvider');
-  return ctx;
 }

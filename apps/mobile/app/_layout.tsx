@@ -33,7 +33,9 @@ export default function RootLayout() {
           <Stack.Screen name="index" options={{ headerShown: false }} />
           <Stack.Screen name="language" options={{ headerShown: false }} />
           <Stack.Screen name="sign-in" options={{ headerShown: false }} />
+          <Stack.Screen name="first-login" options={{ title: 'First-time Setup' }} />
           <Stack.Screen name="(worker)" options={{ headerShown: false }} />
+          <Stack.Screen name="(contractor)" options={{ headerShown: false }} />
         </Stack>
       </I18nextProvider>
     </SafeAreaProvider>

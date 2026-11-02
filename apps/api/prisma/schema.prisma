@@ -98,23 +98,43 @@ enum Decision {
   REJECTED
 }
 
+enum JoinRequestStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  CANCELLED
+}
+
+enum TravelReportStatus {
+  OPEN
+  REVIEWED
+  RESOLVED
+}
+
 model User {
-  id           String   @id @default(uuid())
-  role         Role
-  displayName  String
-  username     String?  @unique
-  passwordHash String? // staff accounts
-  phone        String?  @unique
-  pinHash      String? // worker accounts
-  workerId     String?  @unique
-  worker       Worker?  @relation(fields: [workerId], references: [id])
-  contractorId String?  @unique
-  contractor   Contractor? @relation(fields: [contractorId], references: [id])
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id            String   @id @default(uuid())
+  role          Role
+  displayName   String
+  username      String?  @unique
+  passwordHash  String? // staff accounts
+  phone         String?  @unique
+  pinHash       String? // worker accounts
+  // Admin-provisioned unique stakeholder ID (e.g. C000001, HW000001, CL000001…)
+  stakeholderCode String? @unique
+  // First-login guard for accounts created with a temporary PIN/password.
+  mustChangeCredential Boolean @default(false)
+  // Soft-disabling: deactivated accounts cannot sign in. Records are never deleted.
+  active        Boolean  @default(true)
+  workerId      String?  @unique
+  worker        Worker?  @relation(fields: [workerId], references: [id])
+  contractorId  String?  @unique
+  contractor    Contractor? @relation(fields: [contractorId], references: [id])
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   @@index([role])
 }
+
 
 model Worker {
   id                String   @id @default(uuid())
@@ -135,6 +155,8 @@ model Worker {
   followUps    FollowUp[]
   transfers    SiteTransferRequest[]
   travelRecords TravelRecord[]
+  travelReports TravelReport[]
+  joinRequests  SiteJoinRequest[]
 
   @@index([phone])
 }
@@ -170,12 +192,15 @@ model ConstructionSite {
   contractorId String?
   contractor   Contractor?  @relation(fields: [contractorId], references: [id])
   address      String?
+  landmark     String?
+  contactPhone String?
   active       Boolean  @default(true)
   createdAt    DateTime @default(now())
 
   assignments      WorkerSiteAssignment[]
   transfersFrom    SiteTransferRequest[] @relation("TransferFromSite")
   transfersTo      SiteTransferRequest[] @relation("TransferToSite")
+  joinRequests     SiteJoinRequest[] @relation("JoinRequests")
 
   @@index([areaId])
   @@index([contractorId])
@@ -284,6 +309,8 @@ model TravelRecord {
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
+  reports TravelReport[]
+
   @@index([workerId])
 }
 
@@ -330,6 +357,25 @@ model SiteTransferRequest {
   // Partial unique index (one non-terminal transfer per worker) added in migration SQL.
 }
 
+model SiteJoinRequest {
+  id          String           @id @default(uuid())
+  workerId    String
+  worker      Worker           @relation(fields: [workerId], references: [id])
+  siteId      String
+  site        ConstructionSite @relation("JoinRequests", fields: [siteId], references: [id])
+  status      JoinRequestStatus @default(PENDING)
+  decidedById String? // Contractor user id
+  decidedAt   DateTime?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@index([workerId])
+  @@index([siteId])
+  @@index([status])
+}
+
+// Partial unique index in migration SQL: one open join request per worker.
+
 model IdempotencyKey {
   id        String   @id @default(uuid())
   key       String
@@ -351,4 +397,49 @@ model AuditLog {
   createdAt  DateTime @default(now())
 
   @@index([entityType, entityId])
+}
+
+// ---- Admin module (spec §10–§13) ------------------------------------------
+
+/// One report per travel case; duplicates are prevented by a unique constraint.
+model TravelReport {
+  id                     String            @id @default(uuid())
+  travelRecordId         String
+  travelRecord           TravelRecord      @relation(fields: [travelRecordId], references: [id])
+  workerId               String
+  worker                 Worker            @relation(fields: [workerId], references: [id])
+  departureDate          DateTime?
+  destinationState       String?
+  reason                 String // Contractor's mandatory reason/comment
+  status                 TravelReportStatus @default(OPEN)
+  reviewNote             String?
+  reviewedById           String?
+  reviewedAt             DateTime?
+  submittedByContractorId String
+  createdAt              DateTime          @default(now())
+  updatedAt              DateTime          @updatedAt
+
+  @@unique([travelRecordId])
+  @@index([workerId])
+  @@index([status])
+}
+
+/// Audience-based notifications. Admin (and other recipients) are notified via
+/// their role; events carry a unique dedupeKey so no duplicates are sent.
+model Notification {
+  id             String    @id @default(uuid())
+  audienceRole   Role?
+  audienceUserId String?
+  type           String
+  title          String
+  body           String
+  entityType     String?
+  entityId       String?
+  dedupeKey      String    @unique
+  readAt         DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([audienceRole])
+  @@index([audienceUserId])
+  @@index([createdAt])
 }

@@ -128,6 +128,27 @@ export const TRANSFER_TERMINAL_STATUSES: TransferStatus[] = [
 export const DECISION = ['PENDING', 'APPROVED', 'REJECTED'] as const;
 export type Decision = (typeof DECISION)[number];
 
+/**
+ * Worker → construction-site joining request lifecycle.
+ * Decisions belong to the destination-site Contractor; Admin has an
+ * observability role only and must not bypass Contractor approval.
+ */
+export const JOIN_REQUEST_STATUS = [
+  'PENDING', // awaiting Contractor review
+  'ACCEPTED', // Contractor accepted
+  'DECLINED', // Contractor declined
+  'CANCELLED', // Worker withdrew
+] as const;
+export type JoinRequestStatus = (typeof JOIN_REQUEST_STATUS)[number];
+
+/** Positive-travel follow-up report lifecycle (Contractor-submitted). */
+export const TRAVEL_REPORT_STATUS = [
+  'OPEN', // submitted, awaiting Admin review
+  'REVIEWED', // Admin reviewed; follow-up continues
+  'RESOLVED', // review closed out
+] as const;
+export type TravelReportStatus = (typeof TRAVEL_REPORT_STATUS)[number];
+
 /** Local sync state for offline-first records (mobile). */
 export const SYNC_STATE = ['LOCAL', 'PENDING', 'SYNCED', 'FAILED'] as const;
 export type SyncState = (typeof SYNC_STATE)[number];

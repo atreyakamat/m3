@@ -36,6 +36,14 @@ export default function SignInScreen() {
         if (!parsed.success) return setFieldErrors(parsed.error);
         const res = await authApi.login(parsed.data);
         await signIn(res.token, res.user);
+        if (res.user.credentialChangeRequired) {
+          router.replace('/first-login');
+          return;
+        }
+        if (res.user.role === 'CONTRACTOR') {
+          router.replace('/(contractor)/dashboard');
+          return;
+        }
       }
       router.replace('/(worker)/dashboard');
     } catch (e) {

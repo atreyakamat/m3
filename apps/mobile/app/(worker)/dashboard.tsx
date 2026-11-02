@@ -11,15 +11,13 @@ import { pendingCount, flushOutbox } from '@/services/sync';
 import { screeningLocalRepo } from '@/services/screeningLocal';
 import { palette, spacing, radius, fontSize, fontWeight, shadow } from '@/theme';
 
-// Section 11: Six primary dashboard features.
-// Normal construction site selection is removed. Site changes use Transfer.
+// Section 11: Four primary dashboard features (Profile, Travel, Transfer, Feeling Unwell).
+// Profile consolidates Personal Details, Initial Screening, and Past Check-ins / Test Results.
 const ACTIONS: { key: string; route: string; labelKey: string; color: string; descKey: string }[] = [
-  { key: 'profile', route: '/(worker)/profile', labelKey: 'nav.profile', color: palette.textMuted, descKey: 'nav.profileDesc' },
-  { key: 'screening', route: '/(worker)/screening', labelKey: 'nav.screening', color: palette.primary, descKey: 'nav.screeningDesc' },
+  { key: 'profile', route: '/(worker)/profile', labelKey: 'nav.profile', color: palette.primary, descKey: 'nav.profileDesc' },
   { key: 'travel', route: '/(worker)/travel', labelKey: 'nav.travel', color: palette.info, descKey: 'nav.travelDesc' },
   { key: 'transfer', route: '/(worker)/transfer', labelKey: 'nav.transfer', color: palette.accent, descKey: 'nav.transferDesc' },
   { key: 'unwell', route: '/(worker)/unwell', labelKey: 'nav.feelingUnwell', color: palette.warning, descKey: 'nav.unwellDesc' },
-  { key: 'followups', route: '/(worker)/followups', labelKey: 'nav.followUps', color: palette.primaryLight, descKey: 'nav.checkinsDesc' },
 ];
 
 export default function Dashboard() {
@@ -185,13 +183,13 @@ export default function Dashboard() {
                 <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm }}>
                   <Pressable
                     style={styles.clinicalButton}
-                    onPress={() => router.push('/(worker)/prescriptions' as never)}
+                    onPress={() => router.push({ pathname: '/(worker)/profile', params: { tab: 'records' } } as never)}
                   >
                     <Text style={styles.clinicalButtonText}>{t('clinical.viewRxHistory')}</Text>
                   </Pressable>
                   <Pressable
                     style={styles.clinicalButton}
-                    onPress={() => router.push('/(worker)/malaria' as never)}
+                    onPress={() => router.push({ pathname: '/(worker)/profile', params: { tab: 'records' } } as never)}
                   >
                     <Text style={styles.clinicalButtonText}>{t('clinical.diagnosticDetails')}</Text>
                   </Pressable>

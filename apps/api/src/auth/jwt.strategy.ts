@@ -11,6 +11,8 @@ export interface JwtPayload {
   workerId: string | null;
   contractorId: string | null;
   name: string;
+  /** Set when the token must only be used for the mandatory credential change. */
+  pendingCredentialChange?: boolean;
 }
 
 @Injectable()
@@ -30,6 +32,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       workerId: payload.workerId ?? null,
       contractorId: payload.contractorId ?? null,
       displayName: payload.name,
+      pendingCredentialChange: payload.pendingCredentialChange ?? false,
     };
   }
 }

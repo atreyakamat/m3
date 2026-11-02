@@ -376,7 +376,7 @@ const styles = StyleSheet.create({
     fontSize: fontSize.sm,
   },
   symptomTextActive: {
-    color: palette.accentDark,
+    color: palette.accent,
     fontWeight: '700',
   },
   recordButton: {

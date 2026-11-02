@@ -8,14 +8,17 @@ import { workerApi } from '@/api';
 const TOKEN_KEY = 'm3_token';
 const USER_KEY = 'm3_user';
 const LANG_KEY = 'm3_language';
+const SELECTED_SITE_KEY = 'm3_contractor_selected_site';
 
 interface SessionState {
   ready: boolean;
   token: string | null;
   user: AuthUser | null;
   language: Language;
+  selectedSiteCode: string | null;
   hydrate: () => Promise<void>;
   setLanguage: (lang: Language) => Promise<void>;
+  setSelectedSiteCode: (siteCode: string | null) => Promise<void>;
   signIn: (token: string, user: AuthUser) => Promise<void>;
   signOut: () => Promise<void>;
 }
@@ -33,12 +36,14 @@ export const useSession = create<SessionState>((set, get) => ({
   token: null,
   user: null,
   language: 'en',
+  selectedSiteCode: null,
 
   hydrate: async () => {
-    const [token, userRaw, lang] = await Promise.all([
+    const [token, userRaw, lang, siteCode] = await Promise.all([
       safeGet('secure', TOKEN_KEY),
       safeGet('async', USER_KEY),
       safeGet('async', LANG_KEY),
+      safeGet('async', SELECTED_SITE_KEY),
     ]);
     const language = (lang as Language) ?? 'en';
     changeLanguage(language);
@@ -47,6 +52,7 @@ export const useSession = create<SessionState>((set, get) => ({
       token,
       user: userRaw ? (JSON.parse(userRaw) as AuthUser) : null,
       language,
+      selectedSiteCode: siteCode ?? null,
     });
   },
 
@@ -64,6 +70,19 @@ export const useSession = create<SessionState>((set, get) => ({
     }
   },
 
+  setSelectedSiteCode: async (selectedSiteCode) => {
+    set({ selectedSiteCode });
+    try {
+      if (selectedSiteCode) {
+        await AsyncStorage.setItem(SELECTED_SITE_KEY, selectedSiteCode);
+      } else {
+        await AsyncStorage.removeItem(SELECTED_SITE_KEY);
+      }
+    } catch {
+      /* non-fatal */
+    }
+  },
+
   signIn: async (token, user) => {
     set({ token, user });
     if (user.preferredLanguage) {
@@ -78,14 +97,15 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 
   signOut: async () => {
-    set({ token: null, user: null });
+    set({ token: null, user: null, selectedSiteCode: null });
     try {
       await SecureStore.deleteItemAsync(TOKEN_KEY);
       await AsyncStorage.removeItem(USER_KEY);
+      await AsyncStorage.removeItem(SELECTED_SITE_KEY);
     } catch {
       /* ignore */
     }
   },
 }));
 
-export { TOKEN_KEY, USER_KEY, LANG_KEY };
+export { TOKEN_KEY, USER_KEY, LANG_KEY, SELECTED_SITE_KEY };

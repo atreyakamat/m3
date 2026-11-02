@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { loginSchema, staffLoginSchema, workerRegisterSchema, LANGUAGES, LANGUAGE_LABELS } from '@m3/shared';
-import { useAuth, type AuthUser } from '../lib/auth';
+import { useAuth, type AuthUser } from '../lib/authContext';
 import { api } from '../lib/api';
 import { palette, roleGradient } from '../lib/tokens';
 import { Button, Card, TextField, Select, Banner } from '../components/ui';
-import { homeFor } from '../routes/ProtectedRoute';
+import { homeFor } from '../lib/routes';
 
 type Tab = 'worker' | 'staff';
 type WorkerMode = 'signin' | 'register';

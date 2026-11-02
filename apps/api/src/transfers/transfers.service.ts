@@ -18,6 +18,7 @@ import {
 import type { Prisma, SiteTransferRequest } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
+import { NotificationService } from '../common/notification.service';
 
 type TransferRow = SiteTransferRequest & {
   fromSite: { contractorId: string | null } | null;
@@ -29,6 +30,7 @@ export class TransfersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly notify: NotificationService,
   ) {}
 
   private decisionsOf(t: SiteTransferRequest) {
@@ -235,6 +237,16 @@ export class TransfersService {
         entityType: 'SiteTransferRequest',
         entityId: transferId,
         metadata: { actor, status: nextStatus, reason: reason ?? null },
+        tx,
+      });
+      await this.notify.notify({
+        audienceRoles: ['ADMIN'],
+        type: 'TRANSFER_DECISION',
+        title: nextStatus === 'ACCEPTED' ? 'Transfer completed' : approve ? 'Transfer approval stage' : 'Transfer declined',
+        body: `Transfer ${transferId} for worker ${t.workerId} moved to ${nextStatus} after a decision by the ${actor}.`,
+        entityType: 'SiteTransferRequest',
+        entityId: transferId,
+        dedupeKey: `transfer_decision:${transferId}:${actor}:${nextStatus}`,
         tx,
       });
       return updated;

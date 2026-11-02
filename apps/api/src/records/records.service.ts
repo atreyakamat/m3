@@ -23,7 +23,10 @@ export class RecordsService {
   listEpisodes(workerId: string) {
     return this.prisma.malariaEpisode.findMany({
       where: { workerId },
-      include: { diagnostics: { orderBy: { testDate: 'desc' } } },
+      include: {
+        diagnostics: { orderBy: { testDate: 'desc' } },
+        prescriptions: { orderBy: { issuedAt: 'desc' } },
+      },
       orderBy: { createdAt: 'desc' },
     });
   }
