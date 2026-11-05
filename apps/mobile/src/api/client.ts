@@ -78,4 +78,11 @@ function safeJson(text: string): unknown {
   }
 }
 
-export const isNetworkError = (e: unknown): boolean => e instanceof ApiError && e.status === 0;
+export const isNetworkError = (e: unknown): boolean =>
+  (e instanceof ApiError && e.status === 0) ||
+  Boolean(
+    e &&
+      typeof e === 'object' &&
+      (('status' in e && (e as { status: unknown }).status === 0) ||
+        ('message' in e && (e as { message: unknown }).message === 'network_error')),
+  );

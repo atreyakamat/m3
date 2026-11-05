@@ -53,4 +53,25 @@ describe('Auth & worker identity (e2e)', () => {
     expect(yes.body.exists).toBe(true);
     expect(no.body.exists).toBe(false);
   });
+
+  it('rejects JWT token immediately when user account is deactivated (active: false)', async () => {
+    const reg = await registerWorker(ctx, { name: 'AshaDeact', phone: '9000000006', pin: '1234' });
+    // First verify authenticated request succeeds
+    const check1 = await ctx.http()
+      .get('/api/v1/workers/me')
+      .set('Authorization', `Bearer ${reg.token}`);
+    expect(check1.status).toBe(200);
+
+    // Deactivate user in database
+    await ctx.prisma.user.update({
+      where: { phone: '9000000006' },
+      data: { active: false },
+    });
+
+    // Request with same token must now be rejected with 401
+    const check2 = await ctx.http()
+      .get('/api/v1/workers/me')
+      .set('Authorization', `Bearer ${reg.token}`);
+    expect(check2.status).toBe(401);
+  });
 });
