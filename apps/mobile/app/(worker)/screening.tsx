@@ -27,8 +27,14 @@ import {
 import { Card, Body, Button } from '@/components/ui';
 import { SyncStateChip } from '@/components/StatusChips';
 import { QuestionnaireNavigator, type Answers } from '@/components/QuestionnaireNavigator';
-import { screeningApi, workerApi } from '@/api';
+import { WorkerHeader } from '@/components/WorkerHeader';
+import {
+  WorkerGuideCard,
+  WorkerActionGuide,
+} from '@/components/worker-guide';
+import { screeningApi, workerApi, isNetworkError } from '@/api';
 import { useSession } from '@/store/session';
+import { outboxRepo, uuid } from '@/db/outbox';
 import { screeningLocalRepo } from '@/services/screeningLocal';
 import { flushOutbox } from '@/services/sync';
 import { palette, spacing, radius, fontSize, fontWeight } from '@/theme';
@@ -56,6 +62,7 @@ export default function ScreeningScreen() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [siteAddress, setSiteAddress] = useState<string>('');
+  const [helpGuideVisible, setHelpGuideVisible] = useState(false);
 
   // Load existing draft/record on mount
   useEffect(() => {
@@ -91,11 +98,19 @@ export default function ScreeningScreen() {
         try {
           const profile = await workerApi.me(token);
           if (profile && active) {
+            setAnswers((prev) => ({
+              ...prev,
+              full_name: profile.name || prev['full_name'] || user?.displayName,
+              mobile_number: profile.phone || prev['mobile_number'] || (user as any)?.phone,
+            }));
+
             if (profile.currentSite) {
               const addr = `${profile.currentSite.name} · ${profile.currentSite.area}`;
               setSiteAddress(addr);
               setAnswers((prev) => ({
                 ...prev,
+                full_name: profile.name || prev['full_name'] || user?.displayName,
+                mobile_number: profile.phone || prev['mobile_number'] || (user as any)?.phone,
                 present_address_site_name: addr,
                 present_address_site_id: profile.currentSite?.siteId,
               }));
@@ -218,7 +233,29 @@ export default function ScreeningScreen() {
 
     if (token) {
       try {
-        await screeningApi.complete(token, answers);
+        // Record explicit DataSubmissionConsent before completing screening
+        const consentPayload = {
+          consentVersion: QUESTIONNAIRE_VERSION,
+          language: user?.preferredLanguage || 'en',
+          status: 'ACCEPTED',
+          deviceInfo: 'Worker Mobile App',
+        };
+        try {
+          await workerApi.consentSubmission(token, consentPayload);
+        } catch (cErr) {
+          if (isNetworkError(cErr)) {
+            outboxRepo.enqueue({
+              entityType: 'consent_submission',
+              localId: uuid(),
+              payload: consentPayload,
+            });
+          }
+        }
+
+        await screeningApi.complete(token, answers, {
+          isAssisted: Boolean(answers.isAssisted),
+          assistedByStaffId: (answers.assistedByStaffId as string) || null,
+        });
         screeningLocalRepo.saveDraft(workerId, answers, true, 'SYNCED');
         setRecord({
           status: 'COMPLETE',
@@ -279,7 +316,13 @@ export default function ScreeningScreen() {
     const submittedAnswers = record.answers || answers || {};
 
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: palette.bg }} edges={['top', 'bottom']}>
+      <SafeAreaView style={{ flex: 1, backgroundColor: palette.bg }} edges={['bottom']}>
+        <WorkerHeader
+          title={t('screening.title', 'Initial Screening')}
+          subtitle={t('screening.originalRecord', 'Completed Record')}
+          showBack={true}
+          fallbackRoute="/(worker)/dashboard"
+        />
         <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: spacing.xxl, gap: spacing.md }}>
           <Card accent={isPending ? palette.warning : palette.success}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.xs }}>
@@ -365,8 +408,16 @@ export default function ScreeningScreen() {
   }
 
   // ── Questionnaire Active ─────────────────────────────────────────────────
+  const hasUnsaved = Object.keys(answers).length > 0;
+
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: palette.bg }} edges={['top', 'bottom']}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: palette.bg }} edges={['bottom']}>
+      <WorkerHeader
+        title={t('screening.title', 'Initial Screening')}
+        hasUnsavedChanges={hasUnsaved}
+        showBack={true}
+        fallbackRoute="/(worker)/dashboard"
+      />
       <ScrollView
         ref={scrollRef}
         contentContainerStyle={{ padding: spacing.lg, paddingBottom: spacing.xxl, gap: spacing.md, flexGrow: 1 }}
@@ -381,6 +432,18 @@ export default function ScreeningScreen() {
             </View>
           </Card>
         ) : null}
+
+        {/* Picture-Based Visual Guidance Card */}
+        <WorkerGuideCard
+          illustration="health_worker_helping_screening"
+          title="Health Screening Questions"
+          audioText="Answer basic questions about fever and symptoms. Tap large buttons or listen with the audio button. Health workers will provide checkups and medicines if needed."
+          step1="Answer basic fever and health questions"
+          step2="Tap large buttons or listen with the audio button"
+          step3="Health team provides free checkups and medicines"
+          actionLabel="Need Help? View Picture Guide"
+          onAction={() => setHelpGuideVisible(true)}
+        />
 
         <QuestionnaireNavigator
           answers={answers}
@@ -398,6 +461,13 @@ export default function ScreeningScreen() {
           siteAddress={siteAddress}
         />
       </ScrollView>
+
+      {/* Visual Workflow Action Guide Modal */}
+      <WorkerActionGuide
+        visible={helpGuideVisible}
+        workflow="screening"
+        onClose={() => setHelpGuideVisible(false)}
+      />
     </SafeAreaView>
   );
 }

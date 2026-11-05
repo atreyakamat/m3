@@ -7,6 +7,8 @@ export interface RequestUser {
   workerId: string | null;
   contractorId: string | null;
   displayName: string;
+  /** True when the account holds only a temporary credential (must change before protected access). */
+  pendingCredentialChange?: boolean;
 }
 
 export const CurrentUser = createParamDecorator(

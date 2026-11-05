@@ -10,6 +10,12 @@ import { ScreeningModule } from './screening/screening.module';
 import { RecordsModule } from './records/records.module';
 import { TransfersModule } from './transfers/transfers.module';
 import { StakeholdersModule } from './stakeholders/stakeholders.module';
+import { AdminModule } from './admin/admin.module';
+import { RequestsModule } from './requests/requests.module';
+import { TravelModule } from './travel/travel.module';
+import { ContractorModule } from './contractor/contractor.module';
+import { FacilitiesModule } from './facilities/facilities.module';
+import { HealthWorkerModule } from './health-worker/health-worker.module';
 import { MetaController } from './meta/meta.controller';
 
 @Module({
@@ -24,6 +30,12 @@ import { MetaController } from './meta/meta.controller';
     RecordsModule,
     TransfersModule,
     StakeholdersModule,
+    AdminModule,
+    RequestsModule,
+    TravelModule,
+    ContractorModule,
+    FacilitiesModule,
+    HealthWorkerModule,
   ],
   controllers: [MetaController],
 })

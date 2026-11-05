@@ -128,6 +128,109 @@ export const TRANSFER_TERMINAL_STATUSES: TransferStatus[] = [
 export const DECISION = ['PENDING', 'APPROVED', 'REJECTED'] as const;
 export type Decision = (typeof DECISION)[number];
 
+/**
+ * Worker → construction-site joining request lifecycle.
+ * Decisions belong to the destination-site Contractor; Admin has an
+ * observability role only and must not bypass Contractor approval.
+ */
+export const JOIN_REQUEST_STATUS = [
+  'PENDING', // awaiting Contractor review
+  'ACCEPTED', // Contractor accepted
+  'DECLINED', // Contractor declined
+  'CANCELLED', // Worker withdrew
+] as const;
+export type JoinRequestStatus = (typeof JOIN_REQUEST_STATUS)[number];
+
+/** Positive-travel follow-up report lifecycle (Contractor-submitted). */
+export const TRAVEL_REPORT_STATUS = [
+  'OPEN', // submitted, awaiting Admin review
+  'REVIEWED', // Admin reviewed; follow-up continues
+  'RESOLVED', // review closed out
+] as const;
+export type TravelReportStatus = (typeof TRAVEL_REPORT_STATUS)[number];
+
+/** Workforce assignment lifecycle for a worker at a construction site. */
+export const ASSIGNMENT_STATUS = ['ACTIVE', 'ENDED', 'TRANSFERRED'] as const;
+export type AssignmentStatus = (typeof ASSIGNMENT_STATUS)[number];
+
 /** Local sync state for offline-first records (mobile). */
 export const SYNC_STATE = ['LOCAL', 'PENDING', 'SYNCED', 'FAILED'] as const;
 export type SyncState = (typeof SYNC_STATE)[number];
+
+/** Indian States and Union Territories (Census of India / GoI standard list). */
+export const INDIAN_STATES = [
+  'Andhra Pradesh',
+  'Arunachal Pradesh',
+  'Assam',
+  'Bihar',
+  'Chhattisgarh',
+  'Goa',
+  'Gujarat',
+  'Haryana',
+  'Himachal Pradesh',
+  'Jharkhand',
+  'Karnataka',
+  'Kerala',
+  'Madhya Pradesh',
+  'Maharashtra',
+  'Manipur',
+  'Meghalaya',
+  'Mizoram',
+  'Nagaland',
+  'Odisha',
+  'Punjab',
+  'Rajasthan',
+  'Sikkim',
+  'Tamil Nadu',
+  'Telangana',
+  'Tripura',
+  'Uttar Pradesh',
+  'Uttarakhand',
+  'West Bengal',
+  'Andaman and Nicobar Islands',
+  'Chandigarh',
+  'Dadra and Nagar Haveli and Daman and Diu',
+  'Delhi',
+  'Jammu and Kashmir',
+  'Ladakh',
+  'Lakshadweep',
+  'Puducherry',
+] as const;
+export type IndianState = (typeof INDIAN_STATES)[number];
+
+export const FACILITY_TYPE = ['PHC', 'UHC'] as const;
+export type FacilityType = (typeof FACILITY_TYPE)[number];
+
+export const HOUSEHOLD_RELATIONSHIP = [
+  'SPOUSE',
+  'CHILD',
+  'PARENT',
+  'SIBLING',
+  'OTHER_FAMILY',
+  'ROOMMATE',
+  'OTHER',
+] as const;
+export type HouseholdRelationship = (typeof HOUSEHOLD_RELATIONSHIP)[number];
+
+export const TRAVEL_DIRECTION = ['LEAVING_GOA', 'ENTERING_GOA'] as const;
+export type TravelDirection = (typeof TRAVEL_DIRECTION)[number];
+
+export const DEPARTURE_CONFIRMATION_STATUS = [
+  'PENDING_CONFIRMATION',
+  'CONFIRMED',
+  'REJECTED',
+  'CANCELLED',
+] as const;
+export type DepartureConfirmationStatus = (typeof DEPARTURE_CONFIRMATION_STATUS)[number];
+
+export const CORRECTION_STATUS = ['PENDING', 'APPROVED', 'REJECTED'] as const;
+export type CorrectionStatus = (typeof CORRECTION_STATUS)[number];
+
+export const CONSENT_STATUS = ['ACCEPTED', 'DECLINED'] as const;
+export type ConsentStatus = (typeof CONSENT_STATUS)[number];
+
+export const TRANSLATION_STATUS = ['PENDING', 'TRANSLATED', 'FAILED'] as const;
+export type TranslationStatus = (typeof TRANSLATION_STATUS)[number];
+
+export const ESCALATION_ALERT_STATUS = ['SENT', 'ACKNOWLEDGED', 'ACTIONED'] as const;
+export type EscalationAlertStatus = (typeof ESCALATION_ALERT_STATUS)[number];

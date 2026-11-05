@@ -1,4 +1,4 @@
-import { Body, Controller, ForbiddenException, Get, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { createZodDto } from 'nestjs-zod';
 import {
@@ -6,6 +6,7 @@ import {
   followUpResponseSchema,
   symptomReportSchema,
   travelRecordSchema,
+  createHouseholdAssessmentSchema,
 } from '@m3/shared';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../common/roles.guard';
@@ -17,6 +18,7 @@ class SymptomReportDto extends createZodDto(symptomReportSchema) {}
 class FollowUpResponseDto extends createZodDto(followUpResponseSchema) {}
 class DiagnosticResultDto extends createZodDto(diagnosticResultSchema) {}
 class TravelRecordDto extends createZodDto(travelRecordSchema) {}
+class CreateHouseholdAssessmentDto extends createZodDto(createHouseholdAssessmentSchema) {}
 
 @ApiTags('records')
 @ApiBearerAuth()
@@ -113,5 +115,22 @@ export class RecordsController {
   @ApiOperation({ summary: 'Issue a prescription (clinician only; append-only)' })
   createPrescription(@CurrentUser() u: RequestUser, @Body() body: { episodeId: string; details: string }) {
     return this.records.createPrescription(u.userId, body);
+  }
+
+  @Post('household-assessments')
+  @Roles('CLINICIAN', 'HEALTH_WORKER')
+  @ApiOperation({ summary: 'Record clinical screening/assessment of a household member' })
+  createHouseholdAssessment(
+    @CurrentUser() u: RequestUser,
+    @Body() dto: CreateHouseholdAssessmentDto,
+  ) {
+    return this.records.createHouseholdAssessment(u.userId, dto);
+  }
+
+  @Get('household-assessments/:memberId')
+  @Roles('ADMIN', 'CLINICIAN', 'HEALTH_WORKER')
+  @ApiOperation({ summary: 'List assessments for a household member' })
+  listHouseholdAssessments(@Param('memberId') memberId: string) {
+    return this.records.listHouseholdAssessments(memberId);
   }
 }

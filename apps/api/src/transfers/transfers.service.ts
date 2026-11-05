@@ -18,10 +18,13 @@ import {
 import type { Prisma, SiteTransferRequest } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit.service';
+import { NotificationService } from '../common/notification.service';
 
 type TransferRow = SiteTransferRequest & {
   fromSite: { contractorId: string | null } | null;
   toSite: { contractorId: string | null };
+  fromContractorId?: string | null;
+  toContractorId?: string | null;
 };
 
 @Injectable()
@@ -29,6 +32,7 @@ export class TransfersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly notify: NotificationService,
   ) {}
 
   private decisionsOf(t: SiteTransferRequest) {
@@ -52,6 +56,11 @@ export class TransfersService {
   // ---- creation -----------------------------------------------------------
 
   async createWorkerTransfer(workerId: string, userId: string, input: CreateWorkerTransferInput) {
+    const user = await this.prisma.user.findFirst({ where: { workerId } });
+    if (user && !user.active) {
+      throw new ForbiddenException('Deactivated workers cannot request transfers');
+    }
+
     const assignment = await this.prisma.workerSiteAssignment.findFirst({
       where: { workerId, active: true },
       include: { site: true },
@@ -65,6 +74,9 @@ export class TransfersService {
       throw new BadRequestException('Destination site is the same as the current site');
     }
 
+    const fromContractorId = assignment.contractorId ?? assignment.site.contractorId ?? null;
+    const toContractorId = toSite.contractorId ?? null;
+
     return this.prisma.$transaction(async (tx) => {
       await this.ensureNoPending(workerId, tx);
       const decisions = { worker: 'APPROVED' as Decision, fromContractor: 'PENDING' as Decision, toContractor: 'PENDING' as Decision };
@@ -74,6 +86,8 @@ export class TransfersService {
           workerId,
           fromSiteId: assignment.siteId,
           toSiteId: toSite.id,
+          fromContractorId,
+          toContractorId,
           initiatorType: 'WORKER',
           initiatorId: userId,
           status,
@@ -95,13 +109,25 @@ export class TransfersService {
   }
 
   async createContractorTransfer(contractorId: string, input: CreateContractorTransferInput) {
-    const worker = await this.prisma.worker.findUnique({ where: { workerCode: input.workerId } });
+    const worker = await this.prisma.worker.findUnique({
+      where: { workerCode: input.workerId },
+      include: { user: true },
+    });
     if (!worker) throw new NotFoundException('No worker with that Worker ID');
+    if (worker.user && !worker.user.active) {
+      throw new ForbiddenException('Deactivated workers cannot be transferred');
+    }
 
     const toSite = await this.prisma.constructionSite.findUnique({ where: { siteCode: input.toSiteId } });
     if (!toSite) throw new NotFoundException('Destination site not found');
+
     // A contractor may only pull a worker to a site they manage (implicit destination approval).
-    if (toSite.contractorId !== contractorId) {
+    const isAssignedToDest =
+      toSite.contractorId === contractorId ||
+      !!(await this.prisma.contractorSite.findUnique({
+        where: { contractorId_siteId: { contractorId, siteId: toSite.id } },
+      }));
+    if (!isAssignedToDest) {
       throw new ForbiddenException('You can only request transfers into sites you manage');
     }
 
@@ -109,24 +135,41 @@ export class TransfersService {
       where: { workerId: worker.id, active: true },
       include: { site: true },
     });
-    if (assignment && assignment.siteId === toSite.id) {
-      throw new BadRequestException('Worker is already assigned to this site');
+
+    const isSameSite = assignment && assignment.siteId === toSite.id;
+    const isSameContractor =
+      assignment &&
+      (assignment.contractorId === contractorId ||
+        (!assignment.contractorId && assignment.site.contractorId === contractorId));
+    if (isSameSite && isSameContractor) {
+      throw new BadRequestException('Worker is already assigned to your workforce at this site');
     }
+
+    const fromContractorId = assignment?.contractorId ?? assignment?.site.contractorId ?? null;
+    const toContractorId = contractorId;
 
     return this.prisma.$transaction(async (tx) => {
       await this.ensureNoPending(worker.id, tx);
-      const decisions = { worker: 'PENDING' as Decision, fromContractor: 'PENDING' as Decision, toContractor: 'APPROVED' as Decision };
+      const decisions = {
+        worker: 'PENDING' as Decision,
+        fromContractor: fromContractorId ? ('PENDING' as Decision) : ('APPROVED' as Decision),
+        toContractor: 'APPROVED' as Decision,
+      };
       const status = computeTransferStatus('CONTRACTOR', decisions);
       const created = await tx.siteTransferRequest.create({
         data: {
           workerId: worker.id,
           fromSiteId: assignment?.siteId ?? null,
           toSiteId: toSite.id,
+          fromContractorId,
+          toContractorId,
           initiatorType: 'CONTRACTOR',
           initiatorId: contractorId,
           status,
           toContractorDecision: 'APPROVED',
           toContractorDecisionAt: new Date(),
+          fromContractorDecision: decisions.fromContractor,
+          fromContractorDecisionAt: fromContractorId ? null : new Date(),
           note: input.note ?? null,
         },
       });
@@ -135,7 +178,7 @@ export class TransfersService {
         action: 'TRANSFER_CREATED_BY_CONTRACTOR',
         entityType: 'SiteTransferRequest',
         entityId: created.id,
-        metadata: { workerId: worker.id, toSiteId: toSite.id },
+        metadata: { workerId: worker.id, toSiteId: toSite.id, fromContractorId, toContractorId },
         tx,
       });
       return created;
@@ -146,8 +189,12 @@ export class TransfersService {
 
   /** Resolve which decision slot a contractor occupies for this transfer. */
   private contractorSlot(t: TransferRow, contractorId: string): TransferActor | null {
-    if (t.fromSite?.contractorId === contractorId) return 'fromContractor';
-    if (t.toSite.contractorId === contractorId) return 'toContractor';
+    if (t.fromContractorId ? t.fromContractorId === contractorId : t.fromSite?.contractorId === contractorId) {
+      return 'fromContractor';
+    }
+    if (t.toContractorId ? t.toContractorId === contractorId : t.toSite.contractorId === contractorId) {
+      return 'toContractor';
+    }
     return null;
   }
 
@@ -215,10 +262,19 @@ export class TransfersService {
         // index on (workerId) WHERE active is the final backstop.
         await tx.workerSiteAssignment.updateMany({
           where: { workerId: t.workerId, active: true },
-          data: { active: false, endedAt: now },
+          data: { active: false, status: 'TRANSFERRED', endedAt: now },
         });
+        const destContractorId = t.toContractorId ?? t.toSite?.contractorId ?? null;
         await tx.workerSiteAssignment.create({
-          data: { workerId: t.workerId, siteId: t.toSiteId, active: true, startedAt: now, transferId },
+          data: {
+            workerId: t.workerId,
+            siteId: t.toSiteId,
+            contractorId: destContractorId,
+            active: true,
+            status: 'ACTIVE',
+            startedAt: now,
+            transferId,
+          },
         });
         data.effectiveAt = now;
       }
@@ -235,6 +291,16 @@ export class TransfersService {
         entityType: 'SiteTransferRequest',
         entityId: transferId,
         metadata: { actor, status: nextStatus, reason: reason ?? null },
+        tx,
+      });
+      await this.notify.notify({
+        audienceRoles: ['ADMIN'],
+        type: 'TRANSFER_DECISION',
+        title: nextStatus === 'ACCEPTED' ? 'Transfer completed' : approve ? 'Transfer approval stage' : 'Transfer declined',
+        body: `Transfer ${transferId} for worker ${t.workerId} moved to ${nextStatus} after a decision by the ${actor}.`,
+        entityType: 'SiteTransferRequest',
+        entityId: transferId,
+        dedupeKey: `transfer_decision:${transferId}:${actor}:${nextStatus}`,
         tx,
       });
       return updated;
@@ -270,7 +336,12 @@ export class TransfersService {
   listForWorker(workerId: string) {
     return this.prisma.siteTransferRequest.findMany({
       where: { workerId },
-      include: { fromSite: true, toSite: true },
+      include: {
+        fromSite: true,
+        toSite: true,
+        fromContractor: true,
+        toContractor: true,
+      },
       orderBy: { createdAt: 'desc' },
     });
   }
@@ -279,9 +350,20 @@ export class TransfersService {
     const rows = await this.prisma.siteTransferRequest.findMany({
       where: {
         status: { notIn: TRANSFER_TERMINAL_STATUSES },
-        OR: [{ fromSite: { contractorId } }, { toSite: { contractorId } }],
+        OR: [
+          { fromContractorId: contractorId },
+          { toContractorId: contractorId },
+          { fromSite: { contractorId } },
+          { toSite: { contractorId } },
+        ],
       },
-      include: { fromSite: { select: { contractorId: true } }, toSite: { select: { contractorId: true } }, worker: { select: { workerCode: true, name: true } } },
+      include: {
+        fromSite: { select: { contractorId: true, name: true, siteCode: true } },
+        toSite: { select: { contractorId: true, name: true, siteCode: true } },
+        fromContractor: { select: { id: true, name: true } },
+        toContractor: { select: { id: true, name: true } },
+        worker: { select: { workerCode: true, name: true } },
+      },
       orderBy: { createdAt: 'desc' },
     });
     // Keep only those where this contractor is a currently-actionable approver.

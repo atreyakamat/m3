@@ -54,25 +54,6 @@ export const YES_NO: FieldOption[] = [
   { value: 'no', label: 'No' },
 ];
 
-export const MOBILE_BRAND_OPTIONS: FieldOption[] = [
-  { value: 'samsung', label: 'Samsung' },
-  { value: 'xiaomi', label: 'Xiaomi / Redmi' },
-  { value: 'vivo', label: 'Vivo' },
-  { value: 'realme', label: 'Realme' },
-  { value: 'oppo', label: 'Oppo' },
-  { value: 'oneplus', label: 'OnePlus' },
-  { value: 'apple', label: 'Apple (iPhone)' },
-  { value: 'motorola', label: 'Motorola' },
-  { value: 'poco', label: 'Poco' },
-  { value: 'nokia', label: 'Nokia' },
-  { value: 'lava', label: 'Lava' },
-  { value: 'micromax', label: 'Micromax' },
-  { value: 'tecno', label: 'Tecno' },
-  { value: 'infinix', label: 'Infinix' },
-  { value: 'itel', label: 'Itel' },
-  { value: 'other', label: 'Other', allowsOther: true },
-];
-
 export const QUALIFICATION_OPTIONS: FieldOption[] = [
   { value: 'classes_1_5', label: 'Classes 1–5 completed' },
   { value: 'classes_5_10', label: 'Classes 5–10' },
@@ -139,15 +120,6 @@ export const WORKER_SCREENING_SECTIONS: QuestionSection[] = [
       { id: 'permanent_address_district', type: 'text', label: 'District' },
       { id: 'permanent_address_state', type: 'text', label: 'State' },
       { id: 'permanent_address_details', type: 'textarea', label: 'Additional Address Details (optional)' },
-      {
-        id: 'preferred_language',
-        type: 'single',
-        label: 'Preferred language for the app',
-        options: LANGUAGES.map((code) => ({
-          value: code,
-          label: LANGUAGE_LABELS[code],
-        })),
-      },
     ],
   },
   {
@@ -231,12 +203,6 @@ export const WORKER_SCREENING_SECTIONS: QuestionSection[] = [
           { value: 'no', label: 'No' },
           { value: 'not_sure', label: 'Not sure' },
         ],
-      },
-      {
-        id: 'mobile_brand',
-        type: 'single',
-        label: 'Mobile Brand',
-        options: MOBILE_BRAND_OPTIONS,
       },
       {
         id: 'qualification',

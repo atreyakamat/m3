@@ -7,6 +7,8 @@ import {
   Text,
   TextInput,
   View,
+  type StyleProp,
+  type TextStyle,
   type TextInputProps,
   type ViewStyle,
 } from 'react-native';
@@ -27,7 +29,7 @@ export function Screen({ children, scroll = true }: { children: React.ReactNode;
   );
 }
 
-export function Card({ children, style, accent }: { children: React.ReactNode; style?: ViewStyle; accent?: string }) {
+export function Card({ children, style, accent }: { children: React.ReactNode; style?: StyleProp<ViewStyle>; accent?: string }) {
   return (
     <View style={[styles.card, accent ? { borderLeftColor: accent, borderLeftWidth: 4 } : null, style]}>
       {children}
@@ -41,8 +43,8 @@ export function Title({ children }: { children: React.ReactNode }) {
 export function Subtitle({ children }: { children: React.ReactNode }) {
   return <Text style={styles.subtitle}>{children}</Text>;
 }
-export function Body({ children, muted }: { children: React.ReactNode; muted?: boolean }) {
-  return <Text style={[styles.body, muted ? { color: palette.textMuted } : null]}>{children}</Text>;
+export function Body({ children, muted, style }: { children: React.ReactNode; muted?: boolean; style?: StyleProp<TextStyle> }) {
+  return <Text style={[styles.body, muted ? { color: palette.textMuted } : null, style]}>{children}</Text>;
 }
 
 export function Button({
@@ -51,12 +53,14 @@ export function Button({
   variant = 'primary',
   loading,
   disabled,
+  style,
 }: {
   label: string;
   onPress: () => void;
   variant?: 'primary' | 'secondary' | 'danger' | 'ghost';
   loading?: boolean;
   disabled?: boolean;
+  style?: StyleProp<ViewStyle>;
 }) {
   const bg =
     variant === 'primary'
@@ -76,6 +80,7 @@ export function Button({
         styles.button,
         { backgroundColor: bg, opacity: disabled ? 0.5 : pressed ? 0.85 : 1 },
         variant === 'ghost' ? styles.buttonGhost : null,
+        style,
       ]}
     >
       {loading ? <ActivityIndicator color={fg} /> : <Text style={[styles.buttonText, { color: fg }]}>{label}</Text>}

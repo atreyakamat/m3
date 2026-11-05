@@ -12,6 +12,7 @@
     "prisma:migrate": "prisma migrate deploy",
     "prisma:migrate:dev": "prisma migrate dev",
     "db:seed": "ts-node prisma/seed.ts",
+    "db:bootstrap-admin": "ts-node prisma/bootstrap-admin.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint \"src/**/*.ts\" --max-warnings 0",
     "test": "jest --config jest.config.js --runInBand",

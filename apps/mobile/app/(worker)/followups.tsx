@@ -3,6 +3,7 @@ import { View, Text, Pressable, Alert, ActivityIndicator } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { Screen, Card, Body, TextField, Button } from '@/components/ui';
+import { WorkerHeader } from '@/components/WorkerHeader';
 import { recordsApi, ApiError } from '@/api';
 import { useSession } from '@/store/session';
 import { palette, spacing, radius, fontSize } from '@/theme';
@@ -42,8 +43,14 @@ export default function FollowUpsScreen() {
   if (loading) return <Screen><ActivityIndicator color={palette.primary} style={{ marginTop: spacing.xxl }} /></Screen>;
 
   return (
-    <Screen>
-      {items.length === 0 ? <Body muted>—</Body> : null}
+    <View style={{ flex: 1, backgroundColor: palette.bg }}>
+      <WorkerHeader
+        title={t('nav.followUps', 'Treatment Follow-ups')}
+        showBack={true}
+        fallbackRoute="/(worker)/dashboard"
+      />
+      <Screen>
+        {items.length === 0 ? <Body muted>—</Body> : null}
       {items.map((f) => {
         const answered = Boolean(f.respondedAt);
         const draft = drafts[f.id] ?? {};
@@ -83,6 +90,7 @@ export default function FollowUpsScreen() {
           </Card>
         );
       })}
-    </Screen>
+      </Screen>
+    </View>
   );
 }

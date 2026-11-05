@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import type { TransferStatus } from '@m3/shared';
 import { Screen, Card, TextField, SelectRow, Button, Body } from '@/components/ui';
 import { TransferStatusChip } from '@/components/StatusChips';
+import { WorkerHeader } from '@/components/WorkerHeader';
 import { transferApi, sitesApi, workerApi, type TransferDto, type SiteSummary, type WorkerProfile, ApiError } from '@/api';
 import { useSession } from '@/store/session';
 import { palette, spacing, fontSize } from '@/theme';
@@ -64,8 +65,15 @@ export default function TransferScreen() {
   if (loading) return <Screen><ActivityIndicator color={palette.primary} style={{ marginTop: spacing.xxl }} /></Screen>;
 
   return (
-    <Screen>
-      <Card accent={palette.info}>
+    <View style={{ flex: 1, backgroundColor: palette.bg }}>
+      <WorkerHeader
+        title={t('transfer.title')}
+        subtitle={t('nav.transfer', 'Worksite Transfers')}
+        showBack={true}
+        fallbackRoute="/(worker)/dashboard"
+      />
+      <Screen>
+        <Card accent={palette.info}>
         <Text style={{ color: palette.textMuted, fontSize: fontSize.sm }}>{t('transfer.from')}</Text>
         <Text style={{ fontSize: fontSize.lg, fontWeight: '600', color: palette.text }}>
           {profile?.currentSite?.name ?? t('dashboard.noSite')}
@@ -113,6 +121,7 @@ export default function TransferScreen() {
           </Card>
         );
       })}
-    </Screen>
+      </Screen>
+    </View>
   );
 }

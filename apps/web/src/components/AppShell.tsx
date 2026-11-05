@@ -3,7 +3,7 @@ import { NavLink } from 'react-router-dom';
 import type { Role } from '@m3/shared';
 import { ROLE_LABELS } from '@m3/shared';
 import { roleColors, roleGradient } from '../lib/tokens';
-import { useAuth } from '../lib/auth';
+import { useAuth } from '../lib/authContext';
 
 export interface NavItem {
   to: string;

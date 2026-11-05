@@ -3,6 +3,7 @@ import { View, Text, ActivityIndicator, Alert } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { Screen, Card, TextField, SelectRow, Body, Button } from '@/components/ui';
+import { WorkerHeader } from '@/components/WorkerHeader';
 import { sitesApi, workerApi, type LocationNodeDto, type SiteSummary, type WorkerProfile, ApiError } from '@/api';
 import { useSession } from '@/store/session';
 import { palette, spacing, fontSize, fontWeight } from '@/theme';
@@ -115,8 +116,15 @@ export default function SiteScreen() {
   }
 
   return (
-    <Screen>
-      <Card accent={palette.secondary}>
+    <View style={{ flex: 1, backgroundColor: palette.bg }}>
+      <WorkerHeader
+        title={initial === 'true' ? t('site.step3') : t('site.title')}
+        subtitle={t('nav.site', 'Worksite Selection')}
+        showBack={initial !== 'true'}
+        fallbackRoute="/(worker)/dashboard"
+      />
+      <Screen>
+        <Card accent={palette.secondary}>
         <Text style={{ fontSize: fontSize.sm, fontWeight: '700', color: palette.textMuted, marginBottom: 2 }}>
           {initial === 'true' ? t('site.step3') : t('site.title')}
         </Text>
@@ -166,6 +174,7 @@ export default function SiteScreen() {
           }}
         />
       ) : null}
-    </Screen>
+      </Screen>
+    </View>
   );
 }

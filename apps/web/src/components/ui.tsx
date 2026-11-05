@@ -67,6 +67,66 @@ export function Chip({ fg, bg, children }: { fg: string; bg: string; children: R
   );
 }
 
+export function Modal({
+  title,
+  onClose,
+  children,
+}: {
+  title: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={{
+        position: 'fixed',
+        inset: 0,
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 1000,
+        padding: 16,
+      }}
+    >
+      <div
+        style={{
+          backgroundColor: '#FFFFFF',
+          borderRadius: 16,
+          maxWidth: 540,
+          width: '100%',
+          maxHeight: '90vh',
+          overflowY: 'auto',
+          padding: 24,
+          boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
+          display: 'grid',
+          gap: 16,
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>{title}</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              fontSize: 20,
+              cursor: 'pointer',
+              color: palette.textMuted,
+            }}
+          >
+            ✕
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 export function TextField({
   label,
   error,

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, Pressable, ActivityIndicator } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { Screen, Card, Body } from '@/components/ui';
+import { WorkerHeader } from '@/components/WorkerHeader';
 import { recordsApi } from '@/api';
 import { useSession } from '@/store/session';
 import { palette, spacing, fontSize } from '@/theme';
@@ -33,8 +34,14 @@ export default function PrescriptionsScreen() {
   }, [token]);
 
   return (
-    <Screen>
-      <View style={{ flexDirection: 'row', gap: spacing.sm }}>
+    <View style={{ flex: 1, backgroundColor: palette.bg }}>
+      <WorkerHeader
+        title={t('nav.prescriptions', 'Prescriptions')}
+        showBack={true}
+        fallbackRoute="/(worker)/dashboard"
+      />
+      <Screen>
+        <View style={{ flexDirection: 'row', gap: spacing.sm }}>
         {(['current', 'history'] as const).map((key) => (
           <Pressable
             key={key}
@@ -63,7 +70,8 @@ export default function PrescriptionsScreen() {
       ) : (
         history.map((p) => <PrescriptionCard key={p.id} p={p} />)
       )}
-    </Screen>
+      </Screen>
+    </View>
   );
 }
 

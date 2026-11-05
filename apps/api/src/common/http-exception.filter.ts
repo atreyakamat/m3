@@ -32,7 +32,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
         message = obj.message ?? obj;
         error = String(obj.error ?? exception.name);
         // Preserve structured detail fields (e.g. missingFieldIds) for clients.
-        const { message: _m, error: _e, statusCode: _s, ...rest } = obj;
+        const rest = { ...obj };
+        delete rest.message;
+        delete rest.error;
+        delete rest.statusCode;
         extra = rest;
       }
     } else if (exception instanceof Error) {

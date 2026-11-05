@@ -1,5 +1,6 @@
 /** @type {import('jest').Config} */
 module.exports = {
+  testTimeout: 30000,
   moduleFileExtensions: ['js', 'json', 'ts'],
   rootDir: '.',
   transform: {

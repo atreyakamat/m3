@@ -1,25 +1,33 @@
 import React, { useCallback, useState } from 'react';
 import { View, Text, Pressable, ActivityIndicator, RefreshControl, ScrollView, StyleSheet } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { Card, Body, Button } from '@/components/ui';
 import { MalariaStatusChip, SyncStateChip } from '@/components/StatusChips';
+import { WorkerHeader } from '@/components/WorkerHeader';
 import { workerApi, recordsApi, type WorkerProfile, ApiError, isNetworkError } from '@/api';
 import { useSession } from '@/store/session';
+import { outboxRepo, uuid } from '@/db/outbox';
 import { pendingCount, flushOutbox } from '@/services/sync';
 import { screeningLocalRepo } from '@/services/screeningLocal';
+import { AudioGuidanceButton } from '@/components/AudioGuidanceButton';
+import {
+  WorkerGuidedTour,
+  WorkerActionGuide,
+  type ActionGuideWorkflow,
+  TOUR_COMPLETION_STORAGE_KEY,
+} from '@/components/worker-guide';
 import { palette, spacing, radius, fontSize, fontWeight, shadow } from '@/theme';
 
-// Section 11: Six primary dashboard features.
-// Normal construction site selection is removed. Site changes use Transfer.
-const ACTIONS: { key: string; route: string; labelKey: string; color: string; descKey: string }[] = [
-  { key: 'profile', route: '/(worker)/profile', labelKey: 'nav.profile', color: palette.textMuted, descKey: 'nav.profileDesc' },
-  { key: 'screening', route: '/(worker)/screening', labelKey: 'nav.screening', color: palette.primary, descKey: 'nav.screeningDesc' },
-  { key: 'travel', route: '/(worker)/travel', labelKey: 'nav.travel', color: palette.info, descKey: 'nav.travelDesc' },
-  { key: 'transfer', route: '/(worker)/transfer', labelKey: 'nav.transfer', color: palette.accent, descKey: 'nav.transferDesc' },
-  { key: 'unwell', route: '/(worker)/unwell', labelKey: 'nav.feelingUnwell', color: palette.warning, descKey: 'nav.unwellDesc' },
-  { key: 'followups', route: '/(worker)/followups', labelKey: 'nav.followUps', color: palette.primaryLight, descKey: 'nav.checkinsDesc' },
+// Section 11: Primary dashboard features (Profile, Family & Household, Travel, Transfer, Feeling Unwell).
+const ACTIONS: { key: string; route: string; labelKey: string; color: string; descKey: string; icon: string }[] = [
+  { key: 'profile', route: '/(worker)/profile', labelKey: 'nav.profile', color: palette.primary, descKey: 'nav.profileDesc', icon: '👤' },
+  { key: 'household', route: '/(worker)/household', labelKey: 'nav.household', color: '#8B5CF6', descKey: 'nav.householdDesc', icon: '👨‍👩‍👧' },
+  { key: 'travel', route: '/(worker)/travel', labelKey: 'nav.travel', color: palette.info, descKey: 'nav.travelDesc', icon: '✈️' },
+  { key: 'transfer', route: '/(worker)/transfer', labelKey: 'nav.transfer', color: palette.accent, descKey: 'nav.transferDesc', icon: '🔄' },
+  { key: 'unwell', route: '/(worker)/unwell', labelKey: 'nav.feelingUnwell', color: palette.warning, descKey: 'nav.unwellDesc', icon: '🤒' },
 ];
 
 export default function Dashboard() {
@@ -32,6 +40,17 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [offline, setOffline] = useState(false);
   const [queued, setQueued] = useState(0);
+  const [installConsentPrompt, setInstallConsentPrompt] = useState(false);
+  const [tourVisible, setTourVisible] = useState(false);
+  const [actionGuideWorkflow, setActionGuideWorkflow] = useState<ActionGuideWorkflow | null>(null);
+
+  React.useEffect(() => {
+    void AsyncStorage.getItem(TOUR_COMPLETION_STORAGE_KEY).then((done) => {
+      if (!done) {
+        setTourVisible(true);
+      }
+    });
+  }, []);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -60,6 +79,13 @@ export default function Dashboard() {
           router.replace('/(worker)/screening');
           return;
         }
+      }
+
+      // Check App Installation Consent status
+      const workerId = user?.workerId || user?.userId || 'current_worker';
+      const storedConsent = await AsyncStorage.getItem(`m3_install_consent_${workerId}`);
+      if (!storedConsent) {
+        setInstallConsentPrompt(true);
       }
 
       // If positive or has diagnostics, load clinical records
@@ -102,20 +128,11 @@ export default function Dashboard() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: palette.bg }} edges={['bottom']}>
-      {/* Coloured header */}
-      <SafeAreaView edges={['top']} style={{ backgroundColor: palette.primary }}>
-        <View style={{ padding: spacing.lg, paddingBottom: spacing.xl }}>
-          <Text style={{ color: palette.primarySoft, fontSize: fontSize.sm }}>{t('app.name')}</Text>
-          <Text style={{ color: palette.textOnColor, fontSize: fontSize.xxl, fontWeight: '800' }}>
-            {t('dashboard.greeting', { name: user?.displayName ?? '' })}
-          </Text>
-          {user?.workerId ? (
-            <Text style={{ color: palette.primarySoft, marginTop: 4 }}>
-              {t('dashboard.workerId')}: {user.workerId}
-            </Text>
-          ) : null}
-        </View>
-      </SafeAreaView>
+      <WorkerHeader
+        title={t('dashboard.greeting', { name: user?.displayName ?? '' })}
+        subtitle={user?.workerId ? `${t('dashboard.workerId')}: ${user.workerId}` : t('app.name')}
+        showBack={false}
+      />
 
       <ScrollView
         contentContainerStyle={{ padding: spacing.lg, paddingBottom: spacing.xxl, gap: spacing.md }}
@@ -154,6 +171,165 @@ export default function Dashboard() {
               ) : null}
             </Card>
 
+            {/* App Installation Consent Banner */}
+            {installConsentPrompt ? (
+              <Card accent={palette.primary}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.xs }}>
+                  <Text style={{ fontSize: fontSize.md, fontWeight: '700', color: palette.text, flex: 1 }}>
+                    📋 App Installation Consent
+                  </Text>
+                  <AudioGuidanceButton
+                    text="App Installation Consent. Please confirm if you agree to install and use the M3 malaria surveillance application for health monitoring."
+                    label="Listen"
+                    size="small"
+                  />
+                </View>
+                <Body>
+                  Welcome to the M3 Malaria Surveillance Platform. Do you agree to install and use this application for health monitoring and malaria prevention in Goa?
+                </Body>
+                <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md }}>
+                  <View style={{ flex: 1 }}>
+                    <Button
+                      label="I Agree"
+                      variant="primary"
+                      onPress={async () => {
+                        const payload = {
+                          consentVersion: '1.0',
+                          language,
+                          status: 'ACCEPTED',
+                          deviceInfo: 'Worker Mobile App',
+                        };
+                        if (token) {
+                          try {
+                            await workerApi.consentInstall(token, payload);
+                          } catch (err) {
+                            if (isNetworkError(err)) {
+                              outboxRepo.enqueue({
+                                entityType: 'consent_install',
+                                localId: uuid(),
+                                payload,
+                              });
+                            }
+                          }
+                        }
+                        const workerId = user?.workerId || user?.userId || 'current_worker';
+                        await AsyncStorage.setItem(`m3_install_consent_${workerId}`, 'ACCEPTED');
+                        setInstallConsentPrompt(false);
+                      }}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Button
+                      label="Decline"
+                      variant="ghost"
+                      onPress={async () => {
+                        const payload = {
+                          consentVersion: '1.0',
+                          language,
+                          status: 'REJECTED',
+                          deviceInfo: 'Worker Mobile App',
+                        };
+                        if (token) {
+                          try {
+                            await workerApi.consentInstall(token, payload);
+                          } catch (err) {
+                            if (isNetworkError(err)) {
+                              outboxRepo.enqueue({
+                                entityType: 'consent_install',
+                                localId: uuid(),
+                                payload,
+                              });
+                            }
+                          }
+                        }
+                        const workerId = user?.workerId || user?.userId || 'current_worker';
+                        await AsyncStorage.setItem(`m3_install_consent_${workerId}`, 'REJECTED');
+                        setInstallConsentPrompt(false);
+                      }}
+                    />
+                  </View>
+                </View>
+              </Card>
+            ) : null}
+
+            {/* Visual Tour & Picture Guide Launcher Button */}
+            <Pressable
+              onPress={() => setTourVisible(true)}
+              style={({ pressed }) => ({
+                backgroundColor: '#F0FDFA',
+                borderRadius: radius.lg,
+                padding: spacing.md,
+                borderWidth: 1.5,
+                borderColor: '#99F6E4',
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                opacity: pressed ? 0.9 : 1,
+                minHeight: 56,
+                ...shadow.card,
+              })}
+              accessibilityRole="button"
+              accessibilityLabel="Replay Visual Tour"
+            >
+              <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: '#CCFBF1', alignItems: 'center', justifyContent: 'center', marginRight: spacing.sm }}>
+                <Text style={{ fontSize: 24 }}>📖</Text>
+              </View>
+              <View style={{ flex: 1, paddingRight: spacing.sm }}>
+                <Text style={{ fontSize: fontSize.sm, fontWeight: '700', color: '#0F766E' }}>
+                  Visual Tour & Spoken Guide
+                </Text>
+                <Text style={{ fontSize: 11, color: '#115E59', marginTop: 2 }}>
+                  चित्र और आवाज़ से समझें • Tap to replay guide anytime
+                </Text>
+              </View>
+              <View style={{ backgroundColor: '#0D9488', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8 }}>
+                <Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 12 }}>Open Tour →</Text>
+              </View>
+            </Pressable>
+
+            {/* QR Worker Pass Banner */}
+            <Pressable
+              onPress={() => router.push('/(worker)/pass')}
+              style={({ pressed }) => ({
+                backgroundColor: '#EEF2FF',
+                borderRadius: radius.lg,
+                padding: spacing.md,
+                borderWidth: 1,
+                borderColor: '#C7D2FE',
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                opacity: pressed ? 0.9 : 1,
+                ...shadow.card,
+              })}
+            >
+              <View style={{ flex: 1, paddingRight: spacing.sm }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                  <Text style={{ fontSize: fontSize.md, fontWeight: '700', color: '#3730A3' }}>
+                    📱 {t('pass.title', 'QR Worker Pass')}
+                  </Text>
+                </View>
+                <Text style={{ fontSize: fontSize.xs, color: '#4B5563', lineHeight: 16 }}>
+                  {t(
+                    'pass.subtitle',
+                    'Show this QR code to your contractor to join their workforce or request a site transfer.',
+                  )}
+                </Text>
+              </View>
+              <View
+                style={{
+                  backgroundColor: '#4338CA',
+                  paddingHorizontal: spacing.md,
+                  paddingVertical: spacing.sm,
+                  borderRadius: radius.md,
+                }}
+              >
+                <Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: fontSize.xs }}>
+                  View Pass →
+                </Text>
+              </View>
+            </Pressable>
+
             {/* ── Section 11.1: POSITIVE MALARIA RESULT VIEW ────────────────── */}
             {isPositive && (
               <View style={styles.clinicalAlertBox}>
@@ -185,13 +361,13 @@ export default function Dashboard() {
                 <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm }}>
                   <Pressable
                     style={styles.clinicalButton}
-                    onPress={() => router.push('/(worker)/prescriptions' as never)}
+                    onPress={() => router.push({ pathname: '/(worker)/profile', params: { tab: 'records' } } as never)}
                   >
                     <Text style={styles.clinicalButtonText}>{t('clinical.viewRxHistory')}</Text>
                   </Pressable>
                   <Pressable
                     style={styles.clinicalButton}
-                    onPress={() => router.push('/(worker)/malaria' as never)}
+                    onPress={() => router.push({ pathname: '/(worker)/profile', params: { tab: 'records' } } as never)}
                   >
                     <Text style={styles.clinicalButtonText}>{t('clinical.diagnosticDetails')}</Text>
                   </Pressable>
@@ -232,10 +408,16 @@ export default function Dashboard() {
               </View>
             )}
 
-            {/* ── Quick Actions Grid (6 Features) ─────────────────────────── */}
-            <Text style={{ fontSize: fontSize.md, fontWeight: fontWeight.semibold as '600', color: palette.text, marginTop: spacing.sm }}>
-              {t('dashboard.quickActions')}
-            </Text>
+            {/* ── Quick Actions Grid (Accessible) ─────────────────────────── */}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: spacing.sm }}>
+              <Text style={{ fontSize: fontSize.md, fontWeight: fontWeight.semibold as '600', color: palette.text }}>
+                {t('dashboard.quickActions')}
+              </Text>
+              <AudioGuidanceButton
+                text="Here are your main actions: Profile, Family and Household, Travel reporting, Site transfer, and Feeling Unwell report."
+                size="small"
+              />
+            </View>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md }}>
               {ACTIONS.map((a) => (
                 <Pressable
@@ -248,13 +430,16 @@ export default function Dashboard() {
                     padding: spacing.md,
                     opacity: pressed ? 0.9 : 1,
                     ...shadow.card,
-                    borderWidth: 1,
+                    borderWidth: 1.5,
                     borderColor: palette.border,
+                    minHeight: 120,
                   })}
                 >
-                  <View style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: a.color, marginBottom: spacing.xs }} />
-                  <Text style={{ fontSize: fontSize.md, fontWeight: '700', color: palette.text }}>{t(a.labelKey)}</Text>
-                  <Text style={{ fontSize: fontSize.xs, color: palette.textMuted, marginTop: 2 }}>{t(a.descKey)}</Text>
+                  <View style={{ width: 42, height: 42, borderRadius: 12, backgroundColor: a.color, marginBottom: spacing.xs, alignItems: 'center', justifyContent: 'center' }}>
+                    <Text style={{ fontSize: 22 }}>{a.icon}</Text>
+                  </View>
+                  <Text style={{ fontSize: fontSize.md, fontWeight: '700', color: palette.text }}>{t(a.labelKey, a.key)}</Text>
+                  <Text style={{ fontSize: fontSize.xs, color: palette.textMuted, marginTop: 2 }}>{t(a.descKey, '')}</Text>
                 </Pressable>
               ))}
             </View>
@@ -265,6 +450,19 @@ export default function Dashboard() {
           </>
         )}
       </ScrollView>
+
+      {/* First-time Visual Tour Modal */}
+      <WorkerGuidedTour
+        visible={tourVisible}
+        onFinish={() => setTourVisible(false)}
+      />
+
+      {/* Contextual Action Guide Modal */}
+      <WorkerActionGuide
+        visible={actionGuideWorkflow !== null}
+        workflow={actionGuideWorkflow || 'screening'}
+        onClose={() => setActionGuideWorkflow(null)}
+      />
     </SafeAreaView>
   );
 }

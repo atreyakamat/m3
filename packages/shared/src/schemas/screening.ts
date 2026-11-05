@@ -9,6 +9,8 @@ export type ScreeningAnswers = z.infer<typeof screeningAnswersSchema>;
 export const saveScreeningDraftSchema = z.object({
   answers: screeningAnswersSchema,
   consentGiven: z.boolean().default(false),
+  isAssisted: z.boolean().default(false),
+  assistedByStaffId: z.string().optional().nullable(),
   /** client-generated idempotency key so retried syncs don't duplicate. */
   idempotencyKey: z.string().uuid().optional(),
 });
@@ -19,6 +21,8 @@ export const completeScreeningSchema = z.object({
   consentGiven: z.literal(true, {
     errorMap: () => ({ message: 'Consent is required to complete screening' }),
   }),
+  isAssisted: z.boolean().default(false),
+  assistedByStaffId: z.string().optional().nullable(),
   idempotencyKey: z.string().uuid().optional(),
 });
 export type CompleteScreeningInput = z.infer<typeof completeScreeningSchema>;

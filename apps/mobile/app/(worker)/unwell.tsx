@@ -18,6 +18,12 @@ import { Audio } from 'expo-av';
 import { WORKER_SCREENING_SECTIONS } from '@m3/shared';
 import { Screen, Card, TextField, Button, Body } from '@/components/ui';
 import { SyncStateChip } from '@/components/StatusChips';
+import { WorkerHeader } from '@/components/WorkerHeader';
+import { AudioGuidanceButton } from '@/components/AudioGuidanceButton';
+import {
+  WorkerGuideCard,
+  WorkerActionGuide,
+} from '@/components/worker-guide';
 import { recordsApi, ApiError, isNetworkError } from '@/api';
 import { useSession } from '@/store/session';
 import { outboxRepo, uuid } from '@/db/outbox';
@@ -47,6 +53,7 @@ export default function UnwellScreen() {
 
   const [busy, setBusy] = useState(false);
   const [queuedState, setQueuedState] = useState<'none' | 'synced' | 'pending'>('none');
+  const [helpGuideVisible, setHelpGuideVisible] = useState(false);
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -226,18 +233,45 @@ export default function UnwellScreen() {
   const hasData = selected.length > 0 || note.trim().length > 0 || recordedUri !== null;
 
   return (
-    <Screen>
-      <Card accent={palette.warning}>
-        <Text style={{ fontSize: fontSize.md, fontWeight: '700', color: palette.text, marginBottom: 2 }}>
-          {t('unwell.title')}
-        </Text>
-        <Body>
-          {t('unwell.intro')}
-        </Body>
-        <Text style={styles.disclaimerText}>
-          {t('unwell.disclaimer')}
-        </Text>
-      </Card>
+    <View style={{ flex: 1, backgroundColor: palette.bg }}>
+      <WorkerHeader
+        title={t('unwell.title')}
+        subtitle={t('nav.feelingUnwell', 'Report Symptoms')}
+        showBack={true}
+        hasUnsavedChanges={hasData}
+        fallbackRoute="/(worker)/dashboard"
+      />
+      <Screen>
+        <Card accent={palette.warning}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
+            <Text style={{ fontSize: fontSize.md, fontWeight: '700', color: palette.text, flex: 1 }}>
+              {t('unwell.title')}
+            </Text>
+            <AudioGuidanceButton
+              text="If you are feeling unwell or have fever, select your symptoms below or record a voice message to alert health workers immediately."
+              label="Listen"
+              size="small"
+            />
+          </View>
+          <Body>
+            {t('unwell.intro')}
+          </Body>
+          <Text style={styles.disclaimerText}>
+            {t('unwell.disclaimer')}
+          </Text>
+        </Card>
+
+        {/* Picture-Based Visual Guidance Card */}
+        <WorkerGuideCard
+          illustration="worker_reporting_fever"
+          title="Report Fever or Sickness"
+          audioText="If you feel sick or have fever, select symptoms or record your voice. Healthcare workers will visit you."
+          step1="Select symptoms you feel (fever, chills, headache)"
+          step2="Or hold the red button below to record a voice message"
+          step3="Health team receives an alert to visit you and provide testing"
+          actionLabel="Need Help? View Picture Guide"
+          onAction={() => setHelpGuideVisible(true)}
+        />
 
       {/* Option A — Select Symptoms */}
       <View style={styles.sectionBox}>
@@ -331,7 +365,15 @@ export default function UnwellScreen() {
         loading={busy}
         disabled={!hasData}
       />
-    </Screen>
+      </Screen>
+
+      {/* Visual Workflow Action Guide Modal */}
+      <WorkerActionGuide
+        visible={helpGuideVisible}
+        workflow="unwell"
+        onClose={() => setHelpGuideVisible(false)}
+      />
+    </View>
   );
 }
 
@@ -376,7 +418,7 @@ const styles = StyleSheet.create({
     fontSize: fontSize.sm,
   },
   symptomTextActive: {
-    color: palette.accentDark,
+    color: palette.accent,
     fontWeight: '700',
   },
   recordButton: {

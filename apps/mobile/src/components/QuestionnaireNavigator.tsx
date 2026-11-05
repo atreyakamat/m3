@@ -22,18 +22,19 @@ import {
   TextInput,
   View,
   Pressable,
+  ScrollView,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import {
   WORKER_SCREENING_SECTIONS,
   CONSENT_STEP,
-  MOBILE_BRAND_OPTIONS,
   type QuestionField,
   type QuestionSection,
 } from '@m3/shared';
 import { palette, spacing, radius, fontSize, fontWeight } from '@/theme';
 import { DatePickerField } from './DatePickerField';
 import { Button } from './ui';
+import { AudioGuidanceButton } from './AudioGuidanceButton';
 import { lookupPincode } from '@/utils/pincode';
 
 export type Answers = Record<string, unknown>;
@@ -135,6 +136,24 @@ function OptionCard({
 }
 
 // ─── Specialized Field Renderers ──────────────────────────────────────────────
+
+function FullNameField({ value, label }: { value: unknown; label: string }) {
+  const { t } = useTranslation();
+  return (
+    <View style={styles.fieldWrapper}>
+      <Text style={styles.fieldLabel}>{label}</Text>
+      <View style={[styles.textInput, styles.readOnlyInput]}>
+        <Text style={styles.readOnlyText}>
+          {value ? String(value) : t('screening.noNameRegistered', 'No registered name')}
+        </Text>
+        <Text style={styles.readOnlyBadge}>🔒 {t('screening.readOnly', 'Read-only')}</Text>
+      </View>
+      <Text style={styles.helperText}>
+        {t('screening.nameFromRegistration', 'Using your registered full name as your verified identity reference. Changes require administrator review.')}
+      </Text>
+    </View>
+  );
+}
 
 function MobileNumberField({ value, label }: { value: unknown; label: string }) {
   const { t } = useTranslation();
@@ -380,17 +399,39 @@ function PermanentAddressFields({
   const details = (answers['permanent_address_details'] as string) || '';
 
   const [lookupConfirmed, setLookupConfirmed] = useState(false);
+  const [lookupOffices, setLookupOffices] = useState<Array<{ name: string }>>([]);
+  const [lookupFailed, setLookupFailed] = useState(false);
 
   function handlePinChange(txt: string) {
     const clean = txt.replace(/[^0-9]/g, '').slice(0, 6);
     onChange('permanent_address_pincode', clean);
-    if (clean.length >= 3) {
+
+    if (clean.length === 6) {
       const match = lookupPincode(clean);
       if (match) {
+        // Protect manual entries from accidental overwrite unless fields are currently empty or confirmed
         onChange('permanent_address_district', match.district);
         onChange('permanent_address_state', match.state);
+        setLookupOffices(match.offices);
         setLookupConfirmed(true);
+        setLookupFailed(false);
+      } else {
+        setLookupConfirmed(false);
+        setLookupOffices([]);
+        setLookupFailed(true);
       }
+    } else {
+      setLookupConfirmed(false);
+      setLookupOffices([]);
+      setLookupFailed(false);
+    }
+  }
+
+  function handleSelectOffice(officeName: string) {
+    const existing = details.trim();
+    if (!existing.includes(officeName)) {
+      const newDetails = existing ? `${officeName}, ${existing}` : officeName;
+      onChange('permanent_address_details', newDetails);
     }
   }
 
@@ -405,15 +446,56 @@ function PermanentAddressFields({
         onChangeText={handlePinChange}
         keyboardType="numeric"
         maxLength={6}
-        placeholder="e.g. 800001 or 700001"
+        placeholder="e.g. 403001, 110001, 800001"
         placeholderTextColor={palette.textMuted}
       />
 
       {lookupConfirmed && district ? (
         <View style={styles.verifiedBadge}>
-          <Text style={styles.verifiedText}>✓ Postal Lookup: {district}, {state}</Text>
+          <Text style={styles.verifiedText}>✓ Postal Location: {district}, {state}</Text>
         </View>
       ) : null}
+
+      {lookupFailed && pin.length === 6 ? (
+        <View style={[styles.verifiedBadge, { backgroundColor: '#FEF3C7', borderColor: '#FDE68A' }]}>
+          <Text style={[styles.verifiedText, { color: '#92400E' }]}>
+            ℹ️ PIN code not found in postal directory. Please enter district and state manually.
+          </Text>
+        </View>
+      ) : null}
+
+      {lookupOffices.length > 0 && (
+        <View style={{ marginTop: spacing.xs, marginBottom: spacing.xs }}>
+          <Text style={[styles.fieldSubLabel, { fontSize: fontSize.xs, color: palette.primary }]}>
+            Select Post Office / Area:
+          </Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, paddingVertical: 4 }}>
+            {lookupOffices.map((off, idx) => (
+              <Pressable
+                key={`${off.name}-${idx}`}
+                onPress={() => handleSelectOffice(off.name)}
+                style={({ pressed }) => ({
+                  backgroundColor: details.includes(off.name) ? palette.primary : palette.primarySoft,
+                  paddingHorizontal: 10,
+                  paddingVertical: 5,
+                  borderRadius: radius.pill,
+                  opacity: pressed ? 0.8 : 1,
+                })}
+              >
+                <Text
+                  style={{
+                    fontSize: fontSize.xs,
+                    fontWeight: '600',
+                    color: details.includes(off.name) ? palette.textOnColor : palette.primaryDark,
+                  }}
+                >
+                  {off.name}
+                </Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+        </View>
+      )}
 
       <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm }}>
         <View style={{ flex: 1 }}>
@@ -454,67 +536,6 @@ function PermanentAddressFields({
   );
 }
 
-function MobileBrandField({
-  value,
-  onChange,
-  answers,
-  onFieldChange,
-}: {
-  value: unknown;
-  onChange: (v: unknown) => void;
-  answers: Answers;
-  onFieldChange: (id: string, v: unknown) => void;
-}) {
-  const { t } = useTranslation();
-  const [filter, setFilter] = useState('');
-  const brandVal = (value as string) || '';
-  const otherBrand = (answers['mobile_brand_other'] as string) || '';
-
-  const filtered = useMemo(() => {
-    if (!filter) return MOBILE_BRAND_OPTIONS;
-    return MOBILE_BRAND_OPTIONS.filter((o) =>
-      o.label.toLowerCase().includes(filter.toLowerCase()),
-    );
-  }, [filter]);
-
-  return (
-    <View style={styles.fieldWrapper}>
-      <Text style={styles.fieldLabel}>{t('screening.mobileBrand', 'Mobile Phone Brand')}</Text>
-      <TextInput
-        style={[styles.textInput, { marginBottom: spacing.sm }]}
-        value={filter}
-        onChangeText={setFilter}
-        placeholder={t('screening.searchBrand', 'Search or select mobile brand...')}
-        placeholderTextColor={palette.textMuted}
-      />
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs, marginBottom: spacing.sm }}>
-        {filtered.slice(0, 10).map((b) => (
-          <Pressable
-            key={b.value}
-            onPress={() => onChange(b.value)}
-            style={[styles.chipButton, brandVal === b.value && styles.chipButtonActive]}
-          >
-            <Text style={[styles.chipText, brandVal === b.value && styles.chipTextActive]}>{b.label}</Text>
-          </Pressable>
-        ))}
-      </View>
-
-      {brandVal === 'other' && (
-        <View style={{ marginTop: spacing.xs }}>
-          <Text style={styles.fieldSubLabel}>Specify Mobile Brand</Text>
-          <TextInput
-            style={styles.textInput}
-            value={otherBrand}
-            onChangeText={(txt) => onFieldChange('mobile_brand_other', txt)}
-            placeholder="Type your phone brand"
-            placeholderTextColor={palette.textMuted}
-          />
-        </View>
-      )}
-    </View>
-  );
-}
-
 // ─── Field Renderer ───────────────────────────────────────────────────────────
 
 function FieldRenderer({
@@ -539,6 +560,9 @@ function FieldRenderer({
   const error = invalid ? t('screening.required', 'This field is required') : undefined;
 
   // Intercept special fields
+  if (field.id === 'full_name') {
+    return <FullNameField value={value} label={label} />;
+  }
   if (field.id === 'mobile_number') {
     return <MobileNumberField value={value} label={label} />;
   }
@@ -566,16 +590,6 @@ function FieldRenderer({
     field.id === 'permanent_address_details'
   ) {
     return null; // Handled within PermanentAddressFields
-  }
-  if (field.id === 'mobile_brand') {
-    return (
-      <MobileBrandField
-        value={value}
-        onChange={onChange}
-        answers={answers}
-        onFieldChange={onFieldChange}
-      />
-    );
   }
 
   const today = new Date();
@@ -742,7 +756,14 @@ function SectionView({
 
   return (
     <View>
-      <Text style={styles.sectionTitle}>{t('q.' + section.id, section.title)}</Text>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.xs }}>
+        <Text style={[styles.sectionTitle, { marginBottom: 0, flex: 1 }]}>{t('q.' + section.id, section.title)}</Text>
+        <AudioGuidanceButton
+          text={`${t('q.' + section.id, section.title)}. Please listen to the questions and select your answers.`}
+          label="Listen"
+          size="small"
+        />
+      </View>
       {visibleFields.map((field) => (
         <FieldRenderer
           key={field.id}
@@ -796,15 +817,30 @@ function ConsentGate({
   consent,
   onToggle,
   invalid,
+  isAssisted,
+  onToggleAssisted,
+  assistedStaffId,
+  onChangeAssistedStaffId,
 }: {
   consent: boolean;
   onToggle: () => void;
   invalid: boolean;
+  isAssisted?: boolean;
+  onToggleAssisted?: () => void;
+  assistedStaffId?: string;
+  onChangeAssistedStaffId?: (val: string) => void;
 }) {
   const { t } = useTranslation();
   return (
     <View style={[styles.consentCard, invalid && { borderColor: palette.danger, borderWidth: 1.5 }]}>
-      <Text style={styles.consentTitle}>{t('screening.consent', 'Informed Consent')}</Text>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.xs }}>
+        <Text style={[styles.consentTitle, { marginBottom: 0, flex: 1 }]}>{t('screening.consent', 'Informed Consent')}</Text>
+        <AudioGuidanceButton
+          text="Informed Consent. Please confirm if you give your consent to participate in the M3 malaria screening and health surveillance program."
+          label="Listen"
+          size="small"
+        />
+      </View>
       <Text style={styles.consentBody}>{CONSENT_STEP.statement}</Text>
       <Pressable
         onPress={onToggle}
@@ -818,6 +854,47 @@ function ConsentGate({
         <Text style={styles.consentAck}>{t('screening.consentAck', CONSENT_STEP.acknowledgementLabel)}</Text>
       </Pressable>
       {invalid ? <Text style={styles.errorText}>{t('screening.consentRequired', 'Consent is required to submit.')}</Text> : null}
+
+      {/* Assisted Completion Recording (Phase 2.3) */}
+      <View style={{ marginTop: spacing.md, paddingTop: spacing.md, borderTopWidth: 1, borderTopColor: palette.border }}>
+        <Pressable
+          onPress={onToggleAssisted}
+          accessibilityRole="checkbox"
+          accessibilityState={{ checked: Boolean(isAssisted) }}
+          style={styles.consentRow}
+        >
+          <View style={[styles.consentBox, isAssisted && styles.consentBoxChecked]}>
+            {isAssisted ? <Text style={styles.consentTick}>✓</Text> : null}
+          </View>
+          <Text style={styles.consentAck}>
+            {t('screening.assistedLabel', 'An authorised Health Worker or staff member assisted me with completing this questionnaire.')}
+          </Text>
+        </Pressable>
+
+        {isAssisted && (
+          <View style={{ marginTop: spacing.sm }}>
+            <Text style={{ fontSize: fontSize.xs, fontWeight: '700', color: palette.text, marginBottom: 4 }}>
+              {t('screening.assistantStaffId', 'Assisting Staff ID or Username *')}
+            </Text>
+            <TextInput
+              value={assistedStaffId || ''}
+              onChangeText={onChangeAssistedStaffId}
+              placeholder="e.g. sunita_hw or staff user UUID"
+              placeholderTextColor={palette.textMuted}
+              style={{
+                backgroundColor: '#FFFFFF',
+                borderWidth: 1,
+                borderColor: palette.border,
+                borderRadius: radius.md,
+                paddingHorizontal: spacing.sm,
+                paddingVertical: spacing.xs,
+                fontSize: fontSize.sm,
+                minHeight: 48,
+              }}
+            />
+          </View>
+        )}
+      </View>
     </View>
   );
 }
@@ -920,6 +997,10 @@ export function QuestionnaireNavigator({
             consent={consent}
             onToggle={onConsentToggle}
             invalid={consentInvalid}
+            isAssisted={Boolean(answers.isAssisted)}
+            onToggleAssisted={() => onChange('isAssisted', !answers.isAssisted)}
+            assistedStaffId={(answers.assistedByStaffId as string) || ''}
+            onChangeAssistedStaffId={(val) => onChange('assistedByStaffId', val)}
           />
         </>
       )}

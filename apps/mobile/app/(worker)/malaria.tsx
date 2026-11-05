@@ -3,6 +3,7 @@ import { View, Text, ActivityIndicator } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { Screen, Card, Body } from '@/components/ui';
 import { MalariaStatusChip } from '@/components/StatusChips';
+import { WorkerHeader } from '@/components/WorkerHeader';
 import { recordsApi, workerApi, type WorkerProfile } from '@/api';
 import { useSession } from '@/store/session';
 import { palette, spacing, fontSize } from '@/theme';
@@ -11,7 +12,7 @@ interface Diagnostic { id: string; testType: string; result: string; species: st
 
 export default function MalariaScreen() {
   const { t } = useTranslation();
-  const { token } = useSession();
+  const { token, user } = useSession();
   const [profile, setProfile] = useState<WorkerProfile | null>(null);
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([]);
   const [loading, setLoading] = useState(true);
@@ -32,8 +33,15 @@ export default function MalariaScreen() {
   if (loading) return <Screen><ActivityIndicator color={palette.primary} style={{ marginTop: spacing.xxl }} /></Screen>;
 
   return (
-    <Screen>
-      <Card accent={palette.accent}>
+    <View style={{ flex: 1, backgroundColor: palette.bg }}>
+      <WorkerHeader
+        title={t('nav.malaria', 'Malaria Status')}
+        subtitle={user?.workerId ? `${t('dashboard.workerId')}: ${user.workerId}` : undefined}
+        showBack={true}
+        fallbackRoute="/(worker)/dashboard"
+      />
+      <Screen>
+        <Card accent={palette.accent}>
         <Text style={{ color: palette.textMuted, fontSize: fontSize.sm, marginBottom: spacing.xs }}>{t('dashboard.malariaStatus')}</Text>
         {profile ? <MalariaStatusChip status={profile.malariaStatus} /> : null}
         <Body muted>Status comes only from authorized clinical/lab results.</Body>
@@ -53,6 +61,7 @@ export default function MalariaScreen() {
           <Text style={{ color: palette.textMuted, fontSize: fontSize.sm }}>{new Date(d.testDate).toLocaleDateString()}</Text>
         </Card>
       ))}
-    </Screen>
+      </Screen>
+    </View>
   );
 }

@@ -6,6 +6,7 @@
 import { PrismaClient } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { QUESTIONNAIRE_VERSION } from '@m3/shared';
+import { seedGoaHierarchy } from './seed-goa';
 
 const prisma = new PrismaClient();
 
@@ -44,6 +45,8 @@ async function staff(role: any, username: string, displayName: string) {
 }
 
 async function main() {
+  await seedGoaHierarchy();
+
   // --- Location hierarchy (State -> District -> Taluka -> Area) ---
   const goa = await location('STATE', 'Goa', null);
   const northGoa = await location('DISTRICT', 'North Goa', goa.id);
@@ -74,11 +77,12 @@ async function main() {
   await site('SITE-CURCH1', 'Curchorem Bridge Works', curchorem.id, contractorSouth.id);
 
   // --- Placeholder-role staff accounts ---
+  // (The Admin account is provisioned separately by prisma/bootstrap-admin.ts
+  //  so development credentials stay out of the shared seed path.)
   await staff('HEALTH_WORKER', 'healthworker', 'Demo Health Worker');
   await staff('CLINICIAN', 'clinician', 'Demo Clinician');
   await staff('PATHOLOGIST', 'pathologist', 'Demo Pathologist');
   await staff('RESEARCH_LAB', 'researchlab', 'Demo Research Lab');
-  await staff('ADMIN', 'admin', 'Demo Admin');
 
   // --- Demo worker (phone 9000000001 / PIN 1234) assigned to Candolim ---
   const pinHash = await bcrypt.hash('1234', 10);

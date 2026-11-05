@@ -98,23 +98,56 @@ enum Decision {
   REJECTED
 }
 
+enum JoinRequestStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  CANCELLED
+}
+
+enum TravelReportStatus {
+  OPEN
+  REVIEWED
+  RESOLVED
+}
+
+enum AssignmentStatus {
+  ACTIVE
+  ENDED
+  TRANSFERRED
+}
+
 model User {
-  id           String   @id @default(uuid())
-  role         Role
-  displayName  String
-  username     String?  @unique
-  passwordHash String? // staff accounts
-  phone        String?  @unique
-  pinHash      String? // worker accounts
-  workerId     String?  @unique
-  worker       Worker?  @relation(fields: [workerId], references: [id])
-  contractorId String?  @unique
-  contractor   Contractor? @relation(fields: [contractorId], references: [id])
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id            String   @id @default(uuid())
+  role          Role
+  displayName   String
+  username      String?  @unique
+  passwordHash  String? // staff accounts
+  phone         String?  @unique
+  pinHash       String? // worker accounts
+  // Admin-provisioned unique stakeholder ID (e.g. C000001, HW000001, CL000001…)
+  stakeholderCode String? @unique
+  // First-login guard for accounts created with a temporary PIN/password.
+  mustChangeCredential Boolean @default(false)
+  // Soft-disabling: deactivated accounts cannot sign in. Records are never deleted.
+  active        Boolean  @default(true)
+  workerId      String?  @unique
+  worker        Worker?  @relation(fields: [workerId], references: [id])
+  contractorId  String?  @unique
+  contractor    Contractor? @relation(fields: [contractorId], references: [id])
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  screeningsConducted InitialScreening[] @relation("ScreenedByUser")
+  facilityAssignments FacilityStaffAssignment[]
+  facilityAlertsSent  FacilityEscalationAlert[] @relation("AdminAlertSender")
+  escalationsActioned EscalationRecipient[]
+  householdAssessments HouseholdAssessment[] @relation("AssessingClinician")
+  correctionRequestsReviewed ProfileCorrectionRequest[] @relation("AdminReviewer")
 
   @@index([role])
 }
+
 
 model Worker {
   id                String   @id @default(uuid())
@@ -135,6 +168,13 @@ model Worker {
   followUps    FollowUp[]
   transfers    SiteTransferRequest[]
   travelRecords TravelRecord[]
+  travelReports TravelReport[]
+  joinRequests  SiteJoinRequest[]
+  passTokens    WorkerPassToken[]
+  householdMembers HouseholdMember[]
+  installConsents  AppInstallConsent[]
+  submissionConsents DataSubmissionConsent[]
+  correctionRequests ProfileCorrectionRequest[]
 
   @@index([phone])
 }
@@ -144,8 +184,28 @@ model Contractor {
   name      String
   createdAt DateTime @default(now())
 
-  user  User?
-  sites ConstructionSite[]
+  user            User?
+  sites           ConstructionSite[]
+  contractorSites ContractorSite[]
+  assignments     WorkerSiteAssignment[]
+  transfersFrom   SiteTransferRequest[] @relation("TransferFromContractor")
+  transfersTo     SiteTransferRequest[] @relation("TransferToContractor")
+}
+
+model ContractorSite {
+  id           String           @id @default(uuid())
+  contractorId String
+  contractor   Contractor       @relation(fields: [contractorId], references: [id])
+  siteId       String
+  site         ConstructionSite @relation(fields: [siteId], references: [id])
+  active       Boolean          @default(true)
+  assignedAt   DateTime         @default(now())
+  removedAt    DateTime?
+
+  @@unique([contractorId, siteId])
+  @@index([contractorId])
+  @@index([siteId])
+  @@index([active])
 }
 
 model LocationNode {
@@ -170,31 +230,39 @@ model ConstructionSite {
   contractorId String?
   contractor   Contractor?  @relation(fields: [contractorId], references: [id])
   address      String?
+  landmark     String?
+  contactPhone String?
   active       Boolean  @default(true)
   createdAt    DateTime @default(now())
 
   assignments      WorkerSiteAssignment[]
+  contractorSites  ContractorSite[]
   transfersFrom    SiteTransferRequest[] @relation("TransferFromSite")
   transfersTo      SiteTransferRequest[] @relation("TransferToSite")
+  joinRequests     SiteJoinRequest[] @relation("JoinRequests")
 
   @@index([areaId])
   @@index([contractorId])
 }
 
 model WorkerSiteAssignment {
-  id        String    @id @default(uuid())
-  workerId  String
-  worker    Worker    @relation(fields: [workerId], references: [id])
-  siteId    String
-  site      ConstructionSite @relation(fields: [siteId], references: [id])
-  active    Boolean   @default(true)
-  startedAt DateTime  @default(now())
-  endedAt   DateTime?
-  transferId String?
-  createdAt DateTime  @default(now())
+  id           String            @id @default(uuid())
+  workerId     String
+  worker       Worker            @relation(fields: [workerId], references: [id])
+  siteId       String
+  site         ConstructionSite  @relation(fields: [siteId], references: [id])
+  contractorId String?
+  contractor   Contractor?       @relation(fields: [contractorId], references: [id])
+  active       Boolean           @default(true)
+  status       AssignmentStatus  @default(ACTIVE)
+  startedAt    DateTime          @default(now())
+  endedAt      DateTime?
+  transferId   String?
+  createdAt    DateTime          @default(now())
 
   @@index([workerId])
   @@index([siteId])
+  @@index([contractorId])
   // Partial unique index (one active assignment per worker) added in migration SQL.
 }
 
@@ -206,9 +274,16 @@ model InitialScreening {
   version     String
   consentGiven Boolean        @default(false)
   answers     Json            @default("{}")
+  facilityId  String?
+  facility    Facility?       @relation(fields: [facilityId], references: [id])
+  screenedById String?
+  screenedBy  User?           @relation("ScreenedByUser", fields: [screenedById], references: [id])
   completedAt DateTime?
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
+
+  @@index([facilityId])
+  @@index([screenedById])
 }
 
 model MalariaEpisode {
@@ -235,6 +310,8 @@ model DiagnosticResult {
   testDate    DateTime
   createdById String?
   createdAt   DateTime              @default(now())
+
+  escalationAlerts FacilityEscalationAlert[]
 
   @@index([episodeId])
 }
@@ -271,20 +348,43 @@ model TravelRecord {
   id                String    @id @default(uuid())
   workerId          String
   worker            Worker    @relation(fields: [workerId], references: [id])
+  direction         TravelDirection?
   planningTravel    Boolean   @default(false)
   departureDate     DateTime?
   returnDate        DateTime?
   destination       String?
   state             String?
+  district          String?
+  town              String?
+  purpose           String?
+  originState       String?
+  originDistrict    String?
+  originTown        String?
   hadFeverOrMalaria Boolean   @default(false)
   treatmentGiven    Boolean   @default(false)
   completedCourse   Boolean   @default(false)
   treatmentPlace    String?
+  departureStatus   DepartureConfirmationStatus?
+  departureAdminId  String?
+  departureAdminAt  DateTime?
+  departureCancelReason String?
+  arrivalConfirmedAt DateTime?
+  arrivalHealthWorkerId String?
+  arrivalFacilityId String?
+  arrivalFacility   Facility? @relation(fields: [arrivalFacilityId], references: [id])
+  arrivalFever      Boolean?
+  arrivalTestedOrTreated Boolean?
+  arrivalReferred   Boolean?
   status            String    @default("SUBMITTED")
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
+  reports TravelReport[]
+
   @@index([workerId])
+  @@index([direction])
+  @@index([departureStatus])
+  @@index([arrivalFacilityId])
 }
 
 model FollowUp {
@@ -309,6 +409,10 @@ model SiteTransferRequest {
   fromSite                 ConstructionSite? @relation("TransferFromSite", fields: [fromSiteId], references: [id])
   toSiteId                 String
   toSite                   ConstructionSite  @relation("TransferToSite", fields: [toSiteId], references: [id])
+  fromContractorId         String?
+  fromContractor           Contractor?       @relation("TransferFromContractor", fields: [fromContractorId], references: [id])
+  toContractorId           String?
+  toContractor             Contractor?       @relation("TransferToContractor", fields: [toContractorId], references: [id])
   initiatorType            TransferInitiator
   initiatorId              String
   status                   TransferStatus    @default(PENDING_WORKER_RESPONSE)
@@ -327,8 +431,46 @@ model SiteTransferRequest {
 
   @@index([workerId])
   @@index([status])
+  @@index([fromContractorId])
+  @@index([toContractorId])
   // Partial unique index (one non-terminal transfer per worker) added in migration SQL.
 }
+
+model WorkerPassToken {
+  id          String    @id @default(uuid())
+  tokenHash   String    @unique
+  tokenPrefix String
+  workerId    String
+  worker      Worker    @relation(fields: [workerId], references: [id])
+  expiresAt   DateTime
+  usedAt      DateTime?
+  usedById    String?
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([workerId])
+  @@index([tokenHash])
+  @@index([expiresAt])
+}
+
+model SiteJoinRequest {
+  id          String           @id @default(uuid())
+  workerId    String
+  worker      Worker           @relation(fields: [workerId], references: [id])
+  siteId      String
+  site        ConstructionSite @relation("JoinRequests", fields: [siteId], references: [id])
+  status      JoinRequestStatus @default(PENDING)
+  decidedById String? // Contractor user id
+  decidedAt   DateTime?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@index([workerId])
+  @@index([siteId])
+  @@index([status])
+}
+
+// Partial unique index in migration SQL: one open join request per worker.
 
 model IdempotencyKey {
   id        String   @id @default(uuid())
@@ -351,4 +493,329 @@ model AuditLog {
   createdAt  DateTime @default(now())
 
   @@index([entityType, entityId])
+}
+
+// ---- Admin module (spec §10–§13) ------------------------------------------
+
+/// One report per travel case; duplicates are prevented by a unique constraint.
+model TravelReport {
+  id                     String            @id @default(uuid())
+  travelRecordId         String
+  travelRecord           TravelRecord      @relation(fields: [travelRecordId], references: [id])
+  workerId               String
+  worker                 Worker            @relation(fields: [workerId], references: [id])
+  departureDate          DateTime?
+  destinationState       String?
+  reason                 String // Contractor's mandatory reason/comment
+  status                 TravelReportStatus @default(OPEN)
+  reviewNote             String?
+  reviewedById           String?
+  reviewedAt             DateTime?
+  submittedByContractorId String
+  createdAt              DateTime          @default(now())
+  updatedAt              DateTime          @updatedAt
+
+  @@unique([travelRecordId])
+  @@index([workerId])
+  @@index([status])
+}
+
+/// Audience-based notifications. Admin, facilities, and staff recipients are
+/// notified via their role or facility/user id; events carry a unique dedupeKey.
+model Notification {
+  id               String    @id @default(uuid())
+  audienceRole     Role?
+  audienceUserId   String?
+  audienceFacilityId String?
+  audienceFacility Facility? @relation(fields: [audienceFacilityId], references: [id])
+  type             String
+  title            String
+  body             String
+  entityType       String?
+  entityId         String?
+  dedupeKey        String    @unique
+  readAt           DateTime?
+  acknowledgedAt   DateTime?
+  actionTaken      String?
+  actionTakenAt    DateTime?
+  actionTakenById  String?
+  createdAt        DateTime  @default(now())
+
+  @@index([audienceRole])
+  @@index([audienceUserId])
+  @@index([audienceFacilityId])
+  @@index([createdAt])
+}
+
+// ============================================================================
+// Phase 1 Additions: Facilities, Staff Assignments, Notifications, Households,
+// Consents, Profile Corrections, and Translations
+// ============================================================================
+
+enum FacilityType {
+  PHC
+  UHC
+}
+
+enum HouseholdRelationship {
+  SPOUSE
+  CHILD
+  PARENT
+  SIBLING
+  OTHER_FAMILY
+  ROOMMATE
+  OTHER
+}
+
+enum TravelDirection {
+  LEAVING_GOA
+  ENTERING_GOA
+}
+
+enum DepartureConfirmationStatus {
+  PENDING_CONFIRMATION
+  CONFIRMED
+  REJECTED
+  CANCELLED
+}
+
+enum CorrectionStatus {
+  SUBMITTED
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  COMPLETED
+}
+
+enum ConsentStatus {
+  ACCEPTED
+  DECLINED
+}
+
+enum TranslationStatus {
+  PENDING
+  TRANSLATED
+  FAILED
+  REVIEWED
+}
+
+enum EscalationAlertStatus {
+  SENT
+  ACKNOWLEDGED
+  ACTIONED
+}
+
+model Facility {
+  id           String       @id @default(uuid())
+  facilityCode String       @unique
+  name         String
+  type         FacilityType
+  state        String       @default("Goa")
+  district     String
+  taluka       String
+  address      String?
+  latitude     Float?
+  longitude    Float?
+  contactPhone String?
+  contactEmail String?
+  active       Boolean      @default(true)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  staffAssignments FacilityStaffAssignment[]
+  screenings       InitialScreening[]
+  travelArrivals   TravelRecord[]
+  escalationAlerts FacilityEscalationAlert[]
+  notifications    Notification[]
+
+  @@index([type])
+  @@index([district])
+  @@index([taluka])
+  @@index([active])
+}
+
+model FacilityStaffAssignment {
+  id           String    @id @default(uuid())
+  facilityId   String
+  facility     Facility  @relation(fields: [facilityId], references: [id])
+  userId       String
+  user         User      @relation(fields: [userId], references: [id])
+  role         Role
+  active       Boolean   @default(true)
+  startDate    DateTime  @default(now())
+  endDate      DateTime?
+  assignedById String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([facilityId, active])
+  @@index([userId, active])
+  @@index([role])
+}
+
+model FacilityEscalationAlert {
+  id                 String                @id @default(uuid())
+  diagnosticResultId String
+  diagnosticResult   DiagnosticResult      @relation(fields: [diagnosticResultId], references: [id])
+  facilityId         String
+  facility           Facility              @relation(fields: [facilityId], references: [id])
+  adminId            String
+  admin              User                  @relation("AdminAlertSender", fields: [adminId], references: [id])
+  reason             String
+  status             EscalationAlertStatus @default(SENT)
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+
+  recipients EscalationRecipient[]
+
+  @@index([diagnosticResultId])
+  @@index([facilityId])
+  @@index([adminId])
+  @@index([status])
+}
+
+model EscalationRecipient {
+  id                String                @id @default(uuid())
+  alertId           String
+  alert             FacilityEscalationAlert @relation(fields: [alertId], references: [id])
+  clinicianId       String
+  clinician         User                  @relation(fields: [clinicianId], references: [id])
+  deliveredAt       DateTime              @default(now())
+  acknowledgedAt    DateTime?
+  actionTaken       String?
+  actionTakenAt     DateTime?
+  status            EscalationAlertStatus @default(SENT)
+
+  @@index([alertId])
+  @@index([clinicianId])
+  @@index([status])
+}
+
+model HouseholdMember {
+  id                String                @id @default(uuid())
+  // Stable human-facing member code (e.g. M3-HH-7F3K9A-01) - mandatory unique identity
+  memberCode        String                @unique
+  workerId          String
+  worker            Worker                @relation(fields: [workerId], references: [id])
+  fullName          String?
+  relationship      HouseholdRelationship
+  ageOrDob          String?
+  gender            String?
+  preferredLanguage Language              @default(en)
+  phoneAvailable    Boolean               @default(false)
+  phone             String?
+  livesInSameRoom   Boolean               @default(true)
+  isDependent       Boolean               @default(false)
+  active            Boolean               @default(true)
+  createdById       String?
+  lastUpdatedById   String?
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  assessments HouseholdAssessment[]
+
+  @@index([workerId])
+  @@index([workerId, fullName])
+  @@index([isDependent])
+  @@index([active])
+}
+
+model HouseholdAssessment {
+  id                  String           @id @default(uuid())
+  memberId            String
+  member              HouseholdMember  @relation(fields: [memberId], references: [id])
+  clinicianId         String
+  clinician           User             @relation("AssessingClinician", fields: [clinicianId], references: [id])
+  assessedAt          DateTime         @default(now())
+  memberPresent       Boolean          @default(true)
+  workerPresent       Boolean          @default(false)
+  symptoms            Json             @default("[]")
+  clinicalHistory     String?
+  examinationFindings String?
+  testRequested       Boolean          @default(false)
+  testType            TestType?
+  testResult          DiagnosticResultValue?
+  diagnosis           String?
+  treatment           String?
+  referralInfo        String?
+  followUpRequired    Boolean          @default(false)
+  nextFollowUpDate    DateTime?
+  clinicalNotes       String?
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+
+  @@index([memberId])
+  @@index([clinicianId])
+  @@index([assessedAt])
+}
+
+model AppInstallConsent {
+  id          String        @id @default(uuid())
+  workerId    String?
+  worker      Worker?       @relation(fields: [workerId], references: [id])
+  version     String
+  language    Language
+  status      ConsentStatus
+  deviceInfo  String?
+  appVersion  String?
+  createdAt   DateTime      @default(now())
+
+  @@index([workerId])
+  @@index([status])
+}
+
+model DataSubmissionConsent {
+  id          String        @id @default(uuid())
+  workerId    String
+  worker      Worker        @relation(fields: [workerId], references: [id])
+  version     String
+  language    Language
+  status      ConsentStatus
+  formId      String
+  deviceInfo  String?
+  appVersion  String?
+  createdAt   DateTime      @default(now())
+
+  @@index([workerId])
+  @@index([formId])
+  @@index([status])
+}
+
+model ProfileCorrectionRequest {
+  id            String           @id @default(uuid())
+  workerId      String
+  worker        Worker           @relation(fields: [workerId], references: [id])
+  fieldName     String
+  currentValue  String
+  proposedValue String
+  reason        String
+  status        CorrectionStatus @default(SUBMITTED)
+  reviewedById  String?
+  reviewedBy    User?            @relation("AdminReviewer", fields: [reviewedById], references: [id])
+  reviewedAt    DateTime?
+  adminNote     String?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  @@index([workerId])
+  @@index([status])
+  @@index([reviewedById])
+}
+
+model TranslationRecord {
+  id               String            @id @default(uuid())
+  entityType       String
+  entityId         String
+  fieldName        String
+  originalText     String
+  originalLanguage Language
+  translatedText   String?
+  status           TranslationStatus @default(PENDING)
+  service          String            @default("backend-internal")
+  reviewerId       String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  @@index([entityType, entityId])
+  @@index([status])
 }

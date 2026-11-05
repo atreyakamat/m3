@@ -3,7 +3,7 @@ import { useAsync } from '../lib/useAsync';
 import type { Role } from '@m3/shared';
 import { AppShell } from '../components/AppShell';
 import { Card, Spinner, Banner } from '../components/ui';
-import { useAuth } from '../lib/auth';
+import { useAuth } from '../lib/authContext';
 import { roleColors } from '../lib/tokens';
 
 interface DashboardDto {
