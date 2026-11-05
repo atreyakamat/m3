@@ -151,6 +151,29 @@ export function App() {
         <Route path="inbox" element={<FacilityInboxPage />} />
       </Route>
 
+      {/* Admin dashboard — standard login, ADMIN role enforced by the backend as well. */}
+      <Route
+        path="/admin"
+        element={<ProtectedRoute roles={['ADMIN']}><AdminLayout /></ProtectedRoute>}
+      >
+        <Route index element={<AdminOverview />} />
+        <Route path="sites" element={<SitesList />} />
+        <Route path="sites/new" element={<SiteForm />} />
+        <Route path="sites/:siteCode" element={<SiteDetailPage />} />
+        <Route path="sites/:siteCode/edit" element={<SiteForm />} />
+        <Route path="users" element={<UsersList />} />
+        <Route path="users/new" element={<UserForm />} />
+        <Route path="users/:id" element={<UserDetailPage />} />
+        <Route path="workers" element={<WorkersList />} />
+        <Route path="workers/:workerCode" element={<WorkerDetailPage />} />
+        <Route path="requests" element={<RequestsPage />} />
+        <Route path="transfers" element={<TransfersPage />} />
+        <Route path="travel-reports" element={<TravelReportsPage />} />
+        <Route path="travel-reports/:id" element={<TravelReportDetailPage />} />
+        <Route path="notifications" element={<NotificationsPage />} />
+        <Route path="demo-data" element={<DemoDataPage />} />
+      </Route>
+
       <Route
         path="/portal"
         element={
