@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
+import { useLocalSearchParams } from 'expo-router';
 import { INDIAN_STATES, type IndianState } from '@m3/shared';
 import { Card, Body, TextField, Button } from '@/components/ui';
 import { DatePickerField } from '@/components/DatePickerField';
@@ -39,12 +40,18 @@ type ActionTab = 'none' | 'leaving' | 'entering' | 'report';
 export default function TravelScreen() {
   const { t, i18n } = useTranslation();
   const { token } = useSession();
+  const params = useLocalSearchParams<{ action?: string }>();
 
   const [records, setRecords] = useState<TravelRecordDto[]>([]);
   const [reports, setReports] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [activeTab, setActiveTab] = useState<ActionTab>('none');
+  const [activeTab, setActiveTab] = useState<ActionTab>(() => {
+    if (params.action === 'leaving' || params.action === 'entering' || params.action === 'report') {
+      return params.action as ActionTab;
+    }
+    return 'none';
+  });
   const [helpGuideVisible, setHelpGuideVisible] = useState(false);
 
   // State selection modal
@@ -97,6 +104,12 @@ export default function TravelScreen() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (params.action === 'leaving' || params.action === 'entering' || params.action === 'report') {
+      setActiveTab(params.action as ActionTab);
+    }
+  }, [params.action]);
 
   const handleSelectState = (state: string) => {
     if (stateModalTarget === 'destination') {

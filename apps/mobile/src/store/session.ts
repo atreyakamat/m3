@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { AuthUser, Language } from '@m3/shared';
@@ -25,9 +26,44 @@ interface SessionState {
 
 async function safeGet(store: 'secure' | 'async', key: string): Promise<string | null> {
   try {
+    if (Platform.OS === 'web') {
+      return await AsyncStorage.getItem(key);
+    }
     return store === 'secure' ? await SecureStore.getItemAsync(key) : await AsyncStorage.getItem(key);
   } catch {
-    return null;
+    return await AsyncStorage.getItem(key).catch(() => null);
+  }
+}
+
+async function safeSet(store: 'secure' | 'async', key: string, val: string): Promise<void> {
+  try {
+    if (Platform.OS === 'web') {
+      await AsyncStorage.setItem(key, val);
+      return;
+    }
+    if (store === 'secure') {
+      await SecureStore.setItemAsync(key, val);
+    } else {
+      await AsyncStorage.setItem(key, val);
+    }
+  } catch {
+    await AsyncStorage.setItem(key, val).catch(() => {});
+  }
+}
+
+async function safeDelete(store: 'secure' | 'async', key: string): Promise<void> {
+  try {
+    if (Platform.OS === 'web') {
+      await AsyncStorage.removeItem(key);
+      return;
+    }
+    if (store === 'secure') {
+      await SecureStore.deleteItemAsync(key);
+    } else {
+      await AsyncStorage.removeItem(key);
+    }
+  } catch {
+    await AsyncStorage.removeItem(key).catch(() => {});
   }
 }
 
@@ -102,23 +138,15 @@ export const useSession = create<SessionState>((set, get) => ({
     if (user.preferredLanguage) {
       await get().setLanguage(user.preferredLanguage);
     }
-    try {
-      await SecureStore.setItemAsync(TOKEN_KEY, token);
-      await AsyncStorage.setItem(USER_KEY, JSON.stringify(user));
-    } catch {
-      /* non-fatal; session still active in memory */
-    }
+    await safeSet('secure', TOKEN_KEY, token);
+    await safeSet('async', USER_KEY, JSON.stringify(user));
   },
 
   signOut: async () => {
     set({ token: null, user: null, selectedSiteCode: null });
-    try {
-      await SecureStore.deleteItemAsync(TOKEN_KEY);
-      await AsyncStorage.removeItem(USER_KEY);
-      await AsyncStorage.removeItem(SELECTED_SITE_KEY);
-    } catch {
-      /* ignore */
-    }
+    await safeDelete('secure', TOKEN_KEY);
+    await safeDelete('async', USER_KEY);
+    await safeDelete('async', SELECTED_SITE_KEY);
   },
 }));
 

@@ -54,3 +54,4 @@ __pycache__/
 *.log
 logs/
 .m3/
+scratch/

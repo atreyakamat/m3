@@ -21,11 +21,12 @@ import {
 } from '@/components/worker-guide';
 import { palette, spacing, radius, fontSize, fontWeight, shadow } from '@/theme';
 
-// Section 11: Primary dashboard features (Profile, Family & Household, Travel, Transfer, Feeling Unwell).
+// Section 11: Primary dashboard features (Profile, Family & Household, Exit from Goa, Entry into Goa, Transfer, Feeling Unwell).
 const ACTIONS: { key: string; route: string; labelKey: string; color: string; descKey: string; icon: string }[] = [
   { key: 'profile', route: '/(worker)/profile', labelKey: 'nav.profile', color: palette.primary, descKey: 'nav.profileDesc', icon: '👤' },
   { key: 'household', route: '/(worker)/household', labelKey: 'nav.household', color: '#8B5CF6', descKey: 'nav.householdDesc', icon: '👨‍👩‍👧' },
-  { key: 'travel', route: '/(worker)/travel', labelKey: 'nav.travel', color: palette.info, descKey: 'nav.travelDesc', icon: '✈️' },
+  { key: 'exitGoa', route: '/(worker)/travel?action=leaving', labelKey: 'travel.exitGoaAction', color: '#EA580C', descKey: 'travel.exitGoaDesc', icon: '🛫' },
+  { key: 'enterGoa', route: '/(worker)/travel?action=entering', labelKey: 'travel.enterGoaAction', color: '#0284C7', descKey: 'travel.enterGoaDesc', icon: '🛬' },
   { key: 'transfer', route: '/(worker)/transfer', labelKey: 'nav.transfer', color: palette.accent, descKey: 'nav.transferDesc', icon: '🔄' },
   { key: 'unwell', route: '/(worker)/unwell', labelKey: 'nav.feelingUnwell', color: palette.warning, descKey: 'nav.unwellDesc', icon: '🤒' },
 ];
@@ -420,6 +421,108 @@ export default function Dashboard() {
               </View>
             </Pressable>
 
+            {/* ── Travel & Migration Surveillance (Two Prominent Actions) ───────── */}
+            <View
+              style={{
+                backgroundColor: '#F8FAFC',
+                borderRadius: radius.lg,
+                padding: spacing.md,
+                borderWidth: 1.5,
+                borderColor: '#CBD5E1',
+                ...shadow.card,
+              }}
+            >
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.sm }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1, paddingRight: spacing.sm }}>
+                  <View
+                    style={{
+                      width: 36,
+                      height: 36,
+                      borderRadius: 18,
+                      backgroundColor: '#E2E8F0',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <Text style={{ fontSize: 20 }}>🧭</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: fontSize.md, fontWeight: '700', color: '#1E293B' }}>
+                      {t('travel.cardTitle', 'Travel & Migration Surveillance')}
+                    </Text>
+                    <Text style={{ fontSize: fontSize.xs, color: '#64748B' }}>
+                      {t('travel.cardSubtitle', 'Report departures from Goa and arrivals back into Goa')}
+                    </Text>
+                  </View>
+                </View>
+                <AudioGuidanceButton
+                  text="Travel reporting. Use Exit from Goa when leaving Goa, and Entry into Goa when arriving or returning."
+                  size="small"
+                />
+              </View>
+
+              <View style={{ flexDirection: 'row', gap: spacing.sm }}>
+                {/* Exit from Goa */}
+                <Pressable
+                  onPress={() => router.push({ pathname: '/(worker)/travel', params: { action: 'leaving' } } as never)}
+                  style={({ pressed }) => ({
+                    flex: 1,
+                    backgroundColor: '#FFF7ED',
+                    borderColor: '#FDBA74',
+                    borderWidth: 1.5,
+                    borderRadius: radius.md,
+                    padding: spacing.sm,
+                    alignItems: 'center',
+                    opacity: pressed ? 0.85 : 1,
+                  })}
+                  accessibilityRole="button"
+                  accessibilityLabel="Exit from Goa"
+                >
+                  <Text style={{ fontSize: 28, marginBottom: 4 }}>🛫</Text>
+                  <Text style={{ fontSize: fontSize.sm, fontWeight: '700', color: '#9A3412', textAlign: 'center' }}>
+                    {t('travel.exitGoaAction', 'Exit from Goa')}
+                  </Text>
+                  <Text style={{ fontSize: 11, color: '#C2410C', textAlign: 'center', marginTop: 2 }}>
+                    {t('travel.leavingHint', 'Leaving Goa')}
+                  </Text>
+                </Pressable>
+
+                {/* Entry into Goa */}
+                <Pressable
+                  onPress={() => router.push({ pathname: '/(worker)/travel', params: { action: 'entering' } } as never)}
+                  style={({ pressed }) => ({
+                    flex: 1,
+                    backgroundColor: '#F0F9FF',
+                    borderColor: '#7DD3FC',
+                    borderWidth: 1.5,
+                    borderRadius: radius.md,
+                    padding: spacing.sm,
+                    alignItems: 'center',
+                    opacity: pressed ? 0.85 : 1,
+                  })}
+                  accessibilityRole="button"
+                  accessibilityLabel="Entry into Goa"
+                >
+                  <Text style={{ fontSize: 28, marginBottom: 4 }}>🛬</Text>
+                  <Text style={{ fontSize: fontSize.sm, fontWeight: '700', color: '#0369A1', textAlign: 'center' }}>
+                    {t('travel.enterGoaAction', 'Entry into Goa')}
+                  </Text>
+                  <Text style={{ fontSize: 11, color: '#0284C7', textAlign: 'center', marginTop: 2 }}>
+                    {t('travel.enteringHint', 'Entering Goa')}
+                  </Text>
+                </Pressable>
+              </View>
+
+              <Pressable
+                onPress={() => router.push('/(worker)/travel' as never)}
+                style={{ marginTop: spacing.sm, paddingTop: spacing.xs, borderTopWidth: 1, borderTopColor: '#E2E8F0', alignItems: 'center' }}
+              >
+                <Text style={{ fontSize: 11, color: '#475569', fontWeight: '600' }}>
+                  {t('travel.viewHistoryLink', 'View Travel History & Health Reports →')}
+                </Text>
+              </Pressable>
+            </View>
+
             {/* ── Section 11.1: POSITIVE MALARIA RESULT VIEW ────────────────── */}
             {isPositive && (
               <View style={styles.clinicalAlertBox}>
@@ -504,7 +607,7 @@ export default function Dashboard() {
                 {t('dashboard.quickActions')}
               </Text>
               <AudioGuidanceButton
-                text="Here are your main actions: Profile, Family and Household, Travel reporting, Site transfer, and Feeling Unwell report."
+                text="Here are your main actions: Profile, Family and Household, Exit from Goa, Entry into Goa, Site transfer, and Feeling Unwell report."
                 size="small"
               />
             </View>

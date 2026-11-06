@@ -1,5 +1,6 @@
 import { createTestApp, type TestContext } from './setup/test-app';
 import { auth, registerWorker, createContractor, createStaff, createSite } from './setup/fixtures';
+import { v4 as uuid } from 'uuid';
 
 describe('Worker Travel Reports & Household Active/Inactive Monitoring (e2e)', () => {
   let ctx: TestContext;
@@ -290,6 +291,118 @@ describe('Worker Travel Reports & Household Active/Inactive Monitoring (e2e)', (
         .set(...auth(workerToken));
       expect(workerCheck.body.members[0].active).toBe(false);
       expect(workerCheck.body.stats.inactiveCount).toBe(1);
+    });
+  });
+
+  describe('Feeling Unwell: Voice Recording & Idempotent Submission', () => {
+    it('records a symptom report with voiceData and prevents duplicates via idempotencyKey', async () => {
+      const idempotencyKey = uuid();
+      const mockVoiceData = 'data:audio/m4a;base64,AAAAHGZ0eXBtcDQyAAAAAG1wNDJtcDQxAAAACG1kYXQ=';
+
+      // 1. Worker submits symptom report with voice data
+      const unwellRes = await ctx.http()
+        .post('/api/v1/records/me/symptom-reports')
+        .set(...auth(workerToken))
+        .send({
+          symptoms: ['FEVER', 'CHILLS', 'HEADACHE'],
+          note: 'Severe shivering and high fever starting last night',
+          voiceData: mockVoiceData,
+          idempotencyKey,
+        });
+
+      expect(unwellRes.status).toBe(201);
+      expect(unwellRes.body.id).toBeDefined();
+      expect(unwellRes.body.voiceData).toBe(mockVoiceData);
+      expect(unwellRes.body.note).toContain('Severe shivering');
+      expect(unwellRes.body.symptoms).toEqual(expect.arrayContaining(['FEVER', 'CHILLS', 'HEADACHE']));
+
+      const originalId = unwellRes.body.id;
+
+      // 2. Duplicate submission with identical idempotencyKey (simulating offline replay / retry)
+      const duplicateRes = await ctx.http()
+        .post('/api/v1/records/me/symptom-reports')
+        .set(...auth(workerToken))
+        .send({
+          symptoms: ['FEVER', 'CHILLS', 'HEADACHE'],
+          note: 'Severe shivering and high fever starting last night',
+          voiceData: mockVoiceData,
+          idempotencyKey,
+        });
+
+      expect(duplicateRes.status).toBe(201);
+      expect(duplicateRes.body.id).toBe(originalId);
+
+      // 3. Database direct verification
+      const dbReport = await ctx.prisma.symptomReport.findUnique({
+        where: { id: originalId },
+      });
+      expect(dbReport).toBeDefined();
+      expect(dbReport?.voiceData).toBe(mockVoiceData);
+
+      // Verify no extra symptom report was created
+      const allReports = await ctx.prisma.symptomReport.findMany({
+        where: { workerId: dbReport!.workerId },
+      });
+      expect(allReports.length).toBe(1);
+    });
+  });
+
+  describe('Offline Queue & Reconnect Synchronisation Verification', () => {
+    it('simulates offline queueing of travel report and household update, then verifies idempotent sync', async () => {
+      const travelIdemKey = uuid();
+      const householdIdemKey = uuid();
+
+      // Simulate first online flush from outbox
+      const travelFlushRes = await ctx.http()
+        .post('/api/v1/travel/reports')
+        .set(...auth(workerToken))
+        .send({
+          comment: 'Offline filed travel report: returned from Karnataka border',
+          idempotencyKey: travelIdemKey,
+        });
+      expect(travelFlushRes.status).toBe(201);
+      const travelReportId = travelFlushRes.body.id;
+
+      // Simulate re-sync on reconnection (same outbox item re-sent)
+      const travelReFlushRes = await ctx.http()
+        .post('/api/v1/travel/reports')
+        .set(...auth(workerToken))
+        .send({
+          comment: 'Offline filed travel report: returned from Karnataka border',
+          idempotencyKey: travelIdemKey,
+        });
+      expect(travelReFlushRes.status).toBe(201);
+
+      // Add a household member
+      const hhAddRes = await ctx.http()
+        .post('/api/v1/workers/me/household')
+        .set(...auth(workerToken))
+        .send({
+          fullName: 'Sita Devi',
+          relationship: 'PARENT',
+          gender: 'female',
+          ageYears: 55,
+          isDependent: true,
+          active: true,
+        });
+      expect(hhAddRes.status).toBe(201);
+      const sitaId = hhAddRes.body.id;
+
+      // Simulate offline household status toggle to inactive
+      const hhDeactRes = await ctx.http()
+        .put(`/api/v1/workers/me/household/${sitaId}`)
+        .set(...auth(workerToken))
+        .send({ active: false });
+      expect(hhDeactRes.status).toBe(200);
+      expect(hhDeactRes.body.active).toBe(false);
+
+      // Verify member is retained and active count is 0, inactive count is 1
+      const finalHh = await ctx.http()
+        .get('/api/v1/workers/me/household')
+        .set(...auth(workerToken));
+      expect(finalHh.status).toBe(200);
+      expect(finalHh.body.stats.inactiveCount).toBe(1);
+      expect(finalHh.body.members.find((m: any) => m.id === sitaId).active).toBe(false);
     });
   });
 });
