@@ -35,6 +35,12 @@ export default function Dashboard() {
   const router = useRouter();
   const { token, user, signOut, language, setLanguage } = useSession();
   const [profile, setProfile] = useState<WorkerProfile | null>(null);
+  const [householdStats, setHouseholdStats] = useState<{
+    totalCount: number;
+    activeCount?: number;
+    inactiveCount?: number;
+    dependentCount?: number;
+  } | null>(null);
   const [currentRx, setCurrentRx] = useState<{ details: string; issuedAt: string } | null>(null);
   const [latestDiag, setLatestDiag] = useState<{ result: string; testType: string; species?: string; testDate: string } | null>(null);
   const [loading, setLoading] = useState(true);
@@ -86,6 +92,16 @@ export default function Dashboard() {
       const storedConsent = await AsyncStorage.getItem(`m3_install_consent_${workerId}`);
       if (!storedConsent) {
         setInstallConsentPrompt(true);
+      }
+
+      // Fetch household stats for surveillance tracking
+      try {
+        const hh = await workerApi.getHousehold(token);
+        if (hh?.stats) {
+          setHouseholdStats(hh.stats);
+        }
+      } catch {
+        // non-fatal
       }
 
       // If positive or has diagnostics, load clinical records
@@ -326,6 +342,80 @@ export default function Dashboard() {
               >
                 <Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: fontSize.xs }}>
                   View Pass →
+                </Text>
+              </View>
+            </Pressable>
+
+            {/* ── Family & Household Members Surveillance Card ──────────────── */}
+            <Pressable
+              onPress={() => router.push('/(worker)/household')}
+              style={({ pressed }) => ({
+                backgroundColor: '#FAF5FF',
+                borderRadius: radius.lg,
+                padding: spacing.md,
+                borderWidth: 1.5,
+                borderColor: '#D8B4FE',
+                opacity: pressed ? 0.9 : 1,
+                ...shadow.card,
+              })}
+              accessibilityRole="button"
+              accessibilityLabel="View and manage household members"
+            >
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1, paddingRight: spacing.sm }}>
+                  <View
+                    style={{
+                      width: 44,
+                      height: 44,
+                      borderRadius: 22,
+                      backgroundColor: '#F3E8FF',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <Text style={{ fontSize: 24 }}>👨‍👩‍👧‍👦</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: fontSize.md, fontWeight: '700', color: '#581C87' }}>
+                      {t('household.familyCardTitle', 'Family & Household Members')}
+                    </Text>
+                    <Text style={{ fontSize: fontSize.xs, color: '#7E22CE', marginTop: 2 }}>
+                      {householdStats
+                        ? `${householdStats.activeCount ?? householdStats.totalCount} active in Goa · ${householdStats.totalCount} registered`
+                        : t('household.familyCardSubtitle', 'Register family and roommates for free health screening')}
+                    </Text>
+                  </View>
+                </View>
+                <View
+                  style={{
+                    backgroundColor: '#7E22CE',
+                    paddingHorizontal: spacing.md,
+                    paddingVertical: spacing.sm,
+                    borderRadius: radius.md,
+                  }}
+                >
+                  <Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: fontSize.xs }}>
+                    {t('common.manage', 'Manage →')}
+                  </Text>
+                </View>
+              </View>
+
+              <View
+                style={{
+                  marginTop: spacing.sm,
+                  paddingTop: spacing.xs,
+                  borderTopWidth: 1,
+                  borderTopColor: '#E9D5FF',
+                  flexDirection: 'row',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                }}
+              >
+                <Text style={{ fontSize: 11, color: '#6B21A8', fontWeight: '600' }}>
+                  🛡️ {t('household.surveillanceBadge', 'Continuous Malaria Surveillance')}
+                </Text>
+                <Text style={{ fontSize: 11, color: '#9333EA', fontWeight: '500' }}>
+                  {householdStats?.inactiveCount ? `${householdStats.inactiveCount} inactive retained` : 'All members monitored'}
                 </Text>
               </View>
             </Pressable>

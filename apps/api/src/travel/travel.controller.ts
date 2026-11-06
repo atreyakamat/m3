@@ -37,12 +37,41 @@ export class TravelController {
     return this.travel.alertsForContractor(user.contractorId);
   }
 
+  @Get('records')
+  @Roles('WORKER')
+  @ApiOperation({ summary: 'List travel records for the authenticated worker' })
+  records(@CurrentUser() user: RequestUser) {
+    if (!user.workerId) throw new ForbiddenException('Not a worker account');
+    return this.travel.listRecordsForWorker(user.workerId);
+  }
+
+  @Get('reports')
+  @Roles('WORKER', 'CONTRACTOR', 'ADMIN')
+  @ApiOperation({ summary: 'List travel reports for current worker, contractor or admin' })
+  listReports(@CurrentUser() user: RequestUser) {
+    return this.travel.listReports({
+      workerId: user.role === 'WORKER' ? user.workerId ?? undefined : undefined,
+      contractorId: user.role === 'CONTRACTOR' ? user.contractorId ?? undefined : undefined,
+    });
+  }
+
   @Post('reports')
-  @Roles('CONTRACTOR')
-  @ApiOperation({ summary: 'Submit the single mandatory travel report for a flagged travel case (comment required)' })
+  @Roles('CONTRACTOR', 'WORKER')
+  @ApiOperation({ summary: 'Submit a travel report (by contractor for flagged case or worker for planned/completed travel)' })
   submit(@CurrentUser() user: RequestUser, @Body() dto: SubmitTravelReportDto) {
+    if (user.role === 'WORKER') {
+      if (!user.workerId) throw new ForbiddenException('Not a worker account');
+      return this.travel.submitWorkerReport(user.workerId, user.userId, dto);
+    }
     if (!user.contractorId) throw new ForbiddenException('Not a contractor account');
     return this.travel.submitReport(user.contractorId, user.userId, dto);
+  }
+
+  @Post('report')
+  @Roles('CONTRACTOR', 'WORKER')
+  @ApiOperation({ summary: 'Submit a travel report (singular alias)' })
+  submitAlias(@CurrentUser() user: RequestUser, @Body() dto: SubmitTravelReportDto) {
+    return this.submit(user, dto);
   }
 
   @Post('my-record/cancel')

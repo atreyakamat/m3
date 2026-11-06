@@ -9,12 +9,15 @@ export const createHouseholdMemberSchema = z.object({
   relationship: z.enum(HOUSEHOLD_RELATIONSHIP),
   isDependent: z.boolean().default(true),
   isRoommate: z.boolean().default(false),
+  active: z.boolean().default(true).optional(),
   phone: z.string().optional().nullable(),
   notes: z.string().max(1000).optional().nullable(),
 });
 export type CreateHouseholdMemberInput = z.infer<typeof createHouseholdMemberSchema>;
 
-export const updateHouseholdMemberSchema = createHouseholdMemberSchema.partial();
+export const updateHouseholdMemberSchema = createHouseholdMemberSchema.partial().extend({
+  active: z.boolean().optional(),
+});
 export type UpdateHouseholdMemberInput = z.infer<typeof updateHouseholdMemberSchema>;
 
 export const createHouseholdAssessmentSchema = z.object({

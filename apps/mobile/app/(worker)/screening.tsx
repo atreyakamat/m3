@@ -15,7 +15,7 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, ActivityIndicator, Alert, ScrollView, StyleSheet } from 'react-native';
+import { View, Text, ActivityIndicator, Alert, ScrollView, StyleSheet, Pressable } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
@@ -63,6 +63,12 @@ export default function ScreeningScreen() {
   const [busy, setBusy] = useState(false);
   const [siteAddress, setSiteAddress] = useState<string>('');
   const [helpGuideVisible, setHelpGuideVisible] = useState(false);
+  const [householdStats, setHouseholdStats] = useState<{
+    totalCount: number;
+    activeCount?: number;
+    inactiveCount?: number;
+    dependentCount?: number;
+  } | null>(null);
 
   // Load existing draft/record on mount
   useEffect(() => {
@@ -115,6 +121,16 @@ export default function ScreeningScreen() {
                 present_address_site_id: profile.currentSite?.siteId,
               }));
             }
+          }
+
+          // Fetch household stats
+          try {
+            const hh = await workerApi.getHousehold(token);
+            if (hh?.stats && active) {
+              setHouseholdStats(hh.stats);
+            }
+          } catch {
+            // non-fatal
           }
 
           if (!local || local.status !== 'COMPLETE' || local.syncState === 'SYNCED') {
@@ -265,7 +281,21 @@ export default function ScreeningScreen() {
           version: QUESTIONNAIRE_VERSION,
           syncState: 'SYNCED',
         });
-        Alert.alert(t('screening.title'), t('screening.completed'));
+        Alert.alert(
+          t('screening.title'),
+          t('screening.completedPromptHousehold', 'Screening completed! Do you have family members or roommates living with you in Goa to register for malaria healthcare?'),
+          [
+            {
+              text: t('household.addFamilyPrompt', 'Register Family'),
+              onPress: () => router.push('/(worker)/household'),
+            },
+            {
+              text: t('common.done', 'Go to Dashboard'),
+              onPress: () => router.replace('/(worker)/dashboard'),
+              style: 'default',
+            },
+          ],
+        );
       } catch {
         // Offline: save locally and queue outbox
         screeningLocalRepo.completeLocally(workerId, answers);
@@ -277,7 +307,21 @@ export default function ScreeningScreen() {
           version: QUESTIONNAIRE_VERSION,
           syncState: 'PENDING',
         });
-        Alert.alert(t('screening.title'), `${t('status.savedLocally')}. ${t('status.offline')}`);
+        Alert.alert(
+          t('screening.title'),
+          `${t('status.savedLocally')}. ${t('status.offline')}\n\n${t('screening.completedPromptHousehold', 'Do you have family members or roommates living with you in Goa to register for malaria healthcare?')}`,
+          [
+            {
+              text: t('household.addFamilyPrompt', 'Register Family'),
+              onPress: () => router.push('/(worker)/household'),
+            },
+            {
+              text: t('common.done', 'Go to Dashboard'),
+              onPress: () => router.replace('/(worker)/dashboard'),
+              style: 'default',
+            },
+          ],
+        );
       } finally {
         setBusy(false);
       }
@@ -291,7 +335,21 @@ export default function ScreeningScreen() {
         version: QUESTIONNAIRE_VERSION,
         syncState: 'PENDING',
       });
-      Alert.alert(t('screening.title'), t('status.savedLocally'));
+      Alert.alert(
+        t('screening.title'),
+        `${t('status.savedLocally')}\n\n${t('screening.completedPromptHousehold', 'Do you have family members or roommates living with you in Goa to register for malaria healthcare?')}`,
+        [
+          {
+            text: t('household.addFamilyPrompt', 'Register Family'),
+            onPress: () => router.push('/(worker)/household'),
+          },
+          {
+            text: t('common.done', 'Go to Dashboard'),
+            onPress: () => router.replace('/(worker)/dashboard'),
+            style: 'default',
+          },
+        ],
+      );
       setBusy(false);
     }
   }
@@ -344,6 +402,43 @@ export default function ScreeningScreen() {
               <Text style={readOnlyStyles.metaText}>🔒 {t('screening.readonlyBanner')}</Text>
             </View>
           </Card>
+
+          {/* ── Family & Household Surveillance Card at Screening ─────────── */}
+          <Pressable
+            onPress={() => router.push('/(worker)/household')}
+            style={({ pressed }) => ({
+              backgroundColor: '#FAF5FF',
+              borderRadius: radius.md,
+              padding: spacing.md,
+              borderWidth: 1.5,
+              borderColor: '#D8B4FE',
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              opacity: pressed ? 0.9 : 1,
+            })}
+            accessibilityRole="button"
+            accessibilityLabel="View and manage household members"
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1, paddingRight: spacing.sm }}>
+              <Text style={{ fontSize: 24 }}>👨‍👩‍👧‍👦</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: fontSize.sm, fontWeight: '700', color: '#581C87' }}>
+                  {t('household.familyCardTitle', 'Family & Household Members')}
+                </Text>
+                <Text style={{ fontSize: fontSize.xs, color: '#7E22CE', marginTop: 2 }}>
+                  {householdStats
+                    ? `${householdStats.activeCount ?? householdStats.totalCount} active in Goa · ${householdStats.totalCount} registered`
+                    : t('screening.declareHouseholdHint', 'Declare family members or roommates living with you')}
+                </Text>
+              </View>
+            </View>
+            <View style={{ backgroundColor: '#7E22CE', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6 }}>
+              <Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 11 }}>
+                {t('common.manage', 'Manage →')}
+              </Text>
+            </View>
+          </Pressable>
 
           {isPending ? (
             <Button
@@ -444,6 +539,43 @@ export default function ScreeningScreen() {
           actionLabel="Need Help? View Picture Guide"
           onAction={() => setHelpGuideVisible(true)}
         />
+
+        {/* ── Household Option Prompt Card During Screening ────────────── */}
+        <Pressable
+          onPress={() => router.push('/(worker)/household')}
+          style={({ pressed }) => ({
+            backgroundColor: '#FAF5FF',
+            borderRadius: radius.md,
+            padding: spacing.md,
+            borderWidth: 1.5,
+            borderColor: '#D8B4FE',
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            opacity: pressed ? 0.9 : 1,
+          })}
+          accessibilityRole="button"
+          accessibilityLabel="Register family or household members"
+        >
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1, paddingRight: spacing.sm }}>
+            <Text style={{ fontSize: 24 }}>👨‍👩‍👧‍👦</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: fontSize.sm, fontWeight: '700', color: '#581C87' }}>
+                {t('screening.householdPromptTitle', 'Living with family or roommates in Goa?')}
+              </Text>
+              <Text style={{ fontSize: fontSize.xs, color: '#7E22CE', marginTop: 2 }}>
+                {householdStats && householdStats.totalCount > 0
+                  ? `${householdStats.activeCount ?? householdStats.totalCount} active members registered. Tap to view or add.`
+                  : t('screening.householdPromptSub', 'Register dependants & roommates for free malaria checkups and medicines.')}
+              </Text>
+            </View>
+          </View>
+          <View style={{ backgroundColor: '#7E22CE', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6 }}>
+            <Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 11 }}>
+              {householdStats && householdStats.totalCount > 0 ? t('common.view', 'View →') : t('household.add', '+ Add')}
+            </Text>
+          </View>
+        </Pressable>
 
         <QuestionnaireNavigator
           answers={answers}

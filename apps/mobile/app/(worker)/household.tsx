@@ -53,6 +53,8 @@ export default function HouseholdScreen() {
   const [members, setMembers] = useState<HouseholdMemberDto[]>([]);
   const [stats, setStats] = useState<{
     totalCount: number;
+    activeCount?: number;
+    inactiveCount?: number;
     dependentCount: number;
     roommateCount: number;
     screenedCount?: number;
@@ -61,6 +63,8 @@ export default function HouseholdScreen() {
     confirmedNegativeCount?: number;
   }>({
     totalCount: 0,
+    activeCount: 0,
+    inactiveCount: 0,
     dependentCount: 0,
     roommateCount: 0,
     screenedCount: 0,
@@ -82,13 +86,14 @@ export default function HouseholdScreen() {
   const [phone, setPhone] = useState('');
   const [isDependent, setIsDependent] = useState(true);
   const [isRoommate, setIsRoommate] = useState(false);
+  const [isActive, setIsActive] = useState(true);
 
   const load = useCallback(async () => {
     if (!token) return;
     try {
       const res = await workerApi.getHousehold(token);
       setMembers(res.members || []);
-      setStats(res.stats || { totalCount: 0, dependentCount: 0, roommateCount: 0 });
+      setStats(res.stats || { totalCount: 0, activeCount: 0, inactiveCount: 0, dependentCount: 0, roommateCount: 0 });
     } catch {
       // Offline fallback
     } finally {
@@ -109,6 +114,7 @@ export default function HouseholdScreen() {
     setPhone('');
     setIsDependent(true);
     setIsRoommate(false);
+    setIsActive(true);
     setShowAddModal(true);
   };
 
@@ -121,7 +127,51 @@ export default function HouseholdScreen() {
     setPhone(m.phone || '');
     setIsDependent(m.isDependent);
     setIsRoommate(m.relationship === 'ROOMMATE' || !m.livesInSameRoom);
+    setIsActive(m.active !== false);
     setShowAddModal(true);
+  };
+
+  const handleToggleActive = (member: HouseholdMemberDto) => {
+    const newActive = member.active === false;
+    const actionText = newActive ? 'Reactivate' : 'Deactivate';
+    const confirmMsg = newActive
+      ? `Reactivate ${member.fullName || 'this member'} in your active household?`
+      : `Deactivate ${member.fullName || 'this member'}? They will remain retained under continuous health and malaria surveillance.`;
+
+    Alert.alert(
+      `${actionText} Member`,
+      confirmMsg,
+      [
+        { text: t('common.cancel', 'Cancel'), style: 'cancel' },
+        {
+          text: actionText,
+          onPress: async () => {
+            if (!token) return;
+            try {
+              await workerApi.updateHousehold(token, member.id, { active: newActive });
+              await load();
+            } catch (err: any) {
+              if (isNetworkError(err)) {
+                outboxRepo.enqueue({
+                  entityType: 'household_update',
+                  localId: uuid(),
+                  payload: { id: member.id, data: { active: newActive } },
+                });
+                Alert.alert(
+                  t('common.offline', 'Offline'),
+                  t('household.offlineStatusQueued', 'Saved offline. Member status update will sync when connectivity returns.'),
+                );
+                setMembers((prev) =>
+                  prev.map((m) => (m.id === member.id ? { ...m, active: newActive } : m)),
+                );
+              } else {
+                Alert.alert(t('common.error', 'Error'), err?.message || 'Could not update status');
+              }
+            }
+          },
+        },
+      ],
+    );
   };
 
   const handleSubmit = async () => {
@@ -136,6 +186,7 @@ export default function HouseholdScreen() {
       phone: phone.trim() || null,
       isDependent,
       isRoommate: isRoommate || relationship === 'ROOMMATE',
+      active: isActive,
     };
 
     try {
@@ -157,11 +208,19 @@ export default function HouseholdScreen() {
       await load();
     } catch (err: any) {
       if (isNetworkError(err)) {
-        outboxRepo.enqueue({
-          entityType: 'household_member',
-          localId: uuid(),
-          payload,
-        });
+        if (editingMemberId) {
+          outboxRepo.enqueue({
+            entityType: 'household_update',
+            localId: uuid(),
+            payload: { id: editingMemberId, data: payload },
+          });
+        } else {
+          outboxRepo.enqueue({
+            entityType: 'household_member',
+            localId: uuid(),
+            payload,
+          });
+        }
         setShowAddModal(false);
         Alert.alert(
           t('common.offline', 'Offline'),
@@ -214,12 +273,23 @@ export default function HouseholdScreen() {
             <Text style={styles.statNumber}>{stats.totalCount}</Text>
             <Text style={styles.statLabel}>{t('household.totalMembers', 'Total Members')}</Text>
           </View>
+          <View style={[styles.statBox, { borderColor: '#86EFAC', backgroundColor: '#F0FDF4' }]}>
+            <Text style={[styles.statNumber, { color: '#16A34A' }]}>{stats.activeCount ?? stats.totalCount}</Text>
+            <Text style={styles.statLabel}>{t('household.activeCount', 'Active (In Goa)')}</Text>
+          </View>
+          <View style={[styles.statBox, { borderColor: '#FDE68A', backgroundColor: '#FFFBEB' }]}>
+            <Text style={[styles.statNumber, { color: '#D97706' }]}>{stats.inactiveCount ?? 0}</Text>
+            <Text style={styles.statLabel}>{t('household.inactiveCount', 'Inactive (Monitored)')}</Text>
+          </View>
+        </View>
+
+        <View style={[styles.statsRow, { marginTop: 6 }]}>
           <View style={[styles.statBox, { borderColor: '#818CF8', backgroundColor: '#EEF2FF' }]}>
-            <Text style={[styles.statNumber, { color: '#4F46E5' }]}>{stats.dependentCount}</Text>
+            <Text style={[styles.statNumber, { color: '#4F46E5', fontSize: 18 }]}>{stats.dependentCount}</Text>
             <Text style={styles.statLabel}>{t('household.dependents', 'Dependents')}</Text>
           </View>
-          <View style={[styles.statBox, { borderColor: '#FBBF24', backgroundColor: '#FFFBEB' }]}>
-            <Text style={[styles.statNumber, { color: '#D97706' }]}>{stats.roommateCount}</Text>
+          <View style={[styles.statBox, { borderColor: '#CBD5E1', backgroundColor: '#F8FAFC' }]}>
+            <Text style={[styles.statNumber, { color: '#475569', fontSize: 18 }]}>{stats.roommateCount}</Text>
             <Text style={styles.statLabel}>{t('household.roommates', 'Roommates')}</Text>
           </View>
         </View>
@@ -243,6 +313,17 @@ export default function HouseholdScreen() {
             <Text style={styles.statLabel}>{t('household.negative', 'Negative')}</Text>
           </View>
         </View>
+
+        {/* Continuous Malaria Surveillance Notice Banner */}
+        <Card style={styles.surveillanceCard}>
+          <Text style={styles.surveillanceCardTitle}>🛡️ {t('household.surveillanceTitle', 'Continuous Health Surveillance')}</Text>
+          <Text style={styles.surveillanceCardText}>
+            {t(
+              'household.surveillanceNotice',
+              'All household members (active or inactive) are retained in health records. Even if a member leaves Goa or becomes inactive, their records are monitored continuously for malaria prevention and healthcare.',
+            )}
+          </Text>
+        </Card>
 
         {/* Privacy Barrier Notice */}
         <Card style={styles.privacyCard}>
@@ -291,22 +372,41 @@ export default function HouseholdScreen() {
                       <Text style={styles.memberName}>
                         {m.fullName || t('household.unnamedMember', 'Family Member')}
                       </Text>
-                      <Text style={styles.memberCodeBadge}>
-                        ID: {m.memberCode}
-                      </Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 }}>
+                        <Text style={styles.memberCodeBadge}>
+                          ID: {m.memberCode}
+                        </Text>
+                        <View style={[styles.statusBadge, m.active === false ? styles.badgeInactive : styles.badgeActive]}>
+                          <Text style={m.active === false ? styles.badgeInactiveText : styles.badgeActiveText}>
+                            {m.active === false ? '⏸ Inactive (Retained)' : '🟢 Active (Monitored)'}
+                          </Text>
+                        </View>
+                      </View>
                     </View>
                   </View>
 
-                  <Pressable
-                    onPress={() => handleOpenEdit(m)}
-                    style={styles.editButton}
-                    accessibilityRole="button"
-                    accessibilityLabel="Edit member"
-                  >
-                    <Text style={{ color: palette.primary, fontWeight: '700', fontSize: fontSize.sm }}>
-                      ✏️ {t('common.edit', 'Edit')}
-                    </Text>
-                  </Pressable>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Pressable
+                      onPress={() => handleToggleActive(m)}
+                      style={[styles.actionBtn, m.active === false ? styles.btnReactivate : styles.btnDeactivate]}
+                      accessibilityRole="button"
+                      accessibilityLabel={m.active === false ? 'Reactivate member' : 'Deactivate member'}
+                    >
+                      <Text style={[styles.actionBtnText, m.active === false ? styles.textReactivate : styles.textDeactivate]}>
+                        {m.active === false ? '▶ Reactivate' : '⏸ Deactivate'}
+                      </Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => handleOpenEdit(m)}
+                      style={styles.editButton}
+                      accessibilityRole="button"
+                      accessibilityLabel="Edit member"
+                    >
+                      <Text style={{ color: palette.primary, fontWeight: '700', fontSize: fontSize.sm }}>
+                        ✏️ {t('common.edit', 'Edit')}
+                      </Text>
+                    </Pressable>
+                  </View>
                 </View>
 
                 <View style={styles.memberDetailsRow}>
@@ -444,6 +544,24 @@ export default function HouseholdScreen() {
                   <View style={{ flex: 1 }}>
                     <Text style={styles.toggleTitle}>{t('household.isRoommateTitle', 'Is this a fellow worker / roommate?')}</Text>
                     <Text style={styles.toggleSub}>{t('household.isRoommateHint', 'Co-worker sharing living accommodation')}</Text>
+                  </View>
+                </Pressable>
+
+                {/* Active / Inactive Status Toggle (Phase 3.3) */}
+                <Pressable
+                  onPress={() => setIsActive(!isActive)}
+                  style={[styles.toggleCard, isActive && styles.toggleCardActive]}
+                >
+                  <Text style={{ fontSize: 20 }}>{isActive ? '🟢' : '⏸️'}</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.toggleTitle}>
+                      {isActive ? t('household.statusActiveTitle', 'Status: Active (Staying in Goa)') : t('household.statusInactiveTitle', 'Status: Inactive (Continuous Surveillance)')}
+                    </Text>
+                    <Text style={styles.toggleSub}>
+                      {isActive
+                        ? t('household.statusActiveHint', 'Member currently lives with you in Goa for regular health checks.')
+                        : t('household.statusInactiveHint', 'Member is away. Retained in registry for continuous malaria surveillance.')}
+                    </Text>
                   </View>
                 </Pressable>
               </View>
@@ -661,5 +779,67 @@ const styles = StyleSheet.create({
   toggleSub: {
     fontSize: fontSize.xs,
     color: palette.textMuted,
+  },
+  surveillanceCard: {
+    backgroundColor: '#F5F3FF',
+    borderColor: '#DDD6FE',
+    borderWidth: 1.5,
+    padding: spacing.md,
+  },
+  surveillanceCardTitle: {
+    fontSize: fontSize.sm,
+    fontWeight: '700',
+    color: '#6D28D9',
+    marginBottom: 4,
+  },
+  surveillanceCardText: {
+    fontSize: fontSize.xs,
+    color: '#5B21B6',
+    lineHeight: 18,
+  },
+  statusBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 4,
+  },
+  badgeActive: {
+    backgroundColor: '#DCFCE7',
+  },
+  badgeActiveText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#15803D',
+  },
+  badgeInactive: {
+    backgroundColor: '#FEF3C7',
+  },
+  badgeInactiveText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#B45309',
+  },
+  actionBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  btnReactivate: {
+    backgroundColor: '#F0FDF4',
+    borderColor: '#86EFAC',
+  },
+  btnDeactivate: {
+    backgroundColor: '#FFFBEB',
+    borderColor: '#FDE68A',
+  },
+  actionBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  textReactivate: {
+    color: '#16A34A',
+  },
+  textDeactivate: {
+    color: '#D97706',
   },
 });

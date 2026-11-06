@@ -69,6 +69,19 @@ export async function flushOutbox(token: string): Promise<number> {
         await travelApi.enter(token, payload);
         outboxRepo.markSynced(item.id);
         flushed++;
+      } else if (item.entityType === 'travel_report') {
+        const payload = JSON.parse(item.payload);
+        await travelApi.submitReport(token, {
+          ...payload,
+          idempotencyKey: item.idempotencyKey,
+        });
+        outboxRepo.markSynced(item.id);
+        flushed++;
+      } else if (item.entityType === 'household_update') {
+        const payload = JSON.parse(item.payload);
+        await workerApi.updateHousehold(token, payload.id, payload.data);
+        outboxRepo.markSynced(item.id);
+        flushed++;
       } else if (item.entityType === 'consent_install') {
         const payload = JSON.parse(item.payload);
         await workerApi.consentInstall(token, payload);

@@ -96,6 +96,12 @@ export class TravelService {
     if (!input.comment?.trim()) {
       throw new BadRequestException('A reason or comment is required');
     }
+    if (!input.workerId) {
+      throw new BadRequestException('workerId is required for contractor travel report');
+    }
+    if (!input.travelRecordId) {
+      throw new BadRequestException('travelRecordId is required for contractor travel report');
+    }
     const workerRef = input.workerId;
     const worker = await this.prisma.worker.findFirst({
       where: { OR: [{ workerCode: workerRef }, { id: workerRef }] },
@@ -164,6 +170,100 @@ export class TravelService {
     return { id: report.id, travelRecordId: report.travelRecordId, status: report.status };
   }
 
+  /** Worker submits a travel report for planned or ongoing travel. */
+  async submitWorkerReport(workerId: string, userId: string, input: SubmitTravelReportInput) {
+    if (!input.comment?.trim()) {
+      throw new BadRequestException('A reason or comment is required');
+    }
+
+    const worker = await this.prisma.worker.findUnique({ where: { id: workerId } });
+    if (!worker) throw new NotFoundException('Worker not found');
+
+    let recordId = input.travelRecordId;
+    if (recordId) {
+      const record = await this.prisma.travelRecord.findUnique({ where: { id: recordId } });
+      if (!record || record.workerId !== worker.id) {
+        throw new NotFoundException('Travel record not found for this worker');
+      }
+    } else {
+      const newRecord = await this.prisma.travelRecord.create({
+        data: {
+          workerId: worker.id,
+          planningTravel: true,
+          status: 'SUBMITTED',
+        },
+      });
+      recordId = newRecord.id;
+    }
+
+    const assignment = await this.prisma.workerSiteAssignment.findFirst({
+      where: { workerId: worker.id, active: true },
+      include: { site: true },
+    });
+    const contractorId = assignment?.site?.contractorId || 'WORKER_SELF_REPORT';
+
+    const existing = await this.prisma.travelReport.findUnique({ where: { travelRecordId: recordId } });
+    if (existing) {
+      const updated = await this.prisma.travelReport.update({
+        where: { id: existing.id },
+        data: { reason: input.comment.trim() },
+      });
+      return { id: updated.id, travelRecordId: updated.travelRecordId, status: updated.status };
+    }
+
+    const report = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.travelReport.create({
+        data: {
+          travelRecordId: recordId,
+          workerId: worker.id,
+          reason: input.comment.trim(),
+          status: 'OPEN',
+          submittedByContractorId: contractorId,
+        },
+      });
+      await this.audit.record({
+        actorId: userId,
+        action: 'TRAVEL_REPORT_SUBMITTED_BY_WORKER',
+        entityType: 'TravelReport',
+        entityId: created.id,
+        metadata: { travelRecordId: recordId, workerId: worker.id },
+        tx,
+      });
+      await this.notify.notify({
+        audienceRoles: ['ADMIN', 'CLINICIAN', 'RESEARCH_LAB'] as PrismaRole[],
+        type: 'TRAVEL_REPORT_SUBMITTED',
+        title: 'Worker travel report submitted',
+        body: `Worker ${worker.workerCode} (${worker.name}) submitted a travel report.`,
+        entityType: 'TravelReport',
+        entityId: created.id,
+        dedupeKey: `travel_report_worker:${created.id}`,
+        tx,
+      });
+      return created;
+    });
+
+    return { id: report.id, travelRecordId: report.travelRecordId, status: report.status };
+  }
+
+  async listRecordsForWorker(workerId: string) {
+    return this.prisma.travelRecord.findMany({
+      where: { workerId },
+      orderBy: { createdAt: 'desc' },
+      include: { reports: true },
+    });
+  }
+
+  async listReports(opts: { workerId?: string; contractorId?: string }) {
+    const where: any = {};
+    if (opts.workerId) where.workerId = opts.workerId;
+    if (opts.contractorId) where.submittedByContractorId = opts.contractorId;
+    return this.prisma.travelReport.findMany({
+      where,
+      include: { travelRecord: true, worker: true },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
   private async contractorSiteIds(contractorId: string): Promise<string[]> {
     const sites = await this.contractorSites(contractorId);
     return sites.map((s) => s.id);
@@ -211,6 +311,7 @@ export class TravelService {
       travelRecordId,
       status: 'CANCELLED' as const,
       departureStatus: 'CANCELLED' as const,
+      cancelled: true,
       reportPreserved: Boolean(report),
     };
   }
@@ -228,6 +329,19 @@ export class TravelService {
     const worker = await this.prisma.worker.findUnique({ where: { id: workerId } });
     if (!worker) throw new NotFoundException('Worker not found');
 
+    // Duplicate check: if a pending/active travel record already exists for the same departure date
+    const existing = await this.prisma.travelRecord.findFirst({
+      where: {
+        workerId,
+        departureDate: new Date(input.departureDate),
+        status: { not: 'CANCELLED' },
+        departureStatus: { not: DepartureConfirmationStatus.CANCELLED },
+      },
+    });
+    if (existing) {
+      return existing;
+    }
+
     const destParts = [input.destinationTown, input.destinationDistrict, input.destinationState].filter(Boolean);
     const destinationStr = destParts.length > 0 ? destParts.join(', ') : input.destinationState;
 
@@ -238,6 +352,12 @@ export class TravelService {
         departureStatus: DepartureConfirmationStatus.PENDING_CONFIRMATION,
         planningTravel: true,
         departureDate: new Date(input.departureDate),
+        returnDate: input.expectedReturnDate
+          ? new Date(input.expectedReturnDate)
+          : input.returnDate
+          ? new Date(input.returnDate)
+          : null,
+        purpose: input.purpose ?? null,
         state: input.destinationState,
         district: input.destinationDistrict ?? null,
         town: input.destinationTown ?? null,
@@ -310,6 +430,18 @@ export class TravelService {
     }
 
     if (!record) {
+      // Duplicate check: if an arrival record already exists for the same arrival date
+      const existingArrival = await this.prisma.travelRecord.findFirst({
+        where: {
+          workerId,
+          returnDate: new Date(input.arrivalDate),
+          status: { not: 'CANCELLED' },
+        },
+      });
+      if (existingArrival) {
+        return existingArrival;
+      }
+
       const originParts = [input.originTown, input.originDistrict, input.originState].filter(Boolean);
       const originStr = originParts.length > 0 ? originParts.join(', ') : input.originState ?? null;
 

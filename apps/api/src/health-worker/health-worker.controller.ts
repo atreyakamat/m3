@@ -5,6 +5,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  Patch,
   Post,
   Query,
   UseGuards,
@@ -86,6 +87,16 @@ export class HealthWorkerController {
     @Param('id') id: string,
   ) {
     return this.hwService.getHouseholdMember(user.userId, id);
+  }
+
+  @Patch('household-members/:id/status')
+  @ApiOperation({ summary: 'Update active/inactive status of a household member' })
+  updateHouseholdMemberStatus(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Body() body: { active: boolean },
+  ) {
+    return this.hwService.updateHouseholdMemberStatus(user.userId, id, body.active);
   }
 
   @Post('screening')

@@ -103,6 +103,7 @@ export interface HouseholdMemberDto {
   relationship: string;
   isDependent: boolean;
   livesInSameRoom: boolean;
+  active: boolean;
   phoneAvailable: boolean;
   phone: string | null;
   duplicateWarning?: boolean;
@@ -112,8 +113,14 @@ export interface HouseholdResponse {
   members: HouseholdMemberDto[];
   stats: {
     totalCount: number;
+    activeCount?: number;
+    inactiveCount?: number;
     dependentCount: number;
     roommateCount: number;
+    awaitingScreening?: number;
+    screenedCount?: number;
+    confirmedPositiveCount?: number;
+    confirmedNegativeCount?: number;
   };
 }
 
@@ -259,6 +266,12 @@ export const travelApi = {
     apiFetch<TravelRecordDto>('/travel/enter', { method: 'POST', token, body }),
   cancel: (token: string, travelRecordId: string, reason?: string) =>
     apiFetch('/travel/my-record/cancel', { method: 'POST', token, body: { travelRecordId, reason } }),
+  submitReport: (token: string, body: { travelRecordId?: string; comment: string; departureDate?: string; expectedReturnDate?: string; destinationState?: string }) =>
+    apiFetch<{ id: string; status: string }>('/travel/reports', { method: 'POST', token, body }),
+  getRecords: (token: string) =>
+    apiFetch<TravelRecordDto[]>('/travel/records', { token }),
+  getReports: (token: string) =>
+    apiFetch<any[]>('/travel/reports', { token }),
 };
 
 export interface TransferDto {

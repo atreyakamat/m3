@@ -6,6 +6,9 @@ export const travelLeaveSchema = z.object({
   destinationState: z.enum(INDIAN_STATES),
   destinationDistrict: z.string().optional().nullable(),
   destinationTown: z.string().optional().nullable(),
+  expectedReturnDate: z.string().optional().nullable(),
+  returnDate: z.string().optional().nullable(),
+  purpose: z.string().optional().nullable(),
   notes: z.string().max(1000).optional().nullable(),
   idempotencyKey: z.string().uuid().optional(),
 });

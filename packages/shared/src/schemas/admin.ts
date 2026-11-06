@@ -65,8 +65,8 @@ export type TravelReportReviewInput = z.infer<typeof travelReportReviewSchema>;
 // ---- contractor travel-report foundation (spec §12) -----------------------
 
 export const submitTravelReportSchema = z.object({
-  workerId: z.string().trim().min(1),
-  travelRecordId: z.string(),
+  workerId: z.string().trim().min(1).optional(),
+  travelRecordId: z.string().optional(),
   comment: z.string().trim().min(1, 'A reason or comment is required').max(2000),
 });
 export type SubmitTravelReportInput = z.infer<typeof submitTravelReportSchema>;

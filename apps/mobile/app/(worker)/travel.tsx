@@ -34,13 +34,14 @@ import {
 } from '@/components/worker-guide';
 import { palette, spacing, radius, fontSize, fontWeight } from '@/theme';
 
-type ActionTab = 'none' | 'leaving' | 'entering';
+type ActionTab = 'none' | 'leaving' | 'entering' | 'report';
 
 export default function TravelScreen() {
   const { t, i18n } = useTranslation();
   const { token } = useSession();
 
   const [records, setRecords] = useState<TravelRecordDto[]>([]);
+  const [reports, setReports] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [activeTab, setActiveTab] = useState<ActionTab>('none');
@@ -55,6 +56,8 @@ export default function TravelScreen() {
   const [destState, setDestState] = useState<string>('Bihar');
   const [destDistrict, setDestDistrict] = useState('');
   const [destTown, setDestTown] = useState('');
+  const [hasExpectedReturn, setHasExpectedReturn] = useState(false);
+  const [expectedReturnDate, setExpectedReturnDate] = useState('');
 
   // Entering Goa form states
   const [enteringDate, setEnteringDate] = useState(new Date().toISOString().slice(0, 10));
@@ -65,12 +68,20 @@ export default function TravelScreen() {
   const [treatmentGiven, setTreatmentGiven] = useState<'yes' | 'no'>('no');
   const [completedCourse, setCompletedCourse] = useState<'yes' | 'no'>('no');
 
+  // Travel Report states
+  const [reportComment, setReportComment] = useState('');
+  const [reportTravelRecordId, setReportTravelRecordId] = useState<string | undefined>(undefined);
+
   const load = useCallback(async () => {
     if (token) {
       try {
         await flushOutbox(token);
         const remote = await recordsApi.travel(token);
         setRecords(remote);
+        try {
+          const reps = await travelApi.getReports(token);
+          setReports(reps || []);
+        } catch { /* non-fatal */ }
       } catch {
         // Fallback to local
         const local = travelLocalRepo.listAll();
@@ -114,6 +125,7 @@ export default function TravelScreen() {
       destinationState: destState,
       destinationDistrict: destDistrict.trim() || null,
       destinationTown: destTown.trim() || null,
+      expectedReturnDate: hasExpectedReturn && expectedReturnDate ? expectedReturnDate : null,
     };
 
     if (token) {
@@ -140,6 +152,52 @@ export default function TravelScreen() {
       }
     }
     setSubmitting(false);
+  };
+
+  // Submit Travel Report
+  const handleSubmitReport = async () => {
+    if (!reportComment.trim()) {
+      Alert.alert(t('common.error', 'Error'), t('travel.enterCommentError', 'Please enter your travel details or health update.'));
+      return;
+    }
+    setSubmitting(true);
+    const payload = {
+      travelRecordId: reportTravelRecordId,
+      comment: reportComment.trim(),
+      destinationState: destState,
+    };
+    try {
+      if (token) {
+        await travelApi.submitReport(token, payload);
+        Alert.alert(
+          t('travel.reportSubmittedTitle', 'Travel Report Submitted'),
+          t('travel.reportSubmittedBody', 'Your travel report has been recorded and submitted to health surveillance staff.'),
+        );
+        setReportComment('');
+        setReportTravelRecordId(undefined);
+        setActiveTab('none');
+        await load();
+      }
+    } catch (err: any) {
+      if (isNetworkError(err)) {
+        outboxRepo.enqueue({
+          entityType: 'travel_report',
+          localId: uuid(),
+          payload,
+        });
+        Alert.alert(
+          t('common.offline', 'Offline'),
+          t('travel.offlineReportQueued', 'Saved offline. Your travel report will sync when connectivity returns.'),
+        );
+        setReportComment('');
+        setReportTravelRecordId(undefined);
+        setActiveTab('none');
+      } else {
+        Alert.alert(t('common.error', 'Error'), err?.message || 'Could not submit travel report');
+      }
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   // Submit Entering Goa
@@ -309,6 +367,41 @@ export default function TravelScreen() {
           </Pressable>
         </View>
 
+        {/* Action 3: SUBMIT TRAVEL REPORT (Indigo / Blue) */}
+        <Pressable
+          onPress={() => {
+            setActiveTab(activeTab === 'report' ? 'none' : 'report');
+            if (activeTab !== 'report') setReportTravelRecordId(undefined);
+          }}
+          style={({ pressed }) => [
+            styles.actionCardWide,
+            styles.actionReport,
+            activeTab === 'report' && styles.actionReportActive,
+            pressed && { opacity: 0.85 },
+          ]}
+          accessibilityRole="button"
+          accessibilityLabel="Submit a travel report or health update"
+        >
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+            <View style={[styles.actionIconWrapper, { backgroundColor: '#DBEAFE', marginBottom: 0 }]}>
+              <Text style={styles.actionIcon}>📝</Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.actionTitleReport}>
+                {t('travel.reportCardTitle', 'Submit Travel Report / Health Note')}
+              </Text>
+              <Text style={styles.actionSubtitleReport}>
+                {t('travel.reportCardSub', 'Report ongoing travel details, notes or health updates to staff')}
+              </Text>
+            </View>
+            <View style={styles.actionIndicatorBlue}>
+              <Text style={styles.actionIndicatorText}>
+                {activeTab === 'report' ? '▲ ' + t('common.close', 'Close') : '▼ ' + t('common.report', 'Report')}
+              </Text>
+            </View>
+          </View>
+        </Pressable>
+
         {/* ─── FORM 1: LEAVING GOA ────────────────────────────────────────── */}
         {activeTab === 'leaving' && (
           <Card style={styles.formCardLeaving}>
@@ -358,6 +451,26 @@ export default function TravelScreen() {
               onChangeText={setDestTown}
               placeholder="e.g. Town or village name"
             />
+
+            {/* Optional Expected Return Date */}
+            <Pressable
+              onPress={() => setHasExpectedReturn(!hasExpectedReturn)}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginVertical: spacing.xs }}
+            >
+              <Text style={{ fontSize: 18 }}>{hasExpectedReturn ? '☑️' : '◻️'}</Text>
+              <Text style={{ fontSize: fontSize.sm, color: palette.text, fontWeight: '600' }}>
+                {t('travel.hasExpectedReturn', 'I have an expected return date (वापसी की तारीख)')}
+              </Text>
+            </Pressable>
+
+            {hasExpectedReturn && (
+              <DatePickerField
+                label={t('travel.expectedReturnDate', 'Expected Return Date')}
+                value={expectedReturnDate || new Date(new Date().setDate(new Date().getDate() + 14)).toISOString().slice(0, 10)}
+                onChange={setExpectedReturnDate}
+                minimumDate={new Date(leavingDate)}
+              />
+            )}
 
             <Button
               label={submitting ? t('common.saving', 'Recording...') : t('travel.confirmDepartureBtn', 'Confirm Departure')}
@@ -493,6 +606,73 @@ export default function TravelScreen() {
           </Card>
         )}
 
+        {/* ─── FORM 3: SUBMIT TRAVEL REPORT ─────────────────────────────── */}
+        {activeTab === 'report' && (
+          <Card style={styles.formCardReport}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.sm }}>
+              <Text style={styles.formHeadingBlue}>
+                📝 {t('travel.submitReportHeading', 'Submit Travel Report / Health Update')}
+              </Text>
+              <AudioGuidanceButton
+                text="Please write any details about your journey, location, or health status for health workers and contractors."
+                size="small"
+              />
+            </View>
+
+            {/* Linked Travel Journey Selection if records exist */}
+            {records.length > 0 && (
+              <View style={styles.fieldWrapper}>
+                <Text style={styles.fieldLabel}>
+                  {t('travel.linkToJourney', 'Link to Travel Record (Optional)')}
+                </Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, paddingVertical: 4 }}>
+                  <Pressable
+                    onPress={() => setReportTravelRecordId(undefined)}
+                    style={[
+                      styles.chipButton,
+                      !reportTravelRecordId && styles.chipButtonActive,
+                    ]}
+                  >
+                    <Text style={[styles.chipText, !reportTravelRecordId && styles.chipTextActive]}>
+                      General Update
+                    </Text>
+                  </Pressable>
+                  {records.map((r) => (
+                    <Pressable
+                      key={r.id}
+                      onPress={() => setReportTravelRecordId(r.id)}
+                      style={[
+                        styles.chipButton,
+                        reportTravelRecordId === r.id && styles.chipButtonActive,
+                      ]}
+                    >
+                      <Text style={[styles.chipText, reportTravelRecordId === r.id && styles.chipTextActive]}>
+                        {r.destination || r.state || 'Journey'} ({r.departureDate?.slice(0, 10) || 'Date'})
+                      </Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+              </View>
+            )}
+
+            <TextField
+              label={t('travel.reportCommentLabel', 'Travel Details / Symptoms / Location *')}
+              value={reportComment}
+              onChangeText={setReportComment}
+              placeholder="e.g. Arrived safely at village, feeling well, or experiencing fever..."
+              multiline
+              numberOfLines={3}
+            />
+
+            <Button
+              label={submitting ? t('common.saving', 'Submitting...') : t('travel.submitReportBtn', 'Submit Travel Report')}
+              onPress={handleSubmitReport}
+              disabled={submitting}
+              style={{ backgroundColor: '#2563EB', marginTop: spacing.sm }}
+            />
+          </Card>
+        )}
+
         {/* ─── TRAVEL HISTORY ────────────────────────────────────────────── */}
         <View style={{ marginTop: spacing.md }}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.xs }}>
@@ -573,23 +753,63 @@ export default function TravelScreen() {
                     </View>
                   ) : null}
 
-                  {isPending && !isCancelled ? (
-                    <View style={{ marginTop: spacing.sm, borderTopWidth: 1, borderTopColor: palette.border, paddingTop: spacing.xs }}>
+                  {/* Travel Card Actions: Add Report / Cancel */}
+                  <View style={{ marginTop: spacing.sm, borderTopWidth: 1, borderTopColor: palette.border, paddingTop: spacing.xs, flexDirection: 'row', justifyContent: 'flex-end', gap: spacing.md, alignItems: 'center' }}>
+                    {!isCancelled && (
                       <Pressable
-                        onPress={() => handleCancelTravel(r.id)}
-                        style={{ alignSelf: 'flex-end', paddingVertical: 4, paddingHorizontal: 8 }}
+                        onPress={() => {
+                          setReportTravelRecordId(r.id);
+                          setActiveTab('report');
+                        }}
+                        style={{ paddingVertical: 4, paddingHorizontal: 8 }}
                       >
-                        <Text style={{ color: palette.danger, fontWeight: '600', fontSize: fontSize.sm }}>
-                          ✕ {t('travel.cancelTrip', 'Cancel this trip')}
+                        <Text style={{ color: palette.primary, fontWeight: '700', fontSize: fontSize.xs }}>
+                          📝 {t('travel.addNote', 'Add Report / Note')}
                         </Text>
                       </Pressable>
-                    </View>
-                  ) : null}
+                    )}
+                    {isPending && !isCancelled ? (
+                      <Pressable
+                        onPress={() => handleCancelTravel(r.id)}
+                        style={{ paddingVertical: 4, paddingHorizontal: 8 }}
+                      >
+                        <Text style={{ color: palette.danger, fontWeight: '600', fontSize: fontSize.xs }}>
+                          ✕ {t('travel.cancelTrip', 'Cancel trip')}
+                        </Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
                 </Card>
               );
             })
           )}
         </View>
+
+        {/* ─── SUBMITTED TRAVEL REPORTS (Phase 2.2) ───────────────────────── */}
+        {reports.length > 0 && (
+          <View style={{ marginTop: spacing.sm }}>
+            <Text style={{ fontSize: fontSize.md, fontWeight: '700', color: palette.text, marginBottom: spacing.xs }}>
+              📝 {t('travel.submittedReportsTitle', 'Submitted Travel Reports & Notes')}
+            </Text>
+            {reports.map((rep) => (
+              <Card key={rep.id} style={{ marginBottom: spacing.xs, backgroundColor: '#F8FAFC' }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Text style={{ fontSize: fontSize.xs, color: palette.textMuted }}>
+                    📅 {rep.createdAt ? new Date(rep.createdAt).toLocaleDateString() : 'Reported'}
+                  </Text>
+                  <View style={[styles.badge, { backgroundColor: '#DBEAFE' }]}>
+                    <Text style={{ color: '#1D4ED8', fontSize: 10, fontWeight: '700' }}>
+                      ✓ {rep.status || 'SUBMITTED'}
+                    </Text>
+                  </View>
+                </View>
+                <Text style={{ fontSize: fontSize.sm, color: palette.text, marginTop: 4, fontWeight: '500' }}>
+                  {rep.comment}
+                </Text>
+              </Card>
+            ))}
+          </View>
+        )}
       </ScrollView>
 
       {/* ─── INDIAN STATES SELECTION MODAL ─────────────────────────────── */}
@@ -891,6 +1111,72 @@ const styles = StyleSheet.create({
     color: palette.text,
   },
   stateItemTextSelected: {
+    color: palette.primary,
+    fontWeight: '700',
+  },
+  actionCardWide: {
+    backgroundColor: palette.surface,
+    borderRadius: radius.lg,
+    padding: spacing.md,
+    borderWidth: 2,
+    marginTop: spacing.xs,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  actionReport: {
+    borderColor: '#93C5FD',
+    backgroundColor: '#EFF6FF',
+  },
+  actionReportActive: {
+    borderColor: '#2563EB',
+    borderWidth: 3,
+  },
+  actionTitleReport: {
+    fontSize: fontSize.md,
+    fontWeight: '800',
+    color: '#1E40AF',
+  },
+  actionSubtitleReport: {
+    fontSize: fontSize.xs,
+    color: '#2563EB',
+    marginTop: 2,
+  },
+  actionIndicatorBlue: {
+    backgroundColor: '#2563EB',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
+  },
+  formCardReport: {
+    borderColor: '#3B82F6',
+    borderWidth: 2,
+    backgroundColor: '#EFF6FF',
+  },
+  formHeadingBlue: {
+    fontSize: fontSize.md,
+    fontWeight: '700',
+    color: '#1E40AF',
+  },
+  chipButton: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
+    borderColor: palette.border,
+    borderRadius: radius.md,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  chipButtonActive: {
+    borderColor: palette.primary,
+    backgroundColor: '#EBF4FF',
+  },
+  chipText: {
+    fontSize: fontSize.xs,
+    color: palette.text,
+  },
+  chipTextActive: {
     color: palette.primary,
     fontWeight: '700',
   },

@@ -331,6 +331,8 @@ export class WorkersService {
     });
 
     const totalCount = members.length;
+    const activeCount = members.filter((m) => m.active).length;
+    const inactiveCount = members.filter((m) => !m.active).length;
     const dependentCount = members.filter((m) => m.isDependent).length;
     const roommateCount = members.filter((m) => !m.livesInSameRoom || m.relationship === 'ROOMMATE').length;
 
@@ -362,6 +364,8 @@ export class WorkersService {
       members,
       stats: {
         totalCount,
+        activeCount,
+        inactiveCount,
         dependentCount,
         roommateCount,
         awaitingScreening,
@@ -405,7 +409,7 @@ export class WorkersService {
         livesInSameRoom: !input.isRoommate,
         phoneAvailable: Boolean(input.phone?.trim()),
         phone: input.phone?.trim() || null,
-        active: true,
+        active: input.active !== undefined ? input.active : true,
       },
     });
 
@@ -445,6 +449,7 @@ export class WorkersService {
         livesInSameRoom: input.isRoommate !== undefined ? !input.isRoommate : member.livesInSameRoom,
         phone: input.phone !== undefined ? input.phone?.trim() || null : member.phone,
         phoneAvailable: input.phone !== undefined ? Boolean(input.phone?.trim()) : member.phoneAvailable,
+        active: input.active !== undefined ? input.active : member.active,
       },
     });
 

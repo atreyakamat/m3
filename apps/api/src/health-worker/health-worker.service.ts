@@ -301,6 +301,7 @@ export class HealthWorkerService {
         ageOrDob: h.ageOrDob,
         gender: h.gender,
         isDependent: h.isDependent,
+        active: h.active,
         primaryWorker: {
           id: h.worker.id,
           workerCode: h.worker.workerCode,
@@ -453,7 +454,49 @@ export class HealthWorkerService {
       },
     });
 
+    // If test is requested or diagnosis indicates malaria, dispatch clinical notification
+    const isSuspectedOrPositive =
+      input.testRequested ||
+      (input.diagnosis &&
+        (input.diagnosis.toLowerCase().includes('positive') ||
+          input.diagnosis.toLowerCase().includes('malaria') ||
+          input.diagnosis.toLowerCase().includes('suspected')));
+
+    if (isSuspectedOrPositive) {
+      await this.notification.notify({
+        audienceRoles: [Role.CLINICIAN, Role.ADMIN],
+        type: 'HOUSEHOLD_MEMBER_MALARIA_ALERT',
+        title: 'Household Member Malaria Alert',
+        body: `Malaria suspected/diagnosed for household member ${member.memberCode} (${member.fullName || 'Family Member'}). Immediate clinical review required.`,
+        entityType: 'HouseholdAssessment',
+        entityId: assessment.id,
+        dedupeKey: `hh_assessment_alert:${assessment.id}`,
+      });
+    }
+
     return assessment;
+  }
+
+  async updateHouseholdMemberStatus(userId: string, memberId: string, active: boolean) {
+    const member = await this.prisma.householdMember.findUnique({
+      where: { id: memberId },
+    });
+    if (!member) throw new NotFoundException('Household member not found');
+
+    const updated = await this.prisma.householdMember.update({
+      where: { id: memberId },
+      data: { active },
+    });
+
+    await this.audit.record({
+      actorId: userId,
+      action: active ? 'HOUSEHOLD_MEMBER_REACTIVATED' : 'HOUSEHOLD_MEMBER_DEACTIVATED',
+      entityType: 'HouseholdMember',
+      entityId: memberId,
+      metadata: { previousActive: member.active, newActive: active, workerId: member.workerId },
+    });
+
+    return updated;
   }
 
   // ─── Suspected Cases & Test Requests ──────────────────────────────────────
