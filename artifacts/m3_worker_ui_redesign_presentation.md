@@ -1,4 +1,4 @@
-# M3 Malaria Surveillance Worker App — Final Master UI Presentation
+# M3 Malaria Surveillance Worker App — Complete Master UI & Features Presentation
 
 This document presents the complete, modern, production-ready **M3 Malaria Surveillance Worker Mobile Application** for migrant construction workers under the ICMR–NIMR malaria surveillance project in Goa.
 
@@ -14,7 +14,7 @@ All screens are rendered at Android smartphone resolution ($412 \times 892$) wit
 
 ---
 
-## Slide 1 — Authentication Screens (Unchanged)
+## Part 1: Authentication & Onboarding Screens
 
 The authentication screens preserve the existing working authentication, 18 Indic language selectors, and 2-step registration with Goa worksite selection.
 
@@ -24,74 +24,9 @@ The authentication screens preserve the existing working authentication, 18 Indi
 
 ---
 
-## Slide 2 — Updated Dashboard → Entry in Goa
+## Part 2: Post-Registration Device Location Capture Screen
 
-The worker dashboard features exactly **six primary actions** in the approved arrangement. Selecting **Entry in Goa** (Top-Right, Teal) opens the streamlined arrival screen with origin selection, travel reason, device GPS location capture, and automatic background timestamping.
-
-| 1. Updated Dashboard (Top-Right: Entry in Goa) | 2. Entry in Goa Screen |
-| :---: | :---: |
-| ![Dashboard](./screenshots/final/slide2_01_dashboard.png) | ![Entry in Goa](./screenshots/final/slide2_02_entry_in_goa.png) |
-
----
-
-## Slide 3 — Updated Dashboard → Exit from Goa
-
-Selecting **Exit from Goa** (Top-Left, Blue) opens the departure screen with destination selection, departure reason (Work Completed, Vacation, etc.), device GPS location capture, and automatic background timestamping.
-
-| 1. Updated Dashboard (Top-Left: Exit from Goa) | 2. Exit from Goa Screen |
-| :---: | :---: |
-| ![Dashboard](./screenshots/final/slide2_01_dashboard.png) | ![Exit from Goa](./screenshots/final/slide3_02_exit_from_goa.png) |
-
----
-
-## Slide 4 — Updated Dashboard → Direct Add Family Member Form
-
-Selecting **Family** (Middle-Right, Green) directly displays the single-screen **Add Family Member form** (Name, Relationship, Age). No unnecessary list or extra screens.
-
-| 1. Updated Dashboard (Middle-Right: Family) | 2. Direct Add Family Member Form |
-| :---: | :---: |
-| ![Dashboard](./screenshots/final/slide2_01_dashboard.png) | ![Add Family Member](./screenshots/final/slide4_02_add_family_member.png) |
-
----
-
-## Slide 5 — Updated Dashboard → Direct Add Roommate Form
-
-Selecting **Roommate** (Bottom-Left, Purple) directly displays the single-screen **Add Roommate form** with only essential fields: Name and Age (no phone, no Aadhaar, no gender required).
-
-| 1. Updated Dashboard (Bottom-Left: Roommate) | 2. Direct Add Roommate Form |
-| :---: | :---: |
-| ![Dashboard](./screenshots/final/slide2_01_dashboard.png) | ![Add Roommate](./screenshots/final/slide5_02_add_roommate.png) |
-
----
-
-## Slide 6 — Updated Dashboard → Single-Screen Not Feeling Well Form
-
-Selecting **Not Feeling Well** (Middle-Left, Red) opens a combined, single-screen reporting form:
-1. **Who is feeling unwell**: Conditional options (Self always visible; Family shown only when family records exist; Roommate shown only when roommates exist).
-2. **Approved Symptoms**: 7 multi-select symptom cards (Fever, Chills, Headache, Sweating, Body ache, Nausea, Weakness).
-3. **Optional Voice Recording**: Integrated mic recorder with live timer, playback, and re-record.
-4. **Device Location**: Embedded GPS capture card with automatic timestamping.
-5. **Non-Diagnostic Policy**: Enforces clinical advisory disclaimer without automated diagnosis.
-
-| 1. Updated Dashboard (Middle-Left: Not Feeling Well) | 2. Combined Single-Screen Symptom Reporting |
-| :---: | :---: |
-| ![Dashboard](./screenshots/final/slide2_01_dashboard.png) | ![Not Feeling Well](./screenshots/final/slide6_02_not_feeling_well.png) |
-
----
-
-## Slide 7 — Updated Dashboard → Transfer Site
-
-Selecting **Transfer Site** (Bottom-Right, Amber/Orange) displays the worker's current assigned worksite, searchable destination site picker, device location capture, and status tracking under the approved multi-stage contractor clearance protocol.
-
-| 1. Updated Dashboard (Bottom-Right: Transfer Site) | 2. Transfer Site Screen |
-| :---: | :---: |
-| ![Dashboard](./screenshots/final/slide2_01_dashboard.png) | ![Transfer Site](./screenshots/final/slide7_02_transfer_site.png) |
-
----
-
-## Slide 8 — Post-Registration Device Location Capture Screen
-
-Immediately after successful worker account registration in Sign Up, the application transitions to this dedicated post-registration location capture step. It requests GPS permission, records coordinates with the registration timestamp, displays a clear location-captured state, and provides a graceful fallback before continuing to the dashboard.
+Immediately after successful worker account registration in Sign Up, the application transitions to this dedicated post-registration location capture step (Step 2 of 2). It requests GPS permission, records coordinates with the registration timestamp, displays a clear location-captured state, and provides a graceful fallback before continuing to the dashboard.
 
 | Post-Registration Location Capture Step (Registration Step 2 of 2) |
 | :---: |
@@ -99,7 +34,79 @@ Immediately after successful worker account registration in Sign Up, the applica
 
 ---
 
-### Media & Connected Journey Recording
-- **Connected Worker Journey Recording (MP4)**: `artifacts/recordings/connected_worker_journey.mp4`
-- **Connected Worker Journey Recording (WebM)**: `artifacts/recordings/connected_worker_journey.webm`
-- **All Final Screen Captures**: `artifacts/screenshots/final/`
+## Part 3: Master Dashboard — Primary Actions & Surveillance Worksite Hub
+
+The worker dashboard features the approved **six primary actions** in the top 2-column grid, followed directly by the **Surveillance Records & Worksite Hub** providing 1-tap access to Construction Site details, Worker Profile, Initial Screening baseline records, and Household Management.
+
+| Master Worker Dashboard |
+| :---: |
+| ![Master Worker Dashboard](./screenshots/final/slide2_01_dashboard.png) |
+
+---
+
+## Part 4: Travel Surveillance — Entry and Exit in Goa
+
+Both travel screens combine device GPS capture and automatic timestamping with the full approved ICMR–NIMR clinical travel surveillance protocol (origin/destination 36-state picker, town/district, travel modes, expected return date, pre-travel and travel fever questions, and treatment details).
+
+| Entry in Goa (Teal) | Exit from Goa (Blue) |
+| :---: | :---: |
+| ![Entry in Goa](./screenshots/final/slide2_02_entry_in_goa.png) | ![Exit from Goa](./screenshots/final/slide3_02_exit_from_goa.png) |
+
+---
+
+## Part 5: Household Surveillance — Hub, Direct Family & Roommate Workflows
+
+Household management maintains complete epidemiological continuity:
+1. **Household Overview Hub**: Displays member list, total count, active/inactive counts, reactivation toggles, and continuous retention (records never deleted).
+2. **Direct Add Family Member**: Single-screen form with Name, Relationship (Spouse, Child, Parent, Sibling, Other), and Age.
+3. **Direct Add Roommate**: Single-screen form with Name and Age only (no phone, no Aadhaar, no gender required).
+
+| 1. Household Overview Hub | 2. Add Family Member (Green) | 3. Add Roommate (Purple) |
+| :---: | :---: | :---: |
+| ![Household Hub](./screenshots/final/screen08_household_hub.png) | ![Add Family Member](./screenshots/final/slide4_02_add_family_member.png) | ![Add Roommate](./screenshots/final/slide5_02_add_roommate.png) |
+
+---
+
+## Part 6: Clinical Reporting — Single-Screen Not Feeling Well Form
+
+Selecting **Not Feeling Well** (Red) opens a combined, single-screen reporting form:
+1. **Who is feeling unwell**: Conditional options (Self always visible; Family shown only when family records exist; Roommate shown only when roommates exist).
+2. **Approved Symptoms**: 7 multi-select symptom cards (Fever, Chills, Headache, Sweating, Body ache, Nausea, Weakness).
+3. **Optional Voice Recording**: Integrated mic recorder with live timer, playback, and re-record.
+4. **Device Location**: Embedded GPS capture card with automatic timestamping.
+5. **Non-Diagnostic Policy**: Enforces clinical advisory disclaimer without automated diagnosis.
+
+| Single-Screen Not Feeling Well Form |
+| :---: |
+| ![Not Feeling Well](./screenshots/final/slide6_02_not_feeling_well.png) |
+
+---
+
+## Part 7: Worksite Transfer Workflow
+
+Selecting **Transfer Site** (Amber/Orange) displays the worker's current assigned worksite, searchable destination site picker, device location capture, and status tracking under the approved multi-stage contractor clearance protocol (worker-initiated needs current contractor + destination contractor; contractor-initiated needs worker acceptance + current contractor release).
+
+| Worksite Transfer Request |
+| :---: |
+| ![Transfer Site](./screenshots/final/slide7_02_transfer_site.png) |
+
+---
+
+## Part 8: Construction Site, Worker Profile & Initial Screening Baseline
+
+All existing worker records and surveillance baseline features are retained and fully accessible:
+1. **Construction Site**: Displays assigned site name, ID, address in Goa, contractor company, NIMR surveillance desk contact, safety officer contact, and transfer CTA.
+2. **Worker Profile**: Authenticated Worker ID (`M3-R2G6N3`), demographics, masked Aadhaar toggle (`formatMaskedAadhaar`), restricted demographic corrections, and test history.
+3. **Initial Screening**: Preserves approved Sections I–IV baseline questionnaire (`Questionnaire Updated 1 Sept 2026.docx`), consent gate, SQLite offline drafts, and read-only mode for returning workers.
+
+| 1. Construction Site | 2. Worker Profile & Demographics | 3. Initial Screening Baseline |
+| :---: | :---: | :---: |
+| ![Construction Site](./screenshots/final/screen13_construction_site.png) | ![Worker Profile](./screenshots/final/screen14_worker_profile.png) | ![Initial Screening](./screenshots/final/screen15_initial_screening.png) |
+
+---
+
+## Part 9: Connected Worker Journey Video Recording
+
+The full end-to-end connected worker journey walkthrough has been recorded and verified across all screens:
+- **MP4 Video**: `artifacts/recordings/connected_worker_journey.mp4`
+- **WebM Video**: `artifacts/recordings/connected_worker_journey.webm`
