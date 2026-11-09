@@ -1,49 +1,60 @@
 /**
- * UnwellScreen — Feeling Unwell: Symptom Selection & Voice Message Reporting.
+ * UnwellScreen — Not Feeling Well: Dual Symptom & Voice Reporting for Malaria Surveillance.
  *
- * Implements Section 12 requirements:
- * - Option A: Select symptoms from approved clinical questionnaire list.
- * - Option B: Record voice message with timer, playback, delete & re-record.
- * - Supports Option A, Option B, or both.
- * - Confirmation alert before submission.
- * - Saves securely and links report to Worker ID and submission date.
- * - Offline outbox queueing with idempotency keys.
- * - Strict non-diagnostic disclaimer: reports never alter malaria status.
+ * Implements:
+ * - Method A: Send Symptoms (Fever, Chills/shivering, Headache, Sweating, Body pain, Nausea/vomiting, Weakness/fatigue)
+ *   with multiple selection, onset date, and optional notes.
+ * - Method B: Record Voice (Mic icon, Start, live Timer, Stop, Playback, Re-record, Attach/Submit).
+ * - Voice is optional; can submit symptoms alone, voice alone, or both.
+ * - Strict non-diagnostic disclaimer: never automatically marks worker positive.
+ * - Submission confirmation screen with reporting status.
+ * - Offline SQLite outbox queueing.
  */
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, Pressable, Alert, StyleSheet, ActivityIndicator } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  View,
+  Text,
+  ScrollView,
+  Pressable,
+  Alert,
+  Modal,
+  StyleSheet,
+  ActivityIndicator,
+} from 'react-native';
+import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { Audio } from 'expo-av';
-import { WORKER_SCREENING_SECTIONS } from '@m3/shared';
-import { Screen, Card, TextField, Button, Body } from '@/components/ui';
-import { SyncStateChip } from '@/components/StatusChips';
+import { Screen, Card, TextField, Button } from '@/components/ui';
+import { DatePickerField } from '@/components/DatePickerField';
 import { WorkerHeader } from '@/components/WorkerHeader';
 import { AudioGuidanceButton } from '@/components/AudioGuidanceButton';
-import {
-  WorkerGuideCard,
-  WorkerActionGuide,
-} from '@/components/worker-guide';
-import { recordsApi, ApiError, isNetworkError } from '@/api';
+import { recordsApi, isNetworkError } from '@/api';
 import { useSession } from '@/store/session';
 import { outboxRepo, uuid } from '@/db/outbox';
-import { palette, spacing, radius, fontSize, fontWeight } from '@/theme';
+import { palette, spacing, radius, fontSize, fontWeight, shadow } from '@/theme';
 
-function symptomOptions() {
-  const clinical = WORKER_SCREENING_SECTIONS.find((s) => s.id === 'clinical');
-  return clinical?.fields.find((f) => f.id === 'associated_symptoms')?.options ?? [];
-}
+const APPROVED_SYMPTOMS = [
+  { id: 'fever', label: 'Fever', hindi: 'बुखार', icon: '🌡️' },
+  { id: 'chills', label: 'Chills / Shivering', hindi: 'ठंड लगना / कंपकंपी', icon: '🥶' },
+  { id: 'headache', label: 'Headache', hindi: 'सिरदर्द', icon: '🤕' },
+  { id: 'sweating', label: 'Sweating', hindi: 'पसीना आना', icon: '💦' },
+  { id: 'body_pain', label: 'Body Pain', hindi: 'शरीर / बदन दर्द', icon: '💥' },
+  { id: 'nausea_vomiting', label: 'Nausea / Vomiting', hindi: 'उल्टी / जी मिचलाना', icon: '🤢' },
+  { id: 'weakness_fatigue', label: 'Weakness / Fatigue', hindi: 'कमजोरी / थकान', icon: '🥱' },
+];
 
 export default function UnwellScreen() {
   const { t } = useTranslation();
+  const router = useRouter();
   const { token, user } = useSession();
-  const options = useMemo(symptomOptions, []);
 
-  // Option A: Symptoms & note
-  const [selected, setSelected] = useState<string[]>([]);
-  const [note, setNote] = useState('');
+  // Method A: Symptoms
+  const [selectedSymptoms, setSelectedSymptoms] = useState<string[]>([]);
+  const [onsetDate, setOnsetDate] = useState(new Date().toISOString().slice(0, 10));
+  const [notes, setNotes] = useState('');
 
-  // Option B: Voice recording
+  // Method B: Voice Recording
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [recordDuration, setRecordDuration] = useState(0);
@@ -51,9 +62,10 @@ export default function UnwellScreen() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [recordedUri, setRecordedUri] = useState<string | null>(null);
 
-  const [busy, setBusy] = useState(false);
-  const [queuedState, setQueuedState] = useState<'none' | 'synced' | 'pending'>('none');
-  const [helpGuideVisible, setHelpGuideVisible] = useState(false);
+  // Submission state
+  const [submitting, setSubmitting] = useState(false);
+  const [submittedConfirmed, setSubmittedConfirmed] = useState(false);
+  const [submittedSummary, setSubmittedSummary] = useState<any>(null);
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -65,26 +77,22 @@ export default function UnwellScreen() {
     };
   }, [sound, recording]);
 
-  function toggleSymptom(v: string) {
-    if (v === 'none') {
-      setSelected(['none']);
-      return;
-    }
-    setSelected((cur) => {
-      const withoutNone = cur.filter((x) => x !== 'none');
-      return withoutNone.includes(v)
-        ? withoutNone.filter((x) => x !== v)
-        : [...withoutNone, v];
-    });
+  function toggleSymptom(id: string) {
+    setSelectedSymptoms((cur) =>
+      cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]
+    );
   }
 
-  // ── Voice Recording Controls ──────────────────────────────────────────────
+  // ── Voice Recording Controls ──
 
   async function startRecording() {
     try {
       const perm = await Audio.requestPermissionsAsync();
       if (!perm.granted) {
-        Alert.alert('Microphone Permission', 'Permission to access the microphone is required to record a voice message.');
+        Alert.alert(
+          'Microphone Permission',
+          'Permission to access the microphone is required to record a voice message.'
+        );
         return;
       }
 
@@ -94,18 +102,19 @@ export default function UnwellScreen() {
       });
 
       const { recording: rec } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY,
+        Audio.RecordingOptionsPresets.HIGH_QUALITY
       );
 
       setRecording(rec);
       setIsRecording(true);
       setRecordDuration(0);
+      setRecordedUri(null);
 
       timerRef.current = setInterval(() => {
-        setRecordDuration((d) => d + 1);
+        setRecordDuration((prev) => prev + 1);
       }, 1000);
     } catch {
-      Alert.alert('Audio Error', 'Could not start audio recording.');
+      Alert.alert('Recording Error', 'Could not access audio device. Please check permissions.');
     }
   }
 
@@ -113,361 +122,734 @@ export default function UnwellScreen() {
     if (!recording) return;
     try {
       if (timerRef.current) clearInterval(timerRef.current);
+      setIsRecording(false);
       await recording.stopAndUnloadAsync();
       const uri = recording.getURI();
       setRecordedUri(uri);
       setRecording(null);
-      setIsRecording(false);
     } catch {
-      Alert.alert('Audio Error', 'Could not save audio recording.');
+      Alert.alert('Error', 'Failed to save voice recording.');
     }
   }
 
-  async function playRecordedAudio() {
+  async function togglePlayback() {
     if (!recordedUri) return;
+
     try {
       if (sound) {
         if (isPlaying) {
           await sound.pauseAsync();
           setIsPlaying(false);
-          return;
         } else {
           await sound.playAsync();
           setIsPlaying(true);
-          return;
         }
-      }
+      } else {
+        const { sound: newSound } = await Audio.Sound.createAsync(
+          { uri: recordedUri },
+          { shouldPlay: true }
+        );
+        setSound(newSound);
+        setIsPlaying(true);
 
-      const { sound: newSound } = await Audio.Sound.createAsync(
-        { uri: recordedUri },
-        { shouldPlay: true },
-        (status) => {
-          if (status.isLoaded && status.didJustFinish) {
+        newSound.setOnPlaybackStatusUpdate((st) => {
+          if (st.isLoaded && st.didJustFinish) {
             setIsPlaying(false);
           }
-        },
-      );
-      setSound(newSound);
-      setIsPlaying(true);
+        });
+      }
     } catch {
-      Alert.alert('Audio Playback', 'Could not play voice recording.');
+      setIsPlaying(false);
     }
   }
 
-  async function deleteRecording() {
+  function reRecord() {
     if (sound) {
-      await sound.stopAsync();
-      await sound.unloadAsync();
+      void sound.unloadAsync();
       setSound(null);
     }
-    setRecordedUri(null);
     setIsPlaying(false);
+    setRecordedUri(null);
     setRecordDuration(0);
   }
 
-  function formatDuration(sec: number): string {
-    const m = Math.floor(sec / 60);
-    const s = sec % 60;
+  function formatTime(secs: number) {
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
     return `${m}:${s < 10 ? '0' : ''}${s}`;
   }
 
-  // ── Submit Handling ───────────────────────────────────────────────────────
+  // ── Submission Handler ──
 
-  function confirmAndSubmit() {
-    Alert.alert(
-      t('unwell.dialogTitle'),
-      t('unwell.dialogMessage'),
-      [
-        { text: t('common.cancel'), style: 'cancel' },
-        { text: t('common.submit'), onPress: () => void executeSubmit() },
-      ],
-    );
-  }
+  async function handleSubmit(type: 'symptoms_only' | 'voice_only' | 'both') {
+    if (type === 'symptoms_only' && selectedSymptoms.length === 0) {
+      Alert.alert('Selection Required', 'Please select at least one symptom from the list below.');
+      return;
+    }
+    if (type === 'voice_only' && !recordedUri) {
+      Alert.alert('Voice Note Required', 'Please record your voice message first before submitting.');
+      return;
+    }
+    if (type === 'both' && selectedSymptoms.length === 0 && !recordedUri) {
+      Alert.alert('Details Required', 'Please select your symptoms or record a voice message.');
+      return;
+    }
 
-  async function executeSubmit() {
-    if (!token) return;
-    const idempotencyKey = uuid();
     const payload = {
-      symptoms: selected,
-      note: note.trim() || undefined,
+      symptoms: selectedSymptoms,
+      note: notes.trim()
+        ? `Onset date: ${onsetDate}. ${notes.trim()}`
+        : `Onset date: ${onsetDate}`,
       voiceData: recordedUri || undefined,
-      idempotencyKey,
+      idempotencyKey: uuid(),
     };
 
+    setSubmitting(true);
     try {
-      setBusy(true);
-      await recordsApi.submitSymptom(token, payload);
-      setQueuedState('synced');
-      Alert.alert(t('unwell.title'), t('unwell.submitted'));
-      resetForm();
-    } catch (e) {
-      if (isNetworkError(e)) {
-        // Offline queueing
+      if (token) {
         try {
-          outboxRepo.enqueue({
-            entityType: 'symptom_report',
-            localId: uuid(),
-            payload: { symptoms: selected, note: note.trim() || undefined, voiceData: recordedUri || undefined },
-            idempotencyKey,
-          });
-          setQueuedState('pending');
-          Alert.alert(t('unwell.title'), t('unwell.savedLocally'));
-          resetForm();
-        } catch {
-          Alert.alert(t('unwell.title'), t('status.failed'));
+          await recordsApi.submitSymptom(token, payload);
+        } catch (err) {
+          if (isNetworkError(err)) {
+            outboxRepo.enqueue({
+              entityType: 'symptom_report',
+              localId: payload.idempotencyKey,
+              payload,
+            });
+          } else {
+            throw err;
+          }
         }
-      } else {
-        Alert.alert(t('unwell.title'), e instanceof ApiError ? e.message : t('status.failed'));
       }
+
+      setSubmittedSummary({
+        symptoms: selectedSymptoms,
+        hasVoice: !!recordedUri,
+        duration: recordDuration,
+        onsetDate,
+      });
+      setSubmittedConfirmed(true);
+    } catch (e: any) {
+      Alert.alert('Submission Error', e?.message || 'Could not send symptom report. Please try again.');
     } finally {
-      setBusy(false);
+      setSubmitting(false);
     }
   }
-
-  function resetForm() {
-    setSelected([]);
-    setNote('');
-    void deleteRecording();
-  }
-
-  const hasData = selected.length > 0 || note.trim().length > 0 || recordedUri !== null;
 
   return (
     <View style={{ flex: 1, backgroundColor: palette.bg }}>
       <WorkerHeader
-        title={t('unwell.title')}
-        subtitle={t('nav.feelingUnwell', 'Report Symptoms')}
+        title={t('nav.feelingUnwell', 'Not Feeling Well')}
+        subtitle="Health & Symptom Reporting"
         showBack={true}
-        hasUnsavedChanges={hasData}
         fallbackRoute="/(worker)/dashboard"
+        rightElement={
+          <AudioGuidanceButton
+            text="Feeling unwell. Tell us how you feel. You can select symptoms like fever, headache or shivering, or record a voice message. An authorized health worker will assist you. This is not an automatic malaria diagnosis."
+            size="small"
+          />
+        }
       />
-      <Screen>
-        <Card accent={palette.warning}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
-            <Text style={{ fontSize: fontSize.md, fontWeight: '700', color: palette.text, flex: 1 }}>
-              {t('unwell.title')}
+
+      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+        {/* Statutory Non-Diagnostic Disclaimer */}
+        <View style={styles.disclaimerBox}>
+          <View style={styles.disclaimerIcon}>
+            <Text style={{ fontSize: 24 }}>🛡️</Text>
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.disclaimerTitle}>Non-Diagnostic Health Reporting</Text>
+            <Text style={styles.disclaimerText}>
+              Reporting symptoms alerts the ICMR–NIMR field health team to visit your site for free testing and treatment.
+              <Text style={{ fontWeight: '700' }}> Symptom reporting is NOT an official diagnosis</Text> and will never mark you as malaria-positive without an authorized lab test.
             </Text>
-            <AudioGuidanceButton
-              text="If you are feeling unwell or have fever, select your symptoms below or record a voice message to alert health workers immediately."
-              label="Listen"
-              size="small"
+          </View>
+        </View>
+
+        {/* ── METHOD A: SEND SYMPTOMS ── */}
+        <Card style={styles.card}>
+          <View style={styles.sectionHeaderRow}>
+            <View style={[styles.methodBadge, { backgroundColor: '#E0F2FE' }]}>
+              <Text style={[styles.methodBadgeText, { color: '#0369A1' }]}>Method A</Text>
+            </View>
+            <Text style={styles.sectionTitle}>Select Your Symptoms</Text>
+          </View>
+          <Text style={styles.sectionSubtitle}>
+            Tap on all symptoms you are currently feeling (लक्षण चुनें)
+          </Text>
+
+          {/* Symptom Chips / Cards */}
+          <View style={styles.symptomsList}>
+            {APPROVED_SYMPTOMS.map((s) => {
+              const isSelected = selectedSymptoms.includes(s.id);
+              return (
+                <Pressable
+                  key={s.id}
+                  onPress={() => toggleSymptom(s.id)}
+                  style={[
+                    styles.symptomCard,
+                    isSelected && styles.symptomCardSelected,
+                  ]}
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: isSelected }}
+                >
+                  <View style={styles.symptomIconCircle}>
+                    <Text style={{ fontSize: 22 }}>{s.icon}</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.symptomLabel, isSelected && styles.symptomLabelSelected]}>
+                      {s.label}
+                    </Text>
+                    <Text style={[styles.symptomHindi, isSelected && styles.symptomHindiSelected]}>
+                      {s.hindi}
+                    </Text>
+                  </View>
+                  <View
+                    style={[
+                      styles.checkbox,
+                      isSelected && styles.checkboxSelected,
+                    ]}
+                  >
+                    {isSelected && <Text style={{ color: '#FFFFFF', fontWeight: '800', fontSize: 13 }}>✓</Text>}
+                  </View>
+                </Pressable>
+              );
+            })}
+          </View>
+
+          {/* Date of Symptom Onset */}
+          <View style={{ marginTop: spacing.md }}>
+            <DatePickerField
+              label="Date of Symptom Onset (लक्षण कब शुरू हुए) *"
+              value={onsetDate}
+              onChange={setOnsetDate}
+              maximumDate={new Date()}
             />
           </View>
-          <Body>
-            {t('unwell.intro')}
-          </Body>
-          <Text style={styles.disclaimerText}>
-            {t('unwell.disclaimer')}
-          </Text>
+
+          <TextField
+            label="Additional Information (Optional)"
+            placeholder="e.g. Taking paracetamol, high fever in evenings..."
+            value={notes}
+            onChangeText={setNotes}
+            multiline
+          />
+
+          <Button
+            label={submitting ? 'Sending...' : 'Send Symptoms Now ✓'}
+            onPress={() => handleSubmit('symptoms_only')}
+            disabled={selectedSymptoms.length === 0 || submitting}
+            style={styles.sendSymptomsBtn}
+          />
         </Card>
 
-        {/* Picture-Based Visual Guidance Card */}
-        <WorkerGuideCard
-          illustration="worker_reporting_fever"
-          title="Report Fever or Sickness"
-          audioText="If you feel sick or have fever, select symptoms or record your voice. Healthcare workers will visit you."
-          step1="Select symptoms you feel (fever, chills, headache)"
-          step2="Or hold the red button below to record a voice message"
-          step3="Health team receives an alert to visit you and provide testing"
-          actionLabel="Need Help? View Picture Guide"
-          onAction={() => setHelpGuideVisible(true)}
-        />
+        {/* ── METHOD B: RECORD VOICE MESSAGE ── */}
+        <Card style={styles.card}>
+          <View style={styles.sectionHeaderRow}>
+            <View style={[styles.methodBadge, { backgroundColor: '#F3E8FF' }]}>
+              <Text style={[styles.methodBadgeText, { color: '#6B21A8' }]}>Method B</Text>
+            </View>
+            <Text style={styles.sectionTitle}>Record Voice Note</Text>
+          </View>
+          <Text style={styles.sectionSubtitle}>
+            Can't write? Speak in your own language (आवाज़ रिकॉर्ड करें)
+          </Text>
 
-      {/* Option A — Select Symptoms */}
-      <View style={styles.sectionBox}>
-        <Text style={styles.sectionHeading}>{t('unwell.optionA')}</Text>
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.xs }}>
-          {options.map((o) => {
-            const on = selected.includes(o.value);
-            return (
-              <Pressable
-                key={o.value}
-                onPress={() => toggleSymptom(o.value)}
-                style={[styles.symptomPill, on && styles.symptomPillActive]}
-              >
-                <Text style={[styles.symptomText, on && styles.symptomTextActive]}>
-                  {t('unwell.symptoms.' + o.value, o.label)}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
-      </View>
-
-      {/* Option B — Record Voice Message */}
-      <View style={styles.sectionBox}>
-        <Text style={styles.sectionHeading}>{t('unwell.optionB')}</Text>
-        <Text style={styles.subHeading}>
-          {t('unwell.voiceHelp')}
-        </Text>
-
-        {!recordedUri ? (
-          <View style={{ alignItems: 'center', marginVertical: spacing.md }}>
-            {isRecording ? (
-              <View style={{ alignItems: 'center', gap: spacing.sm }}>
-                <View style={styles.recordingPulse}>
-                  <Text style={styles.recordingTime}>
-                    {t('unwell.recording', { time: formatDuration(recordDuration) })}
-                  </Text>
+          <View style={styles.voiceContainer}>
+            {/* Mic / Live Recording View */}
+            {!recordedUri ? (
+              <View style={styles.recordingArea}>
+                <View
+                  style={[
+                    styles.micCircle,
+                    isRecording && styles.micCircleRecording,
+                  ]}
+                >
+                  <Text style={{ fontSize: 32 }}>🎙️</Text>
                 </View>
-                <Pressable onPress={stopRecording} style={styles.stopButton}>
-                  <Text style={styles.buttonLabelLight}>{t('unwell.stopRecording')}</Text>
-                </Pressable>
+
+                {isRecording ? (
+                  <View style={{ alignItems: 'center', marginVertical: spacing.sm }}>
+                    <View style={styles.liveTimerRow}>
+                      <View style={styles.pulseDot} />
+                      <Text style={styles.recordingTimerText}>
+                        Recording: {formatTime(recordDuration)}
+                      </Text>
+                    </View>
+                    <Pressable
+                      onPress={stopRecording}
+                      style={styles.stopBtn}
+                      accessibilityRole="button"
+                    >
+                      <Text style={styles.stopBtnText}>⏹️ Stop Recording</Text>
+                    </Pressable>
+                  </View>
+                ) : (
+                  <View style={{ alignItems: 'center', marginTop: spacing.sm }}>
+                    <Pressable
+                      onPress={startRecording}
+                      style={styles.startRecordBtn}
+                      accessibilityRole="button"
+                    >
+                      <Text style={styles.startRecordBtnText}>Start Recording Voice</Text>
+                    </Pressable>
+                    <Text style={styles.voiceHint}>
+                      Tap button and explain how you are feeling
+                    </Text>
+                  </View>
+                )}
               </View>
             ) : (
-              <Pressable onPress={startRecording} style={styles.recordButton}>
-                <Text style={styles.buttonLabelLight}>{t('unwell.tapToRecord')}</Text>
-              </Pressable>
+              /* Playback & Re-record View */
+              <View style={styles.playbackCard}>
+                <View style={styles.playbackInfoRow}>
+                  <View style={styles.audioBadge}>
+                    <Text style={{ fontSize: 20 }}>🎵</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.playbackTitle}>Voice Message Ready</Text>
+                    <Text style={styles.playbackDuration}>Duration: {formatTime(recordDuration)}</Text>
+                  </View>
+                </View>
+
+                <View style={styles.playbackControlsRow}>
+                  <Pressable
+                    onPress={togglePlayback}
+                    style={styles.playBtn}
+                    accessibilityRole="button"
+                  >
+                    <Text style={styles.playBtnText}>
+                      {isPlaying ? '⏸️ Pause' : '▶️ Play'}
+                    </Text>
+                  </Pressable>
+
+                  <Pressable
+                    onPress={reRecord}
+                    style={styles.reRecordBtn}
+                    accessibilityRole="button"
+                  >
+                    <Text style={styles.reRecordBtnText}>🗑️ Re-record</Text>
+                  </Pressable>
+                </View>
+
+                <Button
+                  label={submitting ? 'Sending...' : 'Attach / Submit Voice Recording'}
+                  onPress={() => handleSubmit(selectedSymptoms.length > 0 ? 'both' : 'voice_only')}
+                  loading={submitting}
+                  style={{ marginTop: spacing.md }}
+                />
+              </View>
             )}
           </View>
-        ) : (
-          <View style={styles.playbackCard}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text style={{ fontSize: fontSize.sm, fontWeight: '700', color: palette.text }}>
-                {t('unwell.voiceRecorded', { time: formatDuration(recordDuration || 1) })}
+        </Card>
+      </ScrollView>
+
+      {/* Confirmation Screen / Modal */}
+      <Modal
+        visible={submittedConfirmed}
+        transparent
+        animationType="fade"
+      >
+        <View style={styles.confirmOverlay}>
+          <View style={styles.confirmCard}>
+            <View style={styles.confirmIcon}>
+              <Text style={{ fontSize: 36 }}>📋</Text>
+            </View>
+            <Text style={styles.confirmTitle}>Symptom Report Submitted!</Text>
+            <Text style={styles.confirmSubtitle}>
+              Your health status has been forwarded to the ICMR–NIMR field surveillance team.
+            </Text>
+
+            <View style={styles.statusBox}>
+              <View style={styles.statusPill}>
+                <Text style={styles.statusPillText}>Status: Pending Health Worker Follow-up</Text>
+              </View>
+
+              <Text style={styles.summaryLine}>
+                <Text style={{ fontWeight: '700' }}>Symptoms: </Text>
+                {submittedSummary?.symptoms?.length > 0
+                  ? submittedSummary.symptoms.join(', ')
+                  : 'Voice Note Filed'}
               </Text>
-              <Pressable onPress={deleteRecording}>
-                <Text style={{ color: palette.danger, fontWeight: '600', fontSize: fontSize.xs }}>
-                  {t('unwell.deleteReRecord')}
+              {submittedSummary?.hasVoice && (
+                <Text style={styles.summaryLine}>
+                  <Text style={{ fontWeight: '700' }}>Voice Note: </Text>
+                  Attached ({formatTime(submittedSummary.duration)})
                 </Text>
-              </Pressable>
+              )}
+              <Text style={styles.summaryLine}>
+                <Text style={{ fontWeight: '700' }}>Onset Date: </Text>
+                {submittedSummary?.onsetDate}
+              </Text>
             </View>
 
-            <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm }}>
-              <Pressable onPress={playRecordedAudio} style={styles.playButton}>
-                <Text style={styles.playButtonText}>
-                  {isPlaying ? t('unwell.pauseRecording') : t('unwell.playRecording')}
-                </Text>
-              </Pressable>
+            <View style={styles.guidanceBox}>
+              <Text style={styles.guidanceTitle}>Next Steps for Your Health:</Text>
+              <Text style={styles.guidanceItem}>• Drink plenty of clean, safe water and rest.</Text>
+              <Text style={styles.guidanceItem}>• Keep your registered mobile phone reachable.</Text>
+              <Text style={styles.guidanceItem}>• A health worker will visit your site for a free blood test.</Text>
             </View>
+
+            <Button
+              label="Return to Dashboard"
+              onPress={() => {
+                setSubmittedConfirmed(false);
+                router.replace('/(worker)/dashboard');
+              }}
+              style={{ width: '100%', marginTop: spacing.md }}
+            />
           </View>
-        )}
-      </View>
-
-      {/* Optional Note */}
-      <TextField
-        label={t('unwell.note')}
-        value={note}
-        onChangeText={setNote}
-        multiline
-        placeholder={t('unwell.notePlaceholder')}
-      />
-
-      {queuedState !== 'none' ? (
-        <View style={{ alignSelf: 'flex-start' }}>
-          <SyncStateChip state={queuedState === 'synced' ? 'SYNCED' : 'PENDING'} />
         </View>
-      ) : null}
-
-      <Button
-        label={t('unwell.submit')}
-        onPress={confirmAndSubmit}
-        loading={busy}
-        disabled={!hasData}
-      />
-      </Screen>
-
-      {/* Visual Workflow Action Guide Modal */}
-      <WorkerActionGuide
-        visible={helpGuideVisible}
-        workflow="unwell"
-        onClose={() => setHelpGuideVisible(false)}
-      />
+      </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  container: {
+    padding: spacing.md,
+    paddingBottom: spacing.xxl,
+    gap: spacing.md,
+  },
+  disclaimerBox: {
+    backgroundColor: '#FFFBEB',
+    borderRadius: radius.xl,
+    padding: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.md,
+    borderWidth: 1.5,
+    borderColor: '#FDE68A',
+  },
+  disclaimerIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#FEF3C7',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  disclaimerTitle: {
+    fontSize: fontSize.sm,
+    fontWeight: '700',
+    color: '#92400E',
+  },
   disclaimerText: {
-    fontSize: fontSize.xs,
-    color: palette.textMuted,
-    marginTop: spacing.xs,
+    fontSize: 11,
+    color: '#78350F',
+    marginTop: 2,
     lineHeight: 16,
   },
-  sectionBox: {
+  card: {
     backgroundColor: palette.surface,
-    padding: spacing.md,
+    borderRadius: radius.xl,
+    padding: spacing.lg,
+    borderWidth: 1.5,
+    borderColor: palette.border,
+    ...shadow.card,
+  },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    marginBottom: 2,
+  },
+  methodBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: radius.pill,
+  },
+  methodBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+  sectionTitle: {
+    fontSize: fontSize.md,
+    fontWeight: fontWeight.bold as '700',
+    color: palette.text,
+  },
+  sectionSubtitle: {
+    fontSize: fontSize.xs,
+    color: palette.textMuted,
+    marginBottom: spacing.md,
+  },
+  symptomsList: {
+    gap: spacing.xs,
+  },
+  symptomCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: spacing.sm,
+    borderRadius: radius.lg,
+    borderWidth: 1.5,
+    borderColor: palette.border,
+    backgroundColor: '#F8FAFC',
+    gap: spacing.sm,
+    minHeight: 56,
+  },
+  symptomCardSelected: {
+    backgroundColor: '#F0FDFA',
+    borderColor: palette.primary,
+  },
+  symptomIconCircle: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  symptomLabel: {
+    fontSize: fontSize.sm,
+    fontWeight: '700',
+    color: palette.text,
+  },
+  symptomLabelSelected: {
+    color: palette.primaryDark,
+  },
+  symptomHindi: {
+    fontSize: 11,
+    color: palette.textMuted,
+    marginTop: 1,
+  },
+  symptomHindiSelected: {
+    color: palette.primary,
+  },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: palette.borderStrong,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  checkboxSelected: {
+    backgroundColor: palette.primary,
+    borderColor: palette.primary,
+  },
+  sendSymptomsBtn: {
+    marginTop: spacing.md,
+    minHeight: 50,
+  },
+  voiceContainer: {
+    marginTop: spacing.xs,
+  },
+  recordingArea: {
+    alignItems: 'center',
+    paddingVertical: spacing.md,
+    backgroundColor: '#F8FAFC',
     borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: palette.border,
-    gap: spacing.xs,
   },
-  sectionHeading: {
-    fontSize: fontSize.md,
-    fontWeight: '700',
-    color: palette.text,
-  },
-  subHeading: {
-    fontSize: fontSize.xs,
-    color: palette.textMuted,
-  },
-  symptomPill: {
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
-    borderRadius: radius.pill,
-    borderWidth: 1.5,
+  micCircle: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
     borderColor: palette.border,
-    backgroundColor: palette.surface,
   },
-  symptomPillActive: {
-    borderColor: palette.accent,
-    backgroundColor: palette.accentSoft,
+  micCircleRecording: {
+    backgroundColor: '#FEE2E2',
+    borderColor: '#EF4444',
   },
-  symptomText: {
-    color: palette.text,
-    fontSize: fontSize.sm,
-  },
-  symptomTextActive: {
-    color: palette.accent,
-    fontWeight: '700',
-  },
-  recordButton: {
-    backgroundColor: palette.primary,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.xl,
-    borderRadius: radius.pill,
+  liveTimerRow: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    gap: 8,
+    marginBottom: spacing.sm,
   },
-  stopButton: {
-    backgroundColor: palette.danger,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.xl,
-    borderRadius: radius.pill,
-    alignItems: 'center',
-    justifyContent: 'center',
+  pulseDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#EF4444',
   },
-  buttonLabelLight: {
-    color: palette.textOnColor,
+  recordingTimerText: {
     fontSize: fontSize.md,
     fontWeight: '700',
+    color: '#B91C1C',
   },
-  recordingPulse: {
-    backgroundColor: '#FEE2E2',
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.md,
-    borderRadius: radius.sm,
+  stopBtn: {
+    backgroundColor: '#EF4444',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
   },
-  recordingTime: {
-    color: '#991B1B',
+  stopBtnText: {
+    color: '#FFFFFF',
     fontWeight: '700',
     fontSize: fontSize.sm,
+  },
+  startRecordBtn: {
+    backgroundColor: palette.primary,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    borderRadius: radius.md,
+    minHeight: 48,
+    justifyContent: 'center',
+  },
+  startRecordBtnText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: fontSize.sm,
+  },
+  voiceHint: {
+    fontSize: 11,
+    color: palette.textMuted,
+    marginTop: 6,
   },
   playbackCard: {
-    backgroundColor: '#F3F4F6',
+    backgroundColor: '#F8FAFC',
+    borderRadius: radius.lg,
     padding: spacing.md,
-    borderRadius: radius.md,
-    marginTop: spacing.xs,
+    borderWidth: 1,
+    borderColor: palette.border,
   },
-  playButton: {
+  playbackInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  audioBadge: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#EDE9FE',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  playbackTitle: {
+    fontSize: fontSize.sm,
+    fontWeight: '700',
+    color: palette.text,
+  },
+  playbackDuration: {
+    fontSize: 11,
+    color: palette.textMuted,
+  },
+  playbackControlsRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  playBtn: {
+    flex: 1,
     backgroundColor: palette.primary,
     paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
     borderRadius: radius.md,
+    alignItems: 'center',
+    minHeight: 44,
+    justifyContent: 'center',
   },
-  playButtonText: {
-    color: palette.textOnColor,
-    fontWeight: '600',
+  playBtnText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: fontSize.sm,
+  },
+  reRecordBtn: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: palette.borderStrong,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+    alignItems: 'center',
+    minHeight: 44,
+    justifyContent: 'center',
+  },
+  reRecordBtnText: {
+    color: palette.textMuted,
+    fontWeight: '700',
+    fontSize: fontSize.sm,
+  },
+  confirmOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: spacing.lg,
+  },
+  confirmCard: {
+    backgroundColor: palette.surface,
+    borderRadius: radius.xl,
+    padding: spacing.xl,
+    width: '100%',
+    maxWidth: 420,
+    alignItems: 'center',
+    ...shadow.card,
+  },
+  confirmIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: '#DCFCE7',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: spacing.md,
+  },
+  confirmTitle: {
+    fontSize: fontSize.lg,
+    fontWeight: '700',
+    color: palette.text,
+    textAlign: 'center',
+  },
+  confirmSubtitle: {
     fontSize: fontSize.xs,
+    color: palette.textMuted,
+    textAlign: 'center',
+    marginTop: 4,
+    marginBottom: spacing.md,
+  },
+  statusBox: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: radius.md,
+    padding: spacing.md,
+    width: '100%',
+    gap: 4,
+  },
+  statusPill: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: radius.pill,
+    marginBottom: 6,
+  },
+  statusPillText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#92400E',
+  },
+  summaryLine: {
+    fontSize: fontSize.xs,
+    color: palette.text,
+    lineHeight: 18,
+  },
+  guidanceBox: {
+    backgroundColor: '#F0FDFA',
+    borderRadius: radius.md,
+    padding: spacing.md,
+    width: '100%',
+    marginTop: spacing.sm,
+    borderWidth: 1,
+    borderColor: '#99F6E4',
+  },
+  guidanceTitle: {
+    fontSize: fontSize.xs,
+    fontWeight: '700',
+    color: palette.primaryDark,
+    marginBottom: 4,
+  },
+  guidanceItem: {
+    fontSize: 11,
+    color: '#0F766E',
+    lineHeight: 16,
   },
 });

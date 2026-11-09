@@ -18,6 +18,8 @@ export default function WorkerLayout() {
       }}
     >
       <Stack.Screen name="dashboard" />
+      <Stack.Screen name="entry" />
+      <Stack.Screen name="exit" />
       <Stack.Screen name="pass" />
       <Stack.Screen name="profile" />
       <Stack.Screen name="screening" />

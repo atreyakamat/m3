@@ -1,15 +1,17 @@
 /**
- * HouseholdScreen — Family & Household Member Management for Workers.
+ * HouseholdScreen — Redesigned Family & Household Member Management for Workers.
  *
  * Implements:
- * - Adding family members (Spouse, Child, Parent, Sibling, Roommate, Other)
- * - Tracking dependents vs roommates
- * - Soft duplicate warnings with mandatory unique memberCode
- * - Low literacy design with icons, large touch targets, and audio guidance
- * - Privacy protection notice (Contractors see counts only)
+ * - Household overview: total members, active in Goa, inactive retained.
+ * - Two dedicated actions: "Add Roommate" & "Add Family Member".
+ * - Dedicated Add Roommate form: Full name, mobile, age/DOB, gender, accommodation details.
+ * - Dedicated Add Family Member form: Full name, relationship, age/DOB, gender, mobile.
+ * - Continuous malaria surveillance: inactive members retained, never permanently deleted.
+ * - Duplicate member prevention.
+ * - Offline SQLite queueing and sync.
  */
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   View,
   Text,
@@ -21,825 +23,904 @@ import {
   Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { HOUSEHOLD_RELATIONSHIP, type HouseholdRelationship } from '@m3/shared';
 import { Card, Body, TextField, Button } from '@/components/ui';
+import { DatePickerField } from '@/components/DatePickerField';
 import { WorkerHeader } from '@/components/WorkerHeader';
 import { AudioGuidanceButton } from '@/components/AudioGuidanceButton';
-import { workerApi, isNetworkError, type HouseholdMemberDto, type HouseholdResponse } from '@/api';
+import { workerApi, isNetworkError, type HouseholdMemberDto } from '@/api';
 import { outboxRepo, uuid } from '@/db/outbox';
 import { useSession } from '@/store/session';
-import {
-  WorkerGuideCard,
-  WorkerActionGuide,
-  WorkerEmptyStateIllustration,
-} from '@/components/worker-guide';
-import { palette, spacing, radius, fontSize, fontWeight } from '@/theme';
+import { palette, spacing, radius, fontSize, fontWeight, shadow } from '@/theme';
 
-const RELATIONSHIP_LABELS: Record<HouseholdRelationship, { label: string; icon: string }> = {
-  SPOUSE: { label: 'Spouse (पति / पत्नी)', icon: '💍' },
-  CHILD: { label: 'Child (बच्चा)', icon: '👶' },
-  PARENT: { label: 'Parent (माता / पिता)', icon: '👴' },
-  SIBLING: { label: 'Sibling (भाई / बहन)', icon: '🧑‍🤝‍🧑' },
-  OTHER_FAMILY: { label: 'Other Family Member (परिवार का अन्य सदस्य)', icon: '👥' },
-  ROOMMATE: { label: 'Roommate (कमरे का साथी)', icon: '🏠' },
-  OTHER: { label: 'Other Relative / Member (अन्य)', icon: '👤' },
-};
+const FAMILY_RELATIONSHIPS: { id: HouseholdRelationship; label: string; icon: string }[] = [
+  { id: 'SPOUSE', label: 'Spouse (पति / पत्नी)', icon: '💍' },
+  { id: 'CHILD', label: 'Child (बच्चा)', icon: '👶' },
+  { id: 'PARENT', label: 'Parent (माता / पिता)', icon: '👴' },
+  { id: 'SIBLING', label: 'Sibling (भाई / बहन)', icon: '🧑‍🤝‍🧑' },
+  { id: 'OTHER_FAMILY', label: 'Other Family (अन्य परिजन)', icon: '👥' },
+];
 
 export default function HouseholdScreen() {
   const { t } = useTranslation();
   const { token } = useSession();
 
   const [members, setMembers] = useState<HouseholdMemberDto[]>([]);
-  const [stats, setStats] = useState<{
-    totalCount: number;
-    activeCount?: number;
-    inactiveCount?: number;
-    dependentCount: number;
-    roommateCount: number;
-    screenedCount?: number;
-    awaitingScreening?: number;
-    confirmedPositiveCount?: number;
-    confirmedNegativeCount?: number;
-  }>({
+  const [stats, setStats] = useState({
     totalCount: 0,
     activeCount: 0,
     inactiveCount: 0,
-    dependentCount: 0,
     roommateCount: 0,
-    screenedCount: 0,
-    awaitingScreening: 0,
-    confirmedPositiveCount: 0,
-    confirmedNegativeCount: 0,
+    dependentCount: 0,
   });
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [helpGuideVisible, setHelpGuideVisible] = useState(false);
 
-  // Form states
-  const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
+  // Modal form mode: 'none' | 'roommate' | 'family'
+  const [formMode, setFormMode] = useState<'none' | 'roommate' | 'family'>('none');
+
+  // Form Fields
   const [fullName, setFullName] = useState('');
-  const [relationship, setRelationship] = useState<HouseholdRelationship>('SPOUSE');
-  const [gender, setGender] = useState<'male' | 'female' | 'other'>('male');
-  const [ageYears, setAgeYears] = useState('');
   const [phone, setPhone] = useState('');
-  const [isDependent, setIsDependent] = useState(true);
-  const [isRoommate, setIsRoommate] = useState(false);
-  const [isActive, setIsActive] = useState(true);
+  const [ageYears, setAgeYears] = useState('');
+  const [dob, setDob] = useState('');
+  const [gender, setGender] = useState<'male' | 'female' | 'other'>('male');
+  const [relationship, setRelationship] = useState<HouseholdRelationship>('SPOUSE');
+  const [roomDetails, setRoomDetails] = useState('');
 
   const load = useCallback(async () => {
     if (!token) return;
     try {
       const res = await workerApi.getHousehold(token);
       setMembers(res.members || []);
-      setStats(res.stats || { totalCount: 0, activeCount: 0, inactiveCount: 0, dependentCount: 0, roommateCount: 0 });
+      const active = res.members.filter((m) => m.active).length;
+      const inactive = res.members.filter((m) => !m.active).length;
+      const roommates = res.members.filter((m) => m.relationship === 'ROOMMATE' || m.livesInSameRoom).length;
+      const dependents = res.members.filter((m) => m.isDependent).length;
+
+      setStats({
+        totalCount: res.members.length,
+        activeCount: active,
+        inactiveCount: inactive,
+        roommateCount: roommates,
+        dependentCount: dependents,
+      });
     } catch {
-      // Offline fallback
+      // offline fallback
     } finally {
       setLoading(false);
     }
   }, [token]);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  useFocusEffect(
+    useCallback(() => {
+      void load();
+    }, [load])
+  );
 
-  const handleOpenAdd = () => {
-    setEditingMemberId(null);
+  function openRoommateForm() {
     setFullName('');
-    setRelationship('SPOUSE');
-    setGender('male');
-    setAgeYears('');
     setPhone('');
-    setIsDependent(true);
-    setIsRoommate(false);
-    setIsActive(true);
-    setShowAddModal(true);
-  };
+    setAgeYears('');
+    setDob('');
+    setGender('male');
+    setRelationship('ROOMMATE');
+    setRoomDetails('');
+    setFormMode('roommate');
+  }
 
-  const handleOpenEdit = (m: HouseholdMemberDto) => {
-    setEditingMemberId(m.id);
-    setFullName(m.fullName || '');
-    setRelationship((m.relationship as HouseholdRelationship) || 'OTHER');
-    setGender((m.gender as any) || 'male');
-    setAgeYears(m.ageOrDob || '');
-    setPhone(m.phone || '');
-    setIsDependent(m.isDependent);
-    setIsRoommate(m.relationship === 'ROOMMATE' || !m.livesInSameRoom);
-    setIsActive(m.active !== false);
-    setShowAddModal(true);
-  };
+  function openFamilyForm() {
+    setFullName('');
+    setPhone('');
+    setAgeYears('');
+    setDob('');
+    setGender('male');
+    setRelationship('SPOUSE');
+    setRoomDetails('');
+    setFormMode('family');
+  }
 
-  const handleToggleActive = (member: HouseholdMemberDto) => {
-    const newActive = member.active === false;
-    const actionText = newActive ? 'Reactivate' : 'Deactivate';
-    const confirmMsg = newActive
-      ? `Reactivate ${member.fullName || 'this member'} in your active household?`
-      : `Deactivate ${member.fullName || 'this member'}? They will remain retained under continuous health and malaria surveillance.`;
+  // Toggle active / inactive status
+  async function toggleMemberActive(member: HouseholdMemberDto) {
+    if (!token) return;
+    const newActive = !member.active;
+    const title = newActive ? 'Reactivate Member?' : 'Mark as Inactive?';
+    const message = newActive
+      ? `Reactivate ${member.fullName || 'this member'} as currently residing in Goa for active surveillance?`
+      : `Mark ${member.fullName || 'this member'} as inactive? The record will remain permanently retained under continuous malaria surveillance.`;
 
-    Alert.alert(
-      `${actionText} Member`,
-      confirmMsg,
-      [
-        { text: t('common.cancel', 'Cancel'), style: 'cancel' },
-        {
-          text: actionText,
-          onPress: async () => {
-            if (!token) return;
-            try {
-              await workerApi.updateHousehold(token, member.id, { active: newActive });
-              await load();
-            } catch (err: any) {
-              if (isNetworkError(err)) {
-                outboxRepo.enqueue({
-                  entityType: 'household_update',
-                  localId: uuid(),
-                  payload: { id: member.id, data: { active: newActive } },
-                });
-                Alert.alert(
-                  t('common.offline', 'Offline'),
-                  t('household.offlineStatusQueued', 'Saved offline. Member status update will sync when connectivity returns.'),
-                );
-                setMembers((prev) =>
-                  prev.map((m) => (m.id === member.id ? { ...m, active: newActive } : m)),
-                );
-              } else {
-                Alert.alert(t('common.error', 'Error'), err?.message || 'Could not update status');
-              }
+    Alert.alert(title, message, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: newActive ? 'Reactivate' : 'Deactivate',
+        onPress: async () => {
+          try {
+            await workerApi.updateHousehold(token, member.id, { active: newActive });
+            await load();
+          } catch (err: any) {
+            if (isNetworkError(err)) {
+              outboxRepo.enqueue({
+                entityType: 'household_update',
+                localId: uuid(),
+                payload: { id: member.id, data: { active: newActive } },
+              });
+              setMembers((prev) =>
+                prev.map((m) => (m.id === member.id ? { ...m, active: newActive } : m))
+              );
+              Alert.alert('Saved Offline', 'Status update queued for sync.');
+            } else {
+              Alert.alert('Error', err?.message || 'Could not update status');
             }
-          },
+          }
         },
-      ],
-    );
-  };
+      },
+    ]);
+  }
 
-  const handleSubmit = async () => {
+  // Save Roommate or Family Member
+  async function handleSave() {
+    if (!fullName.trim() || fullName.trim().length < 2) {
+      Alert.alert('Required Field', 'Please enter the member’s full name (at least 2 letters).');
+      return;
+    }
+
+    const ageNum = ageYears.trim() ? parseInt(ageYears.trim(), 10) : undefined;
+    if (ageNum !== undefined && (isNaN(ageNum) || ageNum < 0 || ageNum > 120)) {
+      Alert.alert('Invalid Age', 'Please enter a valid age between 0 and 120.');
+      return;
+    }
+
+    // Duplicate check prevention: check if same name already in household
+    const duplicate = members.find(
+      (m) =>
+        m.fullName?.toLowerCase().trim() === fullName.toLowerCase().trim() &&
+        m.active
+    );
+    if (duplicate) {
+      Alert.alert(
+        'Duplicate Member Warning',
+        `A household member named "${fullName.trim()}" is already active in your household.\n\nTo prevent duplicate records, please verify before adding.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Save Anyway',
+            onPress: () => proceedSave(ageNum),
+          },
+        ]
+      );
+      return;
+    }
+
+    await proceedSave(ageNum);
+  }
+
+  async function proceedSave(ageNum?: number) {
     if (!token) return;
     setSubmitting(true);
 
+    const isRoommateMode = formMode === 'roommate';
+    const cleanPhone = phone.replace(/[^0-9]/g, '');
+
     const payload = {
-      fullName: fullName.trim() || null,
-      relationship,
+      fullName: fullName.trim(),
+      relationship: isRoommateMode ? 'ROOMMATE' : relationship,
       gender,
-      ageYears: ageYears.trim() ? parseInt(ageYears.trim(), 10) : null,
-      phone: phone.trim() || null,
-      isDependent,
-      isRoommate: isRoommate || relationship === 'ROOMMATE',
-      active: isActive,
+      ageYears: ageNum,
+      dateOfBirth: dob || undefined,
+      phone: cleanPhone || undefined,
+      isDependent: !isRoommateMode,
+      isRoommate: isRoommateMode,
+      active: true,
+      notes: isRoommateMode && roomDetails.trim() ? `Accommodation: ${roomDetails.trim()}` : undefined,
     };
 
     try {
-      if (editingMemberId) {
-        await workerApi.updateHousehold(token, editingMemberId, payload);
-        Alert.alert(t('common.success', 'Success'), t('household.memberUpdated', 'Household member updated successfully.'));
-      } else {
-        const res = await workerApi.addHousehold(token, payload);
-        if (res.duplicateWarning) {
-          Alert.alert(
-            t('common.notice', 'Notice'),
-            t('household.duplicateWarningNotice', 'A household member with a similar name already exists. Member record created with unique code: ') + res.memberCode,
-          );
-        } else {
-          Alert.alert(t('common.success', 'Success'), t('household.memberAdded', 'Household member added with code: ') + res.memberCode);
-        }
-      }
-      setShowAddModal(false);
+      const res = await workerApi.addHousehold(token, payload);
+      setFormMode('none');
       await load();
+
+      Alert.alert(
+        'Saved Successfully! ✓',
+        `${fullName.trim()} registered with Code: ${res.memberCode}.\nContinuous health surveillance is now active.`
+      );
     } catch (err: any) {
       if (isNetworkError(err)) {
-        if (editingMemberId) {
-          outboxRepo.enqueue({
-            entityType: 'household_update',
-            localId: uuid(),
-            payload: { id: editingMemberId, data: payload },
-          });
-        } else {
-          outboxRepo.enqueue({
-            entityType: 'household_member',
-            localId: uuid(),
-            payload,
-          });
-        }
-        setShowAddModal(false);
-        Alert.alert(
-          t('common.offline', 'Offline'),
-          t('household.offlineSaved', 'Saved offline. Household member will sync when connection returns.')
-        );
+        outboxRepo.enqueue({
+          entityType: 'household_member',
+          localId: uuid(),
+          payload,
+        });
+        setFormMode('none');
+        Alert.alert('Saved Offline', 'Record saved to device. Will sync when online.');
       } else {
-        Alert.alert(t('common.error', 'Error'), err?.message || 'Could not save household member');
+        Alert.alert('Error', err?.message || 'Could not save member.');
       }
     } finally {
       setSubmitting(false);
     }
-  };
+  }
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: palette.bg }} edges={['bottom']}>
       <WorkerHeader
-        title={t('household.title', 'Family & Household')}
-        subtitle={t('nav.household', 'Household Members')}
+        title={t('household.title', 'Household')}
+        subtitle="Roommates & Family Surveillance"
         showBack={true}
         fallbackRoute="/(worker)/dashboard"
-      />
-
-      <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: spacing.xxl, gap: spacing.md }}>
-        {/* Low-Literacy Audio Guidance */}
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Text style={{ fontSize: fontSize.lg, fontWeight: '700', color: palette.text }}>
-            👨‍👩‍👧‍👦 {t('household.sectionHeader', 'Your Household & Family')}
-          </Text>
+        rightElement={
           <AudioGuidanceButton
-            text="Here you can add your family members, children, spouse, or roommates living with you. Tap the green button to add a new member."
+            text="Household management. You can add roommates or family members living with you in Goa for free malaria surveillance and health checkups."
             size="small"
           />
-        </View>
+        }
+      />
 
-        {/* Picture-Based Visual Guidance Card */}
-        <WorkerGuideCard
-          illustration="worker_adding_family_member"
-          title="Family & Roommates"
-          audioText="To register your family or roommates, tap add member. Select relation like spouse, child, or roommate. Free health screening is provided."
-          step1="Tap 'Add Family / Roommate' below"
-          step2="Select relation: Spouse, Child, Parent, or Roommate"
-          step3="Health team provides free malaria checks & medicines"
-          actionLabel="Need Help? View Picture Guide"
-          onAction={() => setHelpGuideVisible(true)}
-        />
-
-        {/* Aggregate Headcount Cards */}
-        <View style={styles.statsRow}>
-          <View style={styles.statBox}>
-            <Text style={styles.statNumber}>{stats.totalCount}</Text>
-            <Text style={styles.statLabel}>{t('household.totalMembers', 'Total Members')}</Text>
-          </View>
-          <View style={[styles.statBox, { borderColor: '#86EFAC', backgroundColor: '#F0FDF4' }]}>
-            <Text style={[styles.statNumber, { color: '#16A34A' }]}>{stats.activeCount ?? stats.totalCount}</Text>
-            <Text style={styles.statLabel}>{t('household.activeCount', 'Active (In Goa)')}</Text>
-          </View>
-          <View style={[styles.statBox, { borderColor: '#FDE68A', backgroundColor: '#FFFBEB' }]}>
-            <Text style={[styles.statNumber, { color: '#D97706' }]}>{stats.inactiveCount ?? 0}</Text>
-            <Text style={styles.statLabel}>{t('household.inactiveCount', 'Inactive (Monitored)')}</Text>
-          </View>
-        </View>
-
-        <View style={[styles.statsRow, { marginTop: 6 }]}>
-          <View style={[styles.statBox, { borderColor: '#818CF8', backgroundColor: '#EEF2FF' }]}>
-            <Text style={[styles.statNumber, { color: '#4F46E5', fontSize: 18 }]}>{stats.dependentCount}</Text>
-            <Text style={styles.statLabel}>{t('household.dependents', 'Dependents')}</Text>
-          </View>
-          <View style={[styles.statBox, { borderColor: '#CBD5E1', backgroundColor: '#F8FAFC' }]}>
-            <Text style={[styles.statNumber, { color: '#475569', fontSize: 18 }]}>{stats.roommateCount}</Text>
-            <Text style={styles.statLabel}>{t('household.roommates', 'Roommates')}</Text>
-          </View>
-        </View>
-
-        {/* Clinical Screening Status Row (Phase 3.2) */}
-        <View style={[styles.statsRow, { marginTop: 6 }]}>
-          <View style={[styles.statBox, { borderColor: '#E5E7EB', backgroundColor: '#F9FAFB' }]}>
-            <Text style={[styles.statNumber, { color: '#6B7280', fontSize: 16 }]}>{stats.awaitingScreening ?? 0}</Text>
-            <Text style={styles.statLabel}>{t('household.awaiting', 'Awaiting')}</Text>
-          </View>
-          <View style={[styles.statBox, { borderColor: '#93C5FD', backgroundColor: '#EFF6FF' }]}>
-            <Text style={[styles.statNumber, { color: '#2563EB', fontSize: 16 }]}>{stats.screenedCount ?? 0}</Text>
-            <Text style={styles.statLabel}>{t('household.screened', 'Screened')}</Text>
-          </View>
-          <View style={[styles.statBox, { borderColor: '#FCA5A5', backgroundColor: '#FEF2F2' }]}>
-            <Text style={[styles.statNumber, { color: '#DC2626', fontSize: 16 }]}>{stats.confirmedPositiveCount ?? 0}</Text>
-            <Text style={styles.statLabel}>{t('household.positive', 'Positive')}</Text>
-          </View>
-          <View style={[styles.statBox, { borderColor: '#86EFAC', backgroundColor: '#F0FDF4' }]}>
-            <Text style={[styles.statNumber, { color: '#16A34A', fontSize: 16 }]}>{stats.confirmedNegativeCount ?? 0}</Text>
-            <Text style={styles.statLabel}>{t('household.negative', 'Negative')}</Text>
-          </View>
-        </View>
-
-        {/* Continuous Malaria Surveillance Notice Banner */}
-        <Card style={styles.surveillanceCard}>
-          <Text style={styles.surveillanceCardTitle}>🛡️ {t('household.surveillanceTitle', 'Continuous Health Surveillance')}</Text>
-          <Text style={styles.surveillanceCardText}>
-            {t(
-              'household.surveillanceNotice',
-              'All household members (active or inactive) are retained in health records. Even if a member leaves Goa or becomes inactive, their records are monitored continuously for malaria prevention and healthcare.',
-            )}
+      <ScrollView contentContainerStyle={styles.container}>
+        {/* 1. Household Overview Card */}
+        <Card style={styles.overviewCard}>
+          <Text style={styles.overviewTitle}>Household Surveillance Overview</Text>
+          <Text style={styles.overviewSubtitle}>
+            Continuous community monitoring for migrant workers and dependents in Goa
           </Text>
+
+          <View style={styles.statsRow}>
+            <View style={styles.statBox}>
+              <Text style={styles.statNumber}>{stats.totalCount}</Text>
+              <Text style={styles.statLabel}>Total Members</Text>
+            </View>
+            <View style={styles.statBox}>
+              <Text style={[styles.statNumber, { color: '#16A34A' }]}>{stats.activeCount}</Text>
+              <Text style={styles.statLabel}>Active in Goa</Text>
+            </View>
+            <View style={styles.statBox}>
+              <Text style={[styles.statNumber, { color: '#9333EA' }]}>{stats.inactiveCount}</Text>
+              <Text style={styles.statLabel}>Retained Inactive</Text>
+            </View>
+          </View>
+
+          <View style={styles.surveillanceBanner}>
+            <Text style={styles.surveillanceText}>
+              🛡️ All members remain retained under continuous malaria surveillance for outbreak tracing.
+            </Text>
+          </View>
         </Card>
 
-        {/* Privacy Barrier Notice */}
-        <Card style={styles.privacyCard}>
-          <Text style={styles.privacyCardTitle}>🔒 {t('household.privacyTitle', 'Privacy Protection')}</Text>
-          <Text style={styles.privacyCardText}>
-            {t(
-              'household.privacyNotice',
-              'Contractors and site managers only see total headcounts for accommodation planning. Personal names and health screenings are strictly confidential.',
-            )}
-          </Text>
-        </Card>
+        {/* 2. The Two Dedicated Action Buttons */}
+        <View style={styles.actionsRow}>
+          {/* Add Roommate */}
+          <Pressable
+            onPress={openRoommateForm}
+            style={({ pressed }) => [styles.actionButton, styles.roommateBtn, pressed && { opacity: 0.85 }]}
+            accessibilityRole="button"
+            accessibilityLabel="Add Roommate"
+          >
+            <View style={styles.actionIconCircle}>
+              <Text style={{ fontSize: 24 }}>🏠</Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.actionBtnTitle}>+ Add Roommate</Text>
+              <Text style={styles.actionBtnSubtitle}>Camp / room co-worker</Text>
+            </View>
+          </Pressable>
 
-        {/* Add Member Button */}
-        <Button
-          label={'+ ' + t('household.addMemberBtn', 'Add Family / Roommate')}
-          onPress={handleOpenAdd}
-          style={{ backgroundColor: palette.primary }}
-        />
+          {/* Add Family Member */}
+          <Pressable
+            onPress={openFamilyForm}
+            style={({ pressed }) => [styles.actionButton, styles.familyBtn, pressed && { opacity: 0.85 }]}
+            accessibilityRole="button"
+            accessibilityLabel="Add Family Member"
+          >
+            <View style={[styles.actionIconCircle, { backgroundColor: '#F3E8FF' }]}>
+              <Text style={{ fontSize: 24 }}>👨‍👩‍👧</Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.actionBtnTitle, { color: '#581C87' }]}>+ Add Family Member</Text>
+              <Text style={[styles.actionBtnSubtitle, { color: '#7E22CE' }]}>Spouse, child, parent</Text>
+            </View>
+          </Pressable>
+        </View>
 
-        {/* Members List */}
+        {/* 3. Existing Household Member List */}
+        <View style={styles.listHeaderRow}>
+          <Text style={styles.listHeaderTitle}>Registered Members ({members.length})</Text>
+          <Text style={styles.listHeaderSub}>Active & Retained</Text>
+        </View>
+
         {loading ? (
-          <ActivityIndicator style={{ padding: spacing.xl }} color={palette.primary} />
+          <ActivityIndicator color={palette.primary} style={{ marginTop: spacing.lg }} />
         ) : members.length === 0 ? (
-          <WorkerEmptyStateIllustration
-            illustration="worker_adding_family_member"
-            title={t('household.noMembers', 'No household members added yet')}
-            message={t('household.noMembersHint', 'Add your family members or roommates staying with you in Goa for free medical screening and malaria protection.')}
-            actionLabel={'+ ' + t('household.addMemberBtn', 'Add Family / Roommate')}
-            onAction={handleOpenAdd}
-          />
+          <Card style={styles.emptyCard}>
+            <Text style={{ fontSize: 36, textAlign: 'center', marginBottom: 8 }}>👨‍👩‍👧‍👦</Text>
+            <Text style={styles.emptyTitle}>No Household Members Added Yet</Text>
+            <Text style={styles.emptySubtitle}>
+              Tap "Add Roommate" or "Add Family Member" above to register individuals living with you for free malaria screening.
+            </Text>
+          </Card>
         ) : (
-          members.map((m) => {
-            const relInfo = RELATIONSHIP_LABELS[m.relationship as HouseholdRelationship] || {
-              label: m.relationship,
-              icon: '👤',
-            };
+          members.map((member) => {
+            const isRoommate = member.relationship === 'ROOMMATE' || member.livesInSameRoom;
+            const relationshipLabel =
+              FAMILY_RELATIONSHIPS.find((r) => r.id === member.relationship)?.label ||
+              (isRoommate ? 'Roommate (कमरे का साथी)' : member.relationship);
 
             return (
-              <Card key={m.id} style={styles.memberCard}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                    <View style={styles.memberIconCircle}>
-                      <Text style={{ fontSize: 24 }}>{relInfo.icon}</Text>
-                    </View>
-                    <View>
-                      <Text style={styles.memberName}>
-                        {m.fullName || t('household.unnamedMember', 'Family Member')}
-                      </Text>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 }}>
-                        <Text style={styles.memberCodeBadge}>
-                          ID: {m.memberCode}
+              <Card
+                key={member.id}
+                style={[
+                  styles.memberCard,
+                  !member.active && styles.memberCardInactive,
+                ]}
+              >
+                <View style={styles.memberHeader}>
+                  <View style={{ flex: 1 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <Text style={styles.memberName}>{member.fullName || 'Unnamed Member'}</Text>
+                      <View
+                        style={[
+                          styles.statusBadge,
+                          member.active ? styles.statusBadgeActive : styles.statusBadgeInactive,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.statusBadgeText,
+                            member.active ? styles.statusTextActive : styles.statusTextInactive,
+                          ]}
+                        >
+                          {member.active ? '● Active in Goa' : '⏸ Retained'}
                         </Text>
-                        <View style={[styles.statusBadge, m.active === false ? styles.badgeInactive : styles.badgeActive]}>
-                          <Text style={m.active === false ? styles.badgeInactiveText : styles.badgeActiveText}>
-                            {m.active === false ? '⏸ Inactive (Retained)' : '🟢 Active (Monitored)'}
-                          </Text>
-                        </View>
                       </View>
                     </View>
+
+                    <Text style={styles.memberRel}>{relationshipLabel}</Text>
+                    <Text style={styles.memberMeta}>
+                      {member.gender ? `${member.gender.toUpperCase()} · ` : ''}
+                      {member.ageOrDob ? `${member.ageOrDob}y · ` : ''}
+                      Code: {member.memberCode}
+                    </Text>
+                    {member.phone && (
+                      <Text style={styles.memberPhone}>📞 {member.phone}</Text>
+                    )}
                   </View>
 
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                    <Pressable
-                      onPress={() => handleToggleActive(m)}
-                      style={[styles.actionBtn, m.active === false ? styles.btnReactivate : styles.btnDeactivate]}
-                      accessibilityRole="button"
-                      accessibilityLabel={m.active === false ? 'Reactivate member' : 'Deactivate member'}
+                  {/* Toggle Active / Inactive Button */}
+                  <Pressable
+                    onPress={() => toggleMemberActive(member)}
+                    style={[
+                      styles.toggleStatusBtn,
+                      member.active ? styles.toggleDeactivate : styles.toggleReactivate,
+                    ]}
+                    accessibilityRole="button"
+                  >
+                    <Text
+                      style={[
+                        styles.toggleBtnLabel,
+                        member.active ? styles.toggleDeactivateLabel : styles.toggleReactivateLabel,
+                      ]}
                     >
-                      <Text style={[styles.actionBtnText, m.active === false ? styles.textReactivate : styles.textDeactivate]}>
-                        {m.active === false ? '▶ Reactivate' : '⏸ Deactivate'}
-                      </Text>
-                    </Pressable>
-                    <Pressable
-                      onPress={() => handleOpenEdit(m)}
-                      style={styles.editButton}
-                      accessibilityRole="button"
-                      accessibilityLabel="Edit member"
-                    >
-                      <Text style={{ color: palette.primary, fontWeight: '700', fontSize: fontSize.sm }}>
-                        ✏️ {t('common.edit', 'Edit')}
-                      </Text>
-                    </Pressable>
-                  </View>
+                      {member.active ? 'Deactivate' : 'Reactivate'}
+                    </Text>
+                  </Pressable>
                 </View>
-
-                <View style={styles.memberDetailsRow}>
-                  <View style={styles.tag}>
-                    <Text style={styles.tagText}>{relInfo.label.split(' ')[0]}</Text>
-                  </View>
-                  {m.isDependent ? (
-                    <View style={[styles.tag, { backgroundColor: '#EEF2FF' }]}>
-                      <Text style={[styles.tagText, { color: '#4F46E5' }]}>👶 Dependent</Text>
-                    </View>
-                  ) : null}
-                  {m.livesInSameRoom ? (
-                    <View style={[styles.tag, { backgroundColor: '#ECFDF5' }]}>
-                      <Text style={[styles.tagText, { color: '#059669' }]}>🏠 Same Room</Text>
-                    </View>
-                  ) : null}
-                  {m.ageOrDob ? (
-                    <Text style={styles.metaText}>Age: {m.ageOrDob} yrs</Text>
-                  ) : null}
-                </View>
-
-                {m.phone ? (
-                  <Text style={[styles.metaText, { marginTop: 4 }]}>📞 {m.phone}</Text>
-                ) : null}
               </Card>
             );
           })
         )}
       </ScrollView>
 
-      {/* ─── ADD / EDIT MEMBER MODAL ────────────────────────────────────── */}
+      {/* ── MODAL: Dedicated Add Roommate Form ── */}
       <Modal
-        visible={showAddModal}
+        visible={formMode === 'roommate'}
         animationType="slide"
-        transparent={true}
-        onRequestClose={() => setShowAddModal(false)}
+        onRequestClose={() => setFormMode('none')}
       >
-        <SafeAreaView style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.sm }}>
-              <Text style={{ fontSize: fontSize.lg, fontWeight: '800', color: palette.text }}>
-                {editingMemberId ? t('household.editMember', 'Edit Household Member') : t('household.addMember', 'Add Household Member')}
-              </Text>
-              <Pressable onPress={() => setShowAddModal(false)} style={{ padding: 6 }}>
-                <Text style={{ fontSize: 18, color: palette.textMuted }}>✕</Text>
-              </Pressable>
+        <SafeAreaView style={{ flex: 1, backgroundColor: palette.bg }}>
+          <View style={styles.modalHeader}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.modalTitle}>🏠 Add Roommate</Text>
+              <Text style={styles.modalSubtitle}>कमरे का साथी जोड़ें • Co-worker sharing room</Text>
             </View>
+            <Pressable onPress={() => setFormMode('none')} style={styles.closeBtn}>
+              <Text style={styles.closeBtnText}>✕ Close</Text>
+            </Pressable>
+          </View>
 
-            <ScrollView style={{ maxHeight: 480 }} contentContainerStyle={{ gap: spacing.sm }}>
+          <ScrollView contentContainerStyle={styles.modalScroll} keyboardShouldPersistTaps="handled">
+            <Card style={styles.modalFormCard}>
               <TextField
-                label={t('household.fullName', 'Full Name (Optional at initial entry)')}
+                label="Full Name *"
+                placeholder="e.g. Sunil Mahato"
                 value={fullName}
                 onChangeText={setFullName}
-                placeholder="Name as per ID (or leave blank if unknown)"
+                autoCapitalize="words"
               />
 
-              {/* Relationship Picker */}
-              <View style={styles.fieldWrapper}>
-                <Text style={styles.fieldLabel}>{t('household.relationship', 'Relationship')}</Text>
-                <View style={styles.radioGrid}>
-                  {HOUSEHOLD_RELATIONSHIP.map((rel) => {
-                    const info = RELATIONSHIP_LABELS[rel];
-                    const active = relationship === rel;
-                    return (
-                      <Pressable
-                        key={rel}
-                        onPress={() => setRelationship(rel)}
-                        style={[styles.relOption, active && styles.relOptionActive]}
-                      >
-                        <Text style={{ fontSize: 18, marginRight: 4 }}>{info.icon}</Text>
-                        <Text style={[styles.relOptionText, active && styles.relOptionTextActive]}>
-                          {rel}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-              </View>
-
-              {/* Gender */}
-              <View style={styles.fieldWrapper}>
-                <Text style={styles.fieldLabel}>{t('household.gender', 'Gender')}</Text>
-                <View style={{ flexDirection: 'row', gap: spacing.sm }}>
-                  {(['male', 'female', 'other'] as const).map((g) => (
-                    <Pressable
-                      key={g}
-                      onPress={() => setGender(g)}
-                      style={[styles.smallRadio, gender === g && styles.smallRadioActive]}
-                    >
-                      <Text style={[styles.smallRadioText, gender === g && styles.smallRadioTextActive]}>
-                        {g === 'male' ? '👨 Male' : g === 'female' ? '👩 Female' : 'Other'}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
-              </View>
-
-              {/* Age / DOB */}
               <TextField
-                label={t('household.ageYears', 'Age (in completed years)')}
+                label="Mobile Number (where applicable)"
+                placeholder="10-digit mobile number"
+                value={phone}
+                onChangeText={(txt) => setPhone(txt.replace(/[^0-9]/g, ''))}
+                keyboardType="phone-pad"
+                maxLength={10}
+              />
+
+              <TextField
+                label="Age (Years)"
+                placeholder="e.g. 26"
                 value={ageYears}
                 onChangeText={setAgeYears}
                 keyboardType="number-pad"
-                placeholder="e.g. 28"
+                maxLength={3}
               />
 
-              {/* Phone */}
-              <TextField
-                label={t('household.phoneOptional', 'Phone Number (Optional)')}
-                value={phone}
-                onChangeText={setPhone}
-                keyboardType="phone-pad"
-                maxLength={10}
-                placeholder="10-digit mobile number"
+              <DatePickerField
+                label="Date of Birth (Optional)"
+                value={dob}
+                onChange={setDob}
+                maximumDate={new Date()}
               />
 
-              {/* Dependent and Roommate Toggles */}
-              <View style={{ gap: spacing.xs, marginTop: spacing.xs }}>
-                <Pressable
-                  onPress={() => setIsDependent(!isDependent)}
-                  style={[styles.toggleCard, isDependent && styles.toggleCardActive]}
-                >
-                  <Text style={{ fontSize: 20 }}>{isDependent ? '☑️' : '◻️'}</Text>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.toggleTitle}>{t('household.isDependentTitle', 'Is this member dependent on you?')}</Text>
-                    <Text style={styles.toggleSub}>{t('household.isDependentHint', 'Spouse, children, elderly parents')}</Text>
-                  </View>
-                </Pressable>
-
-                <Pressable
-                  onPress={() => setIsRoommate(!isRoommate)}
-                  style={[styles.toggleCard, isRoommate && styles.toggleCardActive]}
-                >
-                  <Text style={{ fontSize: 20 }}>{isRoommate ? '☑️' : '◻️'}</Text>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.toggleTitle}>{t('household.isRoommateTitle', 'Is this a fellow worker / roommate?')}</Text>
-                    <Text style={styles.toggleSub}>{t('household.isRoommateHint', 'Co-worker sharing living accommodation')}</Text>
-                  </View>
-                </Pressable>
-
-                {/* Active / Inactive Status Toggle (Phase 3.3) */}
-                <Pressable
-                  onPress={() => setIsActive(!isActive)}
-                  style={[styles.toggleCard, isActive && styles.toggleCardActive]}
-                >
-                  <Text style={{ fontSize: 20 }}>{isActive ? '🟢' : '⏸️'}</Text>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.toggleTitle}>
-                      {isActive ? t('household.statusActiveTitle', 'Status: Active (Staying in Goa)') : t('household.statusInactiveTitle', 'Status: Inactive (Continuous Surveillance)')}
+              {/* Gender */}
+              <Text style={styles.fieldLabel}>Gender *</Text>
+              <View style={styles.genderRow}>
+                {(['male', 'female', 'other'] as const).map((g) => (
+                  <Pressable
+                    key={g}
+                    onPress={() => setGender(g)}
+                    style={[styles.genderChip, gender === g && styles.genderChipSelected]}
+                  >
+                    <Text style={[styles.genderText, gender === g && styles.genderTextSelected]}>
+                      {g === 'male' ? '👨 Male' : g === 'female' ? '👩 Female' : '🧑 Other'}
                     </Text>
-                    <Text style={styles.toggleSub}>
-                      {isActive
-                        ? t('household.statusActiveHint', 'Member currently lives with you in Goa for regular health checks.')
-                        : t('household.statusInactiveHint', 'Member is away. Retained in registry for continuous malaria surveillance.')}
-                    </Text>
-                  </View>
-                </Pressable>
+                  </Pressable>
+                ))}
               </View>
 
-              <Button
-                label={submitting ? t('common.saving', 'Saving...') : t('common.save', 'Save Member')}
-                onPress={handleSubmit}
-                disabled={submitting}
-                style={{ marginTop: spacing.sm, backgroundColor: palette.primary }}
+              <TextField
+                label="Room / Accommodation Details *"
+                placeholder="e.g. Labor Camp Block B, Room 14 / Site Barrack 2"
+                value={roomDetails}
+                onChangeText={setRoomDetails}
               />
-            </ScrollView>
-          </View>
+
+              <Button
+                label={submitting ? 'Saving...' : 'Save Roommate ✓'}
+                onPress={handleSave}
+                loading={submitting}
+                style={{ marginTop: spacing.md, minHeight: 52 }}
+              />
+            </Card>
+          </ScrollView>
         </SafeAreaView>
       </Modal>
 
-      {/* Visual Workflow Action Guide Modal */}
-      <WorkerActionGuide
-        visible={helpGuideVisible}
-        workflow="add_household"
-        onClose={() => setHelpGuideVisible(false)}
-      />
+      {/* ── MODAL: Dedicated Add Family Member Form ── */}
+      <Modal
+        visible={formMode === 'family'}
+        animationType="slide"
+        onRequestClose={() => setFormMode('none')}
+      >
+        <SafeAreaView style={{ flex: 1, backgroundColor: palette.bg }}>
+          <View style={styles.modalHeader}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.modalTitle}>👨‍👩‍👧 Add Family Member</Text>
+              <Text style={styles.modalSubtitle}>परिवार का सदस्य जोड़ें • Dependents & relatives in Goa</Text>
+            </View>
+            <Pressable onPress={() => setFormMode('none')} style={styles.closeBtn}>
+              <Text style={styles.closeBtnText}>✕ Close</Text>
+            </Pressable>
+          </View>
+
+          <ScrollView contentContainerStyle={styles.modalScroll} keyboardShouldPersistTaps="handled">
+            <Card style={styles.modalFormCard}>
+              <TextField
+                label="Full Name *"
+                placeholder="e.g. Sunita Devi"
+                value={fullName}
+                onChangeText={setFullName}
+                autoCapitalize="words"
+              />
+
+              {/* Relationship with Worker */}
+              <Text style={styles.fieldLabel}>Relationship with Worker *</Text>
+              <View style={styles.relGrid}>
+                {FAMILY_RELATIONSHIPS.map((r) => {
+                  const isChosen = relationship === r.id;
+                  return (
+                    <Pressable
+                      key={r.id}
+                      onPress={() => setRelationship(r.id)}
+                      style={[styles.relChip, isChosen && styles.relChipSelected]}
+                    >
+                      <Text style={[styles.relText, isChosen && styles.relTextSelected]}>
+                        {r.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              <TextField
+                label="Age (Years)"
+                placeholder="e.g. 28"
+                value={ageYears}
+                onChangeText={setAgeYears}
+                keyboardType="number-pad"
+                maxLength={3}
+              />
+
+              <DatePickerField
+                label="Date of Birth (Optional)"
+                value={dob}
+                onChange={setDob}
+                maximumDate={new Date()}
+              />
+
+              {/* Gender */}
+              <Text style={styles.fieldLabel}>Gender *</Text>
+              <View style={styles.genderRow}>
+                {(['female', 'male', 'other'] as const).map((g) => (
+                  <Pressable
+                    key={g}
+                    onPress={() => setGender(g)}
+                    style={[styles.genderChip, gender === g && styles.genderChipSelected]}
+                  >
+                    <Text style={[styles.genderText, gender === g && styles.genderTextSelected]}>
+                      {g === 'male' ? '👨 Male' : g === 'female' ? '👩 Female' : '🧑 Other'}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+
+              <TextField
+                label="Mobile Number (where applicable)"
+                placeholder="10-digit mobile number (optional)"
+                value={phone}
+                onChangeText={(txt) => setPhone(txt.replace(/[^0-9]/g, ''))}
+                keyboardType="phone-pad"
+                maxLength={10}
+              />
+
+              <Button
+                label={submitting ? 'Saving...' : 'Save Family Member ✓'}
+                onPress={handleSave}
+                loading={submitting}
+                style={{ marginTop: spacing.md, minHeight: 52 }}
+              />
+            </Card>
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  container: {
+    padding: spacing.md,
+    paddingBottom: spacing.xxl,
+    gap: spacing.md,
+  },
+  overviewCard: {
+    backgroundColor: palette.surface,
+    borderRadius: radius.xl,
+    padding: spacing.md,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    ...shadow.card,
+  },
+  overviewTitle: {
+    fontSize: fontSize.md,
+    fontWeight: fontWeight.bold as '700',
+    color: palette.text,
+  },
+  overviewSubtitle: {
+    fontSize: fontSize.xs,
+    color: palette.textMuted,
+    marginTop: 2,
+  },
   statsRow: {
     flexDirection: 'row',
     gap: spacing.sm,
+    marginTop: spacing.md,
   },
   statBox: {
     flex: 1,
-    padding: spacing.md,
+    backgroundColor: '#F8FAFC',
     borderRadius: radius.md,
-    borderWidth: 1.5,
-    borderColor: palette.border,
-    backgroundColor: palette.surface,
+    padding: spacing.sm,
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: palette.border,
   },
   statNumber: {
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: '800',
     color: palette.text,
   },
   statLabel: {
-    fontSize: fontSize.xs,
+    fontSize: 10,
     color: palette.textMuted,
+    fontWeight: '600',
     marginTop: 2,
     textAlign: 'center',
   },
-  privacyCard: {
-    backgroundColor: '#F0F9FF',
-    borderColor: '#BAE6FD',
+  surveillanceBanner: {
+    backgroundColor: '#FAF5FF',
+    padding: spacing.sm,
+    borderRadius: radius.md,
+    marginTop: spacing.md,
     borderWidth: 1,
-    padding: spacing.md,
+    borderColor: '#E9D5FF',
   },
-  privacyCardTitle: {
+  surveillanceText: {
+    fontSize: 11,
+    color: '#6B21A8',
+    fontWeight: '600',
+    lineHeight: 16,
+  },
+  actionsRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  actionButton: {
+    flex: 1,
+    borderRadius: radius.lg,
+    padding: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderWidth: 1.5,
+    minHeight: 68,
+    ...shadow.card,
+  },
+  roommateBtn: {
+    backgroundColor: '#F0FDFA',
+    borderColor: '#5EEAD4',
+  },
+  familyBtn: {
+    backgroundColor: '#FAF5FF',
+    borderColor: '#D8B4FE',
+  },
+  actionIconCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#CCFBF1',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actionBtnTitle: {
     fontSize: fontSize.sm,
     fontWeight: '700',
-    color: '#0369A1',
-    marginBottom: 4,
+    color: '#0F766E',
   },
-  privacyCardText: {
+  actionBtnSubtitle: {
+    fontSize: 11,
+    color: '#115E59',
+    marginTop: 1,
+  },
+  listHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+    marginTop: spacing.xs,
+  },
+  listHeaderTitle: {
+    fontSize: fontSize.md,
+    fontWeight: fontWeight.bold as '700',
+    color: palette.text,
+  },
+  listHeaderSub: {
     fontSize: fontSize.xs,
-    color: '#0C4A6E',
+    color: palette.textMuted,
+  },
+  emptyCard: {
+    backgroundColor: palette.surface,
+    borderRadius: radius.lg,
+    padding: spacing.xl,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  emptyTitle: {
+    fontSize: fontSize.md,
+    fontWeight: '700',
+    color: palette.text,
+    textAlign: 'center',
+  },
+  emptySubtitle: {
+    fontSize: fontSize.xs,
+    color: palette.textMuted,
+    textAlign: 'center',
+    marginTop: 4,
     lineHeight: 18,
   },
   memberCard: {
+    backgroundColor: palette.surface,
+    borderRadius: radius.lg,
     padding: spacing.md,
+    borderWidth: 1.5,
+    borderColor: palette.border,
     marginBottom: spacing.xs,
+    ...shadow.card,
   },
-  memberIconCircle: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#F0F4F8',
-    alignItems: 'center',
-    justifyContent: 'center',
+  memberCardInactive: {
+    backgroundColor: '#F8FAFC',
+    borderColor: '#E2E8F0',
+    opacity: 0.8,
+  },
+  memberHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
   },
   memberName: {
     fontSize: fontSize.md,
     fontWeight: '700',
     color: palette.text,
   },
-  memberCodeBadge: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: palette.primary,
-    backgroundColor: '#EBF4FF',
-    paddingHorizontal: 6,
-    paddingVertical: 1,
-    borderRadius: 4,
-    alignSelf: 'flex-start',
+  memberRel: {
+    fontSize: fontSize.xs,
+    color: palette.primaryDark,
+    fontWeight: '600',
     marginTop: 2,
   },
-  editButton: {
-    padding: 6,
-    borderRadius: 6,
-    backgroundColor: '#F0F4F8',
-  },
-  memberDetailsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: spacing.sm,
-  },
-  tag: {
-    backgroundColor: '#F3F4F6',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
-  },
-  tagText: {
+  memberMeta: {
     fontSize: 11,
-    fontWeight: '600',
+    color: palette.textMuted,
+    marginTop: 2,
+  },
+  memberPhone: {
+    fontSize: 11,
+    color: palette.textMuted,
+    marginTop: 2,
+  },
+  statusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: radius.pill,
+  },
+  statusBadgeActive: {
+    backgroundColor: '#DCFCE7',
+  },
+  statusBadgeInactive: {
+    backgroundColor: '#F1F5F9',
+  },
+  statusBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  statusTextActive: {
+    color: '#15803D',
+  },
+  statusTextInactive: {
+    color: '#64748B',
+  },
+  toggleStatusBtn: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
+    borderRadius: radius.md,
+    borderWidth: 1,
+  },
+  toggleDeactivate: {
+    backgroundColor: '#FFF7ED',
+    borderColor: '#FDBA74',
+  },
+  toggleReactivate: {
+    backgroundColor: '#F0FDFA',
+    borderColor: '#99F6E4',
+  },
+  toggleBtnLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  toggleDeactivateLabel: {
+    color: '#C2410C',
+  },
+  toggleReactivateLabel: {
+    color: '#0F766E',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: palette.border,
+    backgroundColor: palette.surface,
+  },
+  modalTitle: {
+    fontSize: fontSize.lg,
+    fontWeight: '700',
     color: palette.text,
   },
-  metaText: {
+  modalSubtitle: {
     fontSize: fontSize.xs,
     color: palette.textMuted,
   },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'flex-end',
+  closeBtn: {
+    padding: spacing.xs,
   },
-  modalCard: {
+  closeBtnText: {
+    fontSize: fontSize.sm,
+    color: palette.danger,
+    fontWeight: '700',
+  },
+  modalScroll: {
+    padding: spacing.md,
+    paddingBottom: spacing.xxl,
+  },
+  modalFormCard: {
     backgroundColor: palette.surface,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    borderRadius: radius.xl,
     padding: spacing.lg,
-  },
-  fieldWrapper: {
-    marginBottom: spacing.xs,
+    borderWidth: 1.5,
+    borderColor: palette.border,
+    ...shadow.card,
   },
   fieldLabel: {
     fontSize: fontSize.sm,
-    fontWeight: '600',
-    color: palette.text,
-    marginBottom: 6,
+    fontWeight: '500',
+    color: palette.textMuted,
+    marginBottom: spacing.xs,
   },
-  radioGrid: {
+  genderRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.xs,
+    gap: spacing.sm,
+    marginBottom: spacing.md,
   },
-  relOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: radius.md,
-    borderWidth: 1.5,
-    borderColor: palette.border,
-    backgroundColor: palette.surface,
-    minHeight: 44,
-  },
-  relOptionActive: {
-    borderColor: palette.primary,
-    backgroundColor: '#EBF4FF',
-  },
-  relOptionText: {
-    fontSize: fontSize.xs,
-    color: palette.text,
-    fontWeight: '600',
-  },
-  relOptionTextActive: {
-    color: palette.primary,
-    fontWeight: '700',
-  },
-  smallRadio: {
+  genderChip: {
     flex: 1,
-    paddingVertical: 10,
+    paddingVertical: spacing.sm,
     borderRadius: radius.md,
     borderWidth: 1.5,
     borderColor: palette.border,
+    backgroundColor: '#F8FAFC',
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 44,
+    minHeight: 46,
   },
-  smallRadioActive: {
+  genderChipSelected: {
     borderColor: palette.primary,
-    backgroundColor: '#EBF4FF',
+    backgroundColor: '#F0FDFA',
   },
-  smallRadioText: {
+  genderText: {
     fontSize: fontSize.xs,
     color: palette.text,
     fontWeight: '600',
   },
-  smallRadioTextActive: {
-    color: palette.primary,
+  genderTextSelected: {
+    color: palette.primaryDark,
     fontWeight: '700',
   },
-  toggleCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
+  relGrid: {
+    gap: spacing.xs,
+    marginBottom: spacing.md,
+  },
+  relChip: {
+    backgroundColor: '#F8FAFC',
     padding: spacing.sm,
     borderRadius: radius.md,
-    borderWidth: 1.5,
-    borderColor: palette.border,
-    backgroundColor: palette.surface,
-    minHeight: 52,
-  },
-  toggleCardActive: {
-    borderColor: palette.primary,
-    backgroundColor: '#F8FAFC',
-  },
-  toggleTitle: {
-    fontSize: fontSize.sm,
-    fontWeight: '700',
-    color: palette.text,
-  },
-  toggleSub: {
-    fontSize: fontSize.xs,
-    color: palette.textMuted,
-  },
-  surveillanceCard: {
-    backgroundColor: '#F5F3FF',
-    borderColor: '#DDD6FE',
-    borderWidth: 1.5,
-    padding: spacing.md,
-  },
-  surveillanceCardTitle: {
-    fontSize: fontSize.sm,
-    fontWeight: '700',
-    color: '#6D28D9',
-    marginBottom: 4,
-  },
-  surveillanceCardText: {
-    fontSize: fontSize.xs,
-    color: '#5B21B6',
-    lineHeight: 18,
-  },
-  statusBadge: {
-    paddingHorizontal: 6,
-    paddingVertical: 1,
-    borderRadius: 4,
-  },
-  badgeActive: {
-    backgroundColor: '#DCFCE7',
-  },
-  badgeActiveText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#15803D',
-  },
-  badgeInactive: {
-    backgroundColor: '#FEF3C7',
-  },
-  badgeInactiveText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#B45309',
-  },
-  actionBtn: {
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    borderRadius: 6,
     borderWidth: 1,
+    borderColor: palette.border,
+    minHeight: 44,
+    justifyContent: 'center',
   },
-  btnReactivate: {
-    backgroundColor: '#F0FDF4',
-    borderColor: '#86EFAC',
+  relChipSelected: {
+    backgroundColor: '#F3E8FF',
+    borderColor: '#A855F7',
   },
-  btnDeactivate: {
-    backgroundColor: '#FFFBEB',
-    borderColor: '#FDE68A',
+  relText: {
+    fontSize: fontSize.xs,
+    color: palette.text,
+    fontWeight: '600',
   },
-  actionBtnText: {
-    fontSize: 11,
+  relTextSelected: {
+    color: '#6B21A8',
     fontWeight: '700',
-  },
-  textReactivate: {
-    color: '#16A34A',
-  },
-  textDeactivate: {
-    color: '#D97706',
   },
 });

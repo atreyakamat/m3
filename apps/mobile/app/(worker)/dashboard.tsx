@@ -1,5 +1,13 @@
 import React, { useCallback, useState } from 'react';
-import { View, Text, Pressable, ActivityIndicator, RefreshControl, ScrollView, StyleSheet } from 'react-native';
+import {
+  View,
+  Text,
+  Pressable,
+  ActivityIndicator,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+} from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -15,20 +23,112 @@ import { screeningLocalRepo } from '@/services/screeningLocal';
 import { AudioGuidanceButton } from '@/components/AudioGuidanceButton';
 import {
   WorkerGuidedTour,
-  WorkerActionGuide,
-  type ActionGuideWorkflow,
   TOUR_COMPLETION_STORAGE_KEY,
 } from '@/components/worker-guide';
 import { palette, spacing, radius, fontSize, fontWeight, shadow } from '@/theme';
 
-// Section 11: Primary dashboard features (Profile, Family & Household, Exit from Goa, Entry into Goa, Transfer, Feeling Unwell).
-const ACTIONS: { key: string; route: string; labelKey: string; color: string; descKey: string; icon: string }[] = [
-  { key: 'profile', route: '/(worker)/profile', labelKey: 'nav.profile', color: palette.primary, descKey: 'nav.profileDesc', icon: '👤' },
-  { key: 'household', route: '/(worker)/household', labelKey: 'nav.household', color: '#8B5CF6', descKey: 'nav.householdDesc', icon: '👨‍👩‍👧' },
-  { key: 'exitGoa', route: '/(worker)/travel?action=leaving', labelKey: 'travel.exitGoaAction', color: '#EA580C', descKey: 'travel.exitGoaDesc', icon: '🛫' },
-  { key: 'enterGoa', route: '/(worker)/travel?action=entering', labelKey: 'travel.enterGoaAction', color: '#0284C7', descKey: 'travel.enterGoaDesc', icon: '🛬' },
-  { key: 'transfer', route: '/(worker)/transfer', labelKey: 'nav.transfer', color: palette.accent, descKey: 'nav.transferDesc', icon: '🔄' },
-  { key: 'unwell', route: '/(worker)/unwell', labelKey: 'nav.feelingUnwell', color: palette.warning, descKey: 'nav.unwellDesc', icon: '🤒' },
+// The 8 Primary Dashboard Action Buttons in clean 2-column grid
+interface DashboardAction {
+  id: string;
+  route: string;
+  titleKey: string;
+  defaultTitle: string;
+  descKey: string;
+  defaultDesc: string;
+  icon: string;
+  badgeBg: string;
+  borderColor: string;
+}
+
+const DASHBOARD_ACTIONS: DashboardAction[] = [
+  {
+    id: 'entry',
+    route: '/(worker)/entry',
+    titleKey: 'travel.enterGoaAction',
+    defaultTitle: 'Entry in Goa',
+    descKey: 'travel.enterGoaDesc',
+    defaultDesc: 'Arrival health check & log',
+    icon: '🛬',
+    badgeBg: '#E0F2FE',
+    borderColor: '#7DD3FC',
+  },
+  {
+    id: 'exit',
+    route: '/(worker)/exit',
+    titleKey: 'travel.exitGoaAction',
+    defaultTitle: 'Exit from Goa',
+    descKey: 'travel.exitGoaDesc',
+    defaultDesc: 'Departure & return report',
+    icon: '🛫',
+    badgeBg: '#FFEDD5',
+    borderColor: '#FDBA74',
+  },
+  {
+    id: 'unwell',
+    route: '/(worker)/unwell',
+    titleKey: 'nav.feelingUnwell',
+    defaultTitle: 'Not Feeling Well',
+    descKey: 'nav.unwellDesc',
+    defaultDesc: 'Symptoms or voice note',
+    icon: '🤒',
+    badgeBg: '#FFE4E6',
+    borderColor: '#FDA4AF',
+  },
+  {
+    id: 'household',
+    route: '/(worker)/household',
+    titleKey: 'nav.household',
+    defaultTitle: 'Household',
+    descKey: 'nav.householdDesc',
+    defaultDesc: 'Roommates & family',
+    icon: '👨‍👩‍👧',
+    badgeBg: '#F3E8FF',
+    borderColor: '#D8B4FE',
+  },
+  {
+    id: 'transfer',
+    route: '/(worker)/transfer',
+    titleKey: 'nav.transfer',
+    defaultTitle: 'Transfer Site',
+    descKey: 'nav.transferDesc',
+    defaultDesc: 'Request worksite move',
+    icon: '🔄',
+    badgeBg: '#D1FAE5',
+    borderColor: '#6EE7B7',
+  },
+  {
+    id: 'site',
+    route: '/(worker)/site',
+    titleKey: 'nav.site',
+    defaultTitle: 'Construction Site',
+    descKey: 'nav.siteDesc',
+    defaultDesc: 'Assigned site details',
+    icon: '🏗️',
+    badgeBg: '#CCFBF1',
+    borderColor: '#99F6E4',
+  },
+  {
+    id: 'profile',
+    route: '/(worker)/profile',
+    titleKey: 'nav.profile',
+    defaultTitle: 'My Profile',
+    descKey: 'nav.profileDesc',
+    defaultDesc: 'Worker ID & identity',
+    icon: '👤',
+    badgeBg: '#E0E7FF',
+    borderColor: '#A5B4FC',
+  },
+  {
+    id: 'screening',
+    route: '/(worker)/screening',
+    titleKey: 'nav.screening',
+    defaultTitle: 'Initial Screening',
+    descKey: 'nav.screeningDesc',
+    defaultDesc: 'Baseline health records',
+    icon: '📋',
+    badgeBg: '#EDE9FE',
+    borderColor: '#C4B5FD',
+  },
 ];
 
 export default function Dashboard() {
@@ -36,20 +136,13 @@ export default function Dashboard() {
   const router = useRouter();
   const { token, user, signOut, language, setLanguage } = useSession();
   const [profile, setProfile] = useState<WorkerProfile | null>(null);
-  const [householdStats, setHouseholdStats] = useState<{
-    totalCount: number;
-    activeCount?: number;
-    inactiveCount?: number;
-    dependentCount?: number;
-  } | null>(null);
-  const [currentRx, setCurrentRx] = useState<{ details: string; issuedAt: string } | null>(null);
   const [latestDiag, setLatestDiag] = useState<{ result: string; testType: string; species?: string; testDate: string } | null>(null);
+  const [currentRx, setCurrentRx] = useState<{ details: string; issuedAt: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [offline, setOffline] = useState(false);
   const [queued, setQueued] = useState(0);
-  const [installConsentPrompt, setInstallConsentPrompt] = useState(false);
   const [tourVisible, setTourVisible] = useState(false);
-  const [actionGuideWorkflow, setActionGuideWorkflow] = useState<ActionGuideWorkflow | null>(null);
+  const [installConsentPrompt, setInstallConsentPrompt] = useState(false);
 
   React.useEffect(() => {
     void AsyncStorage.getItem(TOUR_COMPLETION_STORAGE_KEY).then((done) => {
@@ -62,7 +155,11 @@ export default function Dashboard() {
   const load = useCallback(async () => {
     if (!token) return;
     try {
-      try { await flushOutbox(token); } catch { /* offline or non-fatal */ }
+      try {
+        await flushOutbox(token);
+      } catch {
+        /* offline or non-fatal */
+      }
 
       const p = await workerApi.me(token);
       setProfile(p);
@@ -72,37 +169,11 @@ export default function Dashboard() {
         void setLanguage(p.preferredLanguage);
       }
 
-      // Registration gate step 3: Must select construction site during initial registration
-      if (!p.currentSite) {
-        router.replace('/(worker)/site?initial=true');
-        return;
-      }
-
-      // Registration gate step 5: Must complete initial screening before dashboard access
-      if (p.screening?.status !== 'COMPLETE') {
-        const workerId = user?.workerId || user?.userId || 'current_worker';
-        const local = screeningLocalRepo.getLocal(workerId);
-        if (local?.status !== 'COMPLETE') {
-          router.replace('/(worker)/screening');
-          return;
-        }
-      }
-
       // Check App Installation Consent status
       const workerId = user?.workerId || user?.userId || 'current_worker';
       const storedConsent = await AsyncStorage.getItem(`m3_install_consent_${workerId}`);
       if (!storedConsent) {
         setInstallConsentPrompt(true);
-      }
-
-      // Fetch household stats for surveillance tracking
-      try {
-        const hh = await workerApi.getHousehold(token);
-        if (hh?.stats) {
-          setHouseholdStats(hh.stats);
-        }
-      } catch {
-        // non-fatal
       }
 
       // If positive or has diagnostics, load clinical records
@@ -116,612 +187,464 @@ export default function Dashboard() {
           setCurrentRx(rx);
         }
       } catch {
-        // non-fatal
+        /* non-fatal */
       }
     } catch (e) {
       if (isNetworkError(e)) {
         setOffline(true);
-        const workerId = user?.workerId || user?.userId || 'current_worker';
-        const local = screeningLocalRepo.getLocal(workerId);
-        if (local?.status !== 'COMPLETE') {
-          router.replace('/(worker)/screening');
-          return;
-        }
       } else if (e instanceof ApiError && e.status === 401) {
         void signOut();
       }
     } finally {
       setLoading(false);
-      try { setQueued(pendingCount()); } catch { /* db not ready */ }
+      try {
+        setQueued(pendingCount());
+      } catch {
+        /* db not ready */
+      }
     }
-  }, [token, signOut, user, router]);
+  }, [token, signOut, user, language, setLanguage]);
 
-  useFocusEffect(useCallback(() => { void load(); }, [load]));
+  useFocusEffect(
+    useCallback(() => {
+      void load();
+    }, [load])
+  );
 
   const status = profile?.malariaStatus ?? 'NO_RESULT';
   const isPositive = status === 'POSITIVE';
-  const isNegative = status === 'NEGATIVE';
-  const isAwaiting = status === 'AWAITING';
+  const workerDisplayName = profile?.name || user?.displayName || 'Worker';
+  const currentSiteName = profile?.currentSite?.name || 'Candolim Beach Resort Project';
+  const currentSiteArea = profile?.currentSite?.area || 'Candolim, North Goa';
+  const currentSiteId = profile?.currentSite?.siteId || 'SITE-GOA-001';
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: palette.bg }} edges={['bottom']}>
+      {/* Worker Header with Language Switcher */}
       <WorkerHeader
-        title={t('dashboard.greeting', { name: user?.displayName ?? '' })}
-        subtitle={user?.workerId ? `${t('dashboard.workerId')}: ${user.workerId}` : t('app.name')}
+        title={t('dashboard.greeting', { name: workerDisplayName, defaultValue: `Namaste, ${workerDisplayName} 👋` })}
+        subtitle={user?.workerId ? `Worker ID: ${user.workerId}` : 'ICMR–NIMR Malaria Surveillance'}
         showBack={false}
+        rightElement={
+          <AudioGuidanceButton
+            text="Welcome to your M3 worker dashboard. Here you can report entry or exit from Goa, report symptoms if unwell, manage household members, check assigned construction site, view profile, and access screening records."
+            size="small"
+          />
+        }
       />
 
       <ScrollView
-        contentContainerStyle={{ padding: spacing.lg, paddingBottom: spacing.xxl, gap: spacing.md }}
+        contentContainerStyle={styles.scrollContent}
         refreshControl={<RefreshControl refreshing={loading} onRefresh={() => void load()} />}
       >
-        {offline ? (
-          <Card accent={palette.warning}>
-            <Body>{t('status.offline')}</Body>
-          </Card>
-        ) : null}
+        {/* Offline Warning Banner */}
+        {offline && (
+          <View style={styles.offlineBanner}>
+            <Text style={styles.offlineText}>
+              📶 {t('status.offline', 'Offline Mode: Changes will save locally and sync when connected.')}
+            </Text>
+          </View>
+        )}
 
-        {loading && !profile ? (
-          <ActivityIndicator color={palette.primary} style={{ marginTop: spacing.xl }} />
-        ) : (
-          <>
-            {/* Construction site card */}
-            <Card accent={palette.primary}>
-              <Text style={{ color: palette.textMuted, fontSize: fontSize.sm }}>{t('dashboard.currentSite')}</Text>
-              <Text style={{ fontSize: fontSize.lg, fontWeight: '700', color: palette.text, marginVertical: 2 }}>
-                {profile?.currentSite ? profile.currentSite.name : t('dashboard.noSite')}
+        {/* Current Assigned Construction Site Card */}
+        <Card style={styles.siteCard}>
+          <View style={styles.siteCardHeader}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.siteCardLabel}>
+                {t('dashboard.currentSite', 'Currently Assigned Construction Site')}
               </Text>
-              <Text style={{ fontSize: fontSize.xs, color: palette.textMuted }}>
-                📍 {profile?.currentSite?.area || t('dashboard.assignedDuringRegistration')}
-              </Text>
+              <Text style={styles.siteName}>{currentSiteName}</Text>
+              <Text style={styles.siteLocation}>📍 {currentSiteArea}</Text>
+              <Text style={styles.siteIdText}>Site ID: {currentSiteId}</Text>
+            </View>
+            <View style={styles.siteActiveBadge}>
+              <Text style={styles.siteActiveText}>● Active Site</Text>
+            </View>
+          </View>
 
-              {/* Status row */}
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: spacing.md }}>
-                <Text style={{ color: palette.textMuted, fontSize: fontSize.sm }}>{t('dashboard.malariaStatus')}</Text>
-                {profile ? <MalariaStatusChip status={profile.malariaStatus} /> : null}
-              </View>
+          {/* Worker Status Row */}
+          <View style={styles.statusRow}>
+            <View style={styles.statusItem}>
+              <Text style={styles.statusLabel}>{t('dashboard.malariaStatus', 'Malaria Status:')}</Text>
+              <MalariaStatusChip status={status} />
+            </View>
 
-              {queued > 0 ? (
-                <View style={{ marginTop: spacing.sm }}>
-                  <SyncStateChip state="PENDING" />
-                </View>
-              ) : null}
-            </Card>
+            {queued > 0 && (
+              <View style={styles.syncItem}>
+                <SyncStateChip state="PENDING" />
+              </View>
+            )}
+          </View>
+        </Card>
 
-            {/* App Installation Consent Banner */}
-            {installConsentPrompt ? (
-              <Card accent={palette.primary}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.xs }}>
-                  <Text style={{ fontSize: fontSize.md, fontWeight: '700', color: palette.text, flex: 1 }}>
-                    📋 App Installation Consent
-                  </Text>
-                  <AudioGuidanceButton
-                    text="App Installation Consent. Please confirm if you agree to install and use the M3 malaria surveillance application for health monitoring."
-                    label="Listen"
-                    size="small"
-                  />
-                </View>
-                <Body>
-                  Welcome to the M3 Malaria Surveillance Platform. Do you agree to install and use this application for health monitoring and malaria prevention in Goa?
-                </Body>
-                <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md }}>
-                  <View style={{ flex: 1 }}>
-                    <Button
-                      label="I Agree"
-                      variant="primary"
-                      onPress={async () => {
-                        const payload = {
-                          consentVersion: '1.0',
-                          language,
-                          status: 'ACCEPTED',
-                          deviceInfo: 'Worker Mobile App',
-                        };
-                        if (token) {
-                          try {
-                            await workerApi.consentInstall(token, payload);
-                          } catch (err) {
-                            if (isNetworkError(err)) {
-                              outboxRepo.enqueue({
-                                entityType: 'consent_install',
-                                localId: uuid(),
-                                payload,
-                              });
-                            }
-                          }
-                        }
-                        const workerId = user?.workerId || user?.userId || 'current_worker';
-                        await AsyncStorage.setItem(`m3_install_consent_${workerId}`, 'ACCEPTED');
-                        setInstallConsentPrompt(false);
-                      }}
-                    />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Button
-                      label="Decline"
-                      variant="ghost"
-                      onPress={async () => {
-                        const payload = {
-                          consentVersion: '1.0',
-                          language,
-                          status: 'REJECTED',
-                          deviceInfo: 'Worker Mobile App',
-                        };
-                        if (token) {
-                          try {
-                            await workerApi.consentInstall(token, payload);
-                          } catch (err) {
-                            if (isNetworkError(err)) {
-                              outboxRepo.enqueue({
-                                entityType: 'consent_install',
-                                localId: uuid(),
-                                payload,
-                              });
-                            }
-                          }
-                        }
-                        const workerId = user?.workerId || user?.userId || 'current_worker';
-                        await AsyncStorage.setItem(`m3_install_consent_${workerId}`, 'REJECTED');
-                        setInstallConsentPrompt(false);
-                      }}
-                    />
-                  </View>
-                </View>
-              </Card>
-            ) : null}
+        {/* Clinical Alert if Positive */}
+        {isPositive && (
+          <View style={styles.clinicalAlertBox}>
+            <Text style={styles.clinicalAlertTitle}>🚨 Positive Malaria Diagnosis</Text>
+            <Text style={styles.clinicalAlertDesc}>
+              Medical care and prescription issued. Please complete all prescribed medication doses.
+            </Text>
+            {currentRx && (
+              <View style={styles.rxSubCard}>
+                <Text style={styles.rxTitle}>💊 Active Prescription:</Text>
+                <Text style={styles.rxDetails}>{currentRx.details}</Text>
+              </View>
+            )}
+          </View>
+        )}
 
-            {/* Visual Tour & Picture Guide Launcher Button */}
-            <Pressable
-              onPress={() => setTourVisible(true)}
-              style={({ pressed }) => ({
-                backgroundColor: '#F0FDFA',
-                borderRadius: radius.lg,
-                padding: spacing.md,
-                borderWidth: 1.5,
-                borderColor: '#99F6E4',
-                flexDirection: 'row',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                opacity: pressed ? 0.9 : 1,
-                minHeight: 56,
-                ...shadow.card,
-              })}
-              accessibilityRole="button"
-              accessibilityLabel="Replay Visual Tour"
-            >
-              <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: '#CCFBF1', alignItems: 'center', justifyContent: 'center', marginRight: spacing.sm }}>
-                <Text style={{ fontSize: 24 }}>📖</Text>
-              </View>
-              <View style={{ flex: 1, paddingRight: spacing.sm }}>
-                <Text style={{ fontSize: fontSize.sm, fontWeight: '700', color: '#0F766E' }}>
-                  Visual Tour & Spoken Guide
-                </Text>
-                <Text style={{ fontSize: 11, color: '#115E59', marginTop: 2 }}>
-                  चित्र और आवाज़ से समझें • Tap to replay guide anytime
-                </Text>
-              </View>
-              <View style={{ backgroundColor: '#0D9488', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8 }}>
-                <Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 12 }}>Open Tour →</Text>
-              </View>
-            </Pressable>
-
-            {/* QR Worker Pass Banner */}
-            <Pressable
-              onPress={() => router.push('/(worker)/pass')}
-              style={({ pressed }) => ({
-                backgroundColor: '#EEF2FF',
-                borderRadius: radius.lg,
-                padding: spacing.md,
-                borderWidth: 1,
-                borderColor: '#C7D2FE',
-                flexDirection: 'row',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                opacity: pressed ? 0.9 : 1,
-                ...shadow.card,
-              })}
-            >
-              <View style={{ flex: 1, paddingRight: spacing.sm }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-                  <Text style={{ fontSize: fontSize.md, fontWeight: '700', color: '#3730A3' }}>
-                    📱 {t('pass.title', 'QR Worker Pass')}
-                  </Text>
-                </View>
-                <Text style={{ fontSize: fontSize.xs, color: '#4B5563', lineHeight: 16 }}>
-                  {t(
-                    'pass.subtitle',
-                    'Show this QR code to your contractor to join their workforce or request a site transfer.',
-                  )}
-                </Text>
-              </View>
-              <View
-                style={{
-                  backgroundColor: '#4338CA',
-                  paddingHorizontal: spacing.md,
-                  paddingVertical: spacing.sm,
-                  borderRadius: radius.md,
-                }}
-              >
-                <Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: fontSize.xs }}>
-                  View Pass →
-                </Text>
-              </View>
-            </Pressable>
-
-            {/* ── Family & Household Members Surveillance Card ──────────────── */}
-            <Pressable
-              onPress={() => router.push('/(worker)/household')}
-              style={({ pressed }) => ({
-                backgroundColor: '#FAF5FF',
-                borderRadius: radius.lg,
-                padding: spacing.md,
-                borderWidth: 1.5,
-                borderColor: '#D8B4FE',
-                opacity: pressed ? 0.9 : 1,
-                ...shadow.card,
-              })}
-              accessibilityRole="button"
-              accessibilityLabel="View and manage household members"
-            >
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1, paddingRight: spacing.sm }}>
-                  <View
-                    style={{
-                      width: 44,
-                      height: 44,
-                      borderRadius: 22,
-                      backgroundColor: '#F3E8FF',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}
-                  >
-                    <Text style={{ fontSize: 24 }}>👨‍👩‍👧‍👦</Text>
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ fontSize: fontSize.md, fontWeight: '700', color: '#581C87' }}>
-                      {t('household.familyCardTitle', 'Family & Household Members')}
-                    </Text>
-                    <Text style={{ fontSize: fontSize.xs, color: '#7E22CE', marginTop: 2 }}>
-                      {householdStats
-                        ? `${householdStats.activeCount ?? householdStats.totalCount} active in Goa · ${householdStats.totalCount} registered`
-                        : t('household.familyCardSubtitle', 'Register family and roommates for free health screening')}
-                    </Text>
-                  </View>
-                </View>
-                <View
-                  style={{
-                    backgroundColor: '#7E22CE',
-                    paddingHorizontal: spacing.md,
-                    paddingVertical: spacing.sm,
-                    borderRadius: radius.md,
+        {/* App Installation Consent Modal / Prompt */}
+        {installConsentPrompt && (
+          <Card style={styles.consentCard}>
+            <Text style={styles.consentTitle}>📋 App Installation Consent</Text>
+            <Body style={styles.consentBody}>
+              Welcome to the M3 Malaria Surveillance Platform. Do you agree to use this application for health monitoring and malaria prevention in Goa?
+            </Body>
+            <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md }}>
+              <View style={{ flex: 1 }}>
+                <Button
+                  label="I Agree"
+                  onPress={async () => {
+                    const payload = {
+                      consentVersion: '1.0',
+                      language,
+                      status: 'ACCEPTED',
+                      deviceInfo: 'Worker Mobile App',
+                    };
+                    if (token) {
+                      try {
+                        await workerApi.consentInstall(token, payload);
+                      } catch {
+                        /* offline */
+                      }
+                    }
+                    const workerId = user?.workerId || user?.userId || 'current_worker';
+                    await AsyncStorage.setItem(`m3_install_consent_${workerId}`, 'ACCEPTED');
+                    setInstallConsentPrompt(false);
                   }}
-                >
-                  <Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: fontSize.xs }}>
-                    {t('common.manage', 'Manage →')}
-                  </Text>
-                </View>
-              </View>
-
-              <View
-                style={{
-                  marginTop: spacing.sm,
-                  paddingTop: spacing.xs,
-                  borderTopWidth: 1,
-                  borderTopColor: '#E9D5FF',
-                  flexDirection: 'row',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                }}
-              >
-                <Text style={{ fontSize: 11, color: '#6B21A8', fontWeight: '600' }}>
-                  🛡️ {t('household.surveillanceBadge', 'Continuous Malaria Surveillance')}
-                </Text>
-                <Text style={{ fontSize: 11, color: '#9333EA', fontWeight: '500' }}>
-                  {householdStats?.inactiveCount ? `${householdStats.inactiveCount} inactive retained` : 'All members monitored'}
-                </Text>
-              </View>
-            </Pressable>
-
-            {/* ── Travel & Migration Surveillance (Two Prominent Actions) ───────── */}
-            <View
-              style={{
-                backgroundColor: '#F8FAFC',
-                borderRadius: radius.lg,
-                padding: spacing.md,
-                borderWidth: 1.5,
-                borderColor: '#CBD5E1',
-                ...shadow.card,
-              }}
-            >
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.sm }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1, paddingRight: spacing.sm }}>
-                  <View
-                    style={{
-                      width: 36,
-                      height: 36,
-                      borderRadius: 18,
-                      backgroundColor: '#E2E8F0',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}
-                  >
-                    <Text style={{ fontSize: 20 }}>🧭</Text>
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ fontSize: fontSize.md, fontWeight: '700', color: '#1E293B' }}>
-                      {t('travel.cardTitle', 'Travel & Migration Surveillance')}
-                    </Text>
-                    <Text style={{ fontSize: fontSize.xs, color: '#64748B' }}>
-                      {t('travel.cardSubtitle', 'Report departures from Goa and arrivals back into Goa')}
-                    </Text>
-                  </View>
-                </View>
-                <AudioGuidanceButton
-                  text="Travel reporting. Use Exit from Goa when leaving Goa, and Entry into Goa when arriving or returning."
-                  size="small"
                 />
               </View>
-
-              <View style={{ flexDirection: 'row', gap: spacing.sm }}>
-                {/* Exit from Goa */}
-                <Pressable
-                  onPress={() => router.push({ pathname: '/(worker)/travel', params: { action: 'leaving' } } as never)}
-                  style={({ pressed }) => ({
-                    flex: 1,
-                    backgroundColor: '#FFF7ED',
-                    borderColor: '#FDBA74',
-                    borderWidth: 1.5,
-                    borderRadius: radius.md,
-                    padding: spacing.sm,
-                    alignItems: 'center',
-                    opacity: pressed ? 0.85 : 1,
-                  })}
-                  accessibilityRole="button"
-                  accessibilityLabel="Exit from Goa"
-                >
-                  <Text style={{ fontSize: 28, marginBottom: 4 }}>🛫</Text>
-                  <Text style={{ fontSize: fontSize.sm, fontWeight: '700', color: '#9A3412', textAlign: 'center' }}>
-                    {t('travel.exitGoaAction', 'Exit from Goa')}
-                  </Text>
-                  <Text style={{ fontSize: 11, color: '#C2410C', textAlign: 'center', marginTop: 2 }}>
-                    {t('travel.leavingHint', 'Leaving Goa')}
-                  </Text>
-                </Pressable>
-
-                {/* Entry into Goa */}
-                <Pressable
-                  onPress={() => router.push({ pathname: '/(worker)/travel', params: { action: 'entering' } } as never)}
-                  style={({ pressed }) => ({
-                    flex: 1,
-                    backgroundColor: '#F0F9FF',
-                    borderColor: '#7DD3FC',
-                    borderWidth: 1.5,
-                    borderRadius: radius.md,
-                    padding: spacing.sm,
-                    alignItems: 'center',
-                    opacity: pressed ? 0.85 : 1,
-                  })}
-                  accessibilityRole="button"
-                  accessibilityLabel="Entry into Goa"
-                >
-                  <Text style={{ fontSize: 28, marginBottom: 4 }}>🛬</Text>
-                  <Text style={{ fontSize: fontSize.sm, fontWeight: '700', color: '#0369A1', textAlign: 'center' }}>
-                    {t('travel.enterGoaAction', 'Entry into Goa')}
-                  </Text>
-                  <Text style={{ fontSize: 11, color: '#0284C7', textAlign: 'center', marginTop: 2 }}>
-                    {t('travel.enteringHint', 'Entering Goa')}
-                  </Text>
-                </Pressable>
+              <View style={{ flex: 1 }}>
+                <Button
+                  label="Later"
+                  variant="ghost"
+                  onPress={() => setInstallConsentPrompt(false)}
+                />
               </View>
-
-              <Pressable
-                onPress={() => router.push('/(worker)/travel' as never)}
-                style={{ marginTop: spacing.sm, paddingTop: spacing.xs, borderTopWidth: 1, borderTopColor: '#E2E8F0', alignItems: 'center' }}
-              >
-                <Text style={{ fontSize: 11, color: '#475569', fontWeight: '600' }}>
-                  {t('travel.viewHistoryLink', 'View Travel History & Health Reports →')}
-                </Text>
-              </Pressable>
             </View>
-
-            {/* ── Section 11.1: POSITIVE MALARIA RESULT VIEW ────────────────── */}
-            {isPositive && (
-              <View style={styles.clinicalAlertBox}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <Text style={styles.clinicalAlertTitle}>{t('clinical.positiveDiagnosis')}</Text>
-                  <Text style={styles.clinicalBadge}>{t('clinical.authorizedResult')}</Text>
-                </View>
-                {latestDiag ? (
-                  <View style={{ marginTop: spacing.xs, gap: 2 }}>
-                    <Text style={styles.clinicalDetail}>{t('clinical.test')}: {latestDiag.testType} ({latestDiag.result})</Text>
-                    {latestDiag.species && <Text style={styles.clinicalDetail}>{t('clinical.species')}: {latestDiag.species}</Text>}
-                    <Text style={styles.clinicalDetail}>{t('clinical.date')}: {new Date(latestDiag.testDate).toLocaleDateString()}</Text>
-                  </View>
-                ) : null}
-
-                {/* Current Prescription (shown by default for positive workers) */}
-                {currentRx ? (
-                  <View style={styles.rxSubCard}>
-                    <Text style={styles.rxTitle}>{t('clinical.activePrescription')}</Text>
-                    <Text style={styles.rxDetails}>{currentRx.details}</Text>
-                    <Text style={styles.rxDate}>{t('clinical.issued')}: {new Date(currentRx.issuedAt).toLocaleDateString()}</Text>
-                  </View>
-                ) : (
-                  <Text style={{ fontSize: fontSize.xs, color: palette.textMuted, marginTop: 4 }}>
-                    {t('clinical.rxPending')}
-                  </Text>
-                )}
-
-                <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm }}>
-                  <Pressable
-                    style={styles.clinicalButton}
-                    onPress={() => router.push({ pathname: '/(worker)/profile', params: { tab: 'records' } } as never)}
-                  >
-                    <Text style={styles.clinicalButtonText}>{t('clinical.viewRxHistory')}</Text>
-                  </Pressable>
-                  <Pressable
-                    style={styles.clinicalButton}
-                    onPress={() => router.push({ pathname: '/(worker)/profile', params: { tab: 'records' } } as never)}
-                  >
-                    <Text style={styles.clinicalButtonText}>{t('clinical.diagnosticDetails')}</Text>
-                  </Pressable>
-                </View>
-              </View>
-            )}
-
-            {/* ── Section 11.2: NEGATIVE MALARIA RESULT VIEW ────────────────── */}
-            {isNegative && (
-              <View style={styles.negativeAlertBox}>
-                <Text style={styles.negativeAlertTitle}>{t('clinical.verifiedNegative')}</Text>
-                <Text style={styles.negativeAlertText}>
-                  {t('clinical.negativeAdvice')}
-                </Text>
-                {latestDiag ? (
-                  <Text style={styles.negativeMeta}>
-                    {t('clinical.latestTest')}: {latestDiag.testType} ({new Date(latestDiag.testDate).toLocaleDateString()})
-                  </Text>
-                ) : null}
-              </View>
-            )}
-
-            {/* ── Section 11.3: AWAITING OR NO RESULT VIEW ───────────────────── */}
-            {isAwaiting && (
-              <View style={styles.awaitingAlertBox}>
-                <Text style={styles.awaitingTitle}>{t('clinical.sampleUnderAnalysis')}</Text>
-                <Text style={styles.awaitingText}>
-                  {t('clinical.awaitingAdvice')}
-                </Text>
-              </View>
-            )}
-
-            {status === 'NO_RESULT' && (
-              <View style={styles.neutralAlertBox}>
-                <Text style={styles.neutralText}>
-                  {t('clinical.noResultAdvice')}
-                </Text>
-              </View>
-            )}
-
-            {/* ── Quick Actions Grid (Accessible) ─────────────────────────── */}
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: spacing.sm }}>
-              <Text style={{ fontSize: fontSize.md, fontWeight: fontWeight.semibold as '600', color: palette.text }}>
-                {t('dashboard.quickActions')}
-              </Text>
-              <AudioGuidanceButton
-                text="Here are your main actions: Profile, Family and Household, Exit from Goa, Entry into Goa, Site transfer, and Feeling Unwell report."
-                size="small"
-              />
-            </View>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md }}>
-              {ACTIONS.map((a) => (
-                <Pressable
-                  key={a.key}
-                  onPress={() => router.push(a.route as never)}
-                  style={({ pressed }) => ({
-                    width: '47%',
-                    backgroundColor: palette.surface,
-                    borderRadius: radius.lg,
-                    padding: spacing.md,
-                    opacity: pressed ? 0.9 : 1,
-                    ...shadow.card,
-                    borderWidth: 1.5,
-                    borderColor: palette.border,
-                    minHeight: 120,
-                  })}
-                >
-                  <View style={{ width: 42, height: 42, borderRadius: 12, backgroundColor: a.color, marginBottom: spacing.xs, alignItems: 'center', justifyContent: 'center' }}>
-                    <Text style={{ fontSize: 22 }}>{a.icon}</Text>
-                  </View>
-                  <Text style={{ fontSize: fontSize.md, fontWeight: '700', color: palette.text }}>{t(a.labelKey, a.key)}</Text>
-                  <Text style={{ fontSize: fontSize.xs, color: palette.textMuted, marginTop: 2 }}>{t(a.descKey, '')}</Text>
-                </Pressable>
-              ))}
-            </View>
-
-            <View style={{ marginTop: spacing.lg }}>
-              <Button label={t('nav.signOut')} variant="ghost" onPress={() => void signOut().then(() => router.replace('/language'))} />
-            </View>
-          </>
+          </Card>
         )}
+
+        {/* Visual Tour & Audio Guide Launcher */}
+        <Pressable
+          onPress={() => setTourVisible(true)}
+          style={({ pressed }) => [styles.tourButton, pressed && { opacity: 0.9 }]}
+          accessibilityRole="button"
+          accessibilityLabel="Open Visual Tour"
+        >
+          <View style={styles.tourIconCircle}>
+            <Text style={{ fontSize: 22 }}>📖</Text>
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.tourTitle}>Visual Tour & Spoken Guide</Text>
+            <Text style={styles.tourSubtitle}>चित्र और आवाज़ से समझें • Tap to replay guide</Text>
+          </View>
+          <Text style={styles.tourArrow}>View →</Text>
+        </Pressable>
+
+        {/* Section Heading */}
+        <View style={styles.gridHeadingRow}>
+          <Text style={styles.gridHeading}>
+            {t('dashboard.quickActions', 'Worker Actions')}
+          </Text>
+          <Text style={styles.gridSubheading}>Select an action below</Text>
+        </View>
+
+        {/* ── The 8 Primary Actions in a Clean Two-Column Grid ── */}
+        <View style={styles.actionGrid}>
+          {DASHBOARD_ACTIONS.map((action) => (
+            <Pressable
+              key={action.id}
+              onPress={() => router.push(action.route as never)}
+              style={({ pressed }) => [
+                styles.actionCard,
+                { borderColor: action.borderColor },
+                pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] },
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel={t(action.titleKey, action.defaultTitle)}
+            >
+              <View style={[styles.actionIconBadge, { backgroundColor: action.badgeBg }]}>
+                <Text style={styles.actionIcon}>{action.icon}</Text>
+              </View>
+
+              <Text style={styles.actionTitle} numberOfLines={1}>
+                {t(action.titleKey, action.defaultTitle)}
+              </Text>
+              <Text style={styles.actionDesc} numberOfLines={2}>
+                {t(action.descKey, action.defaultDesc)}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+
+        {/* Sign Out Button */}
+        <View style={styles.footerSection}>
+          <Button
+            label={t('nav.signOut', 'Sign Out')}
+            variant="ghost"
+            onPress={() => void signOut().then(() => router.replace('/sign-in'))}
+          />
+        </View>
       </ScrollView>
 
-      {/* First-time Visual Tour Modal */}
+      {/* Guided Tour Modal */}
       <WorkerGuidedTour
         visible={tourVisible}
         onFinish={() => setTourVisible(false)}
-      />
-
-      {/* Contextual Action Guide Modal */}
-      <WorkerActionGuide
-        visible={actionGuideWorkflow !== null}
-        workflow={actionGuideWorkflow || 'screening'}
-        onClose={() => setActionGuideWorkflow(null)}
       />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  clinicalAlertBox: {
-    backgroundColor: '#FEF2F2',
+  scrollContent: {
     padding: spacing.md,
-    borderRadius: radius.lg,
-    borderLeftWidth: 4,
-    borderLeftColor: palette.danger,
-    gap: spacing.xs,
+    paddingBottom: spacing.xxl,
+    gap: spacing.md,
   },
-  clinicalAlertTitle: { fontSize: fontSize.md, fontWeight: '700', color: '#991B1B' },
-  clinicalBadge: { fontSize: fontSize.xs, fontWeight: '700', color: '#991B1B', backgroundColor: '#FEE2E2', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
-  clinicalDetail: { fontSize: fontSize.xs, color: '#7F1D1D', fontWeight: '500' },
-  rxSubCard: {
-    backgroundColor: '#FFFFFF',
+  offlineBanner: {
+    backgroundColor: '#FEF3C7',
     padding: spacing.sm,
     borderRadius: radius.md,
-    marginTop: spacing.xs,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  offlineText: {
+    fontSize: fontSize.xs,
+    color: '#92400E',
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  siteCard: {
+    backgroundColor: palette.surface,
+    borderRadius: radius.xl,
+    padding: spacing.md,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    borderLeftWidth: 5,
+    borderLeftColor: palette.primary,
+    ...shadow.card,
+  },
+  siteCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  siteCardLabel: {
+    fontSize: fontSize.xs,
+    color: palette.textMuted,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  siteName: {
+    fontSize: fontSize.lg,
+    fontWeight: fontWeight.bold as '700',
+    color: palette.text,
+    marginTop: 2,
+  },
+  siteLocation: {
+    fontSize: fontSize.xs,
+    color: palette.primaryDark,
+    marginTop: 2,
+    fontWeight: '500',
+  },
+  siteIdText: {
+    fontSize: 11,
+    color: palette.textMuted,
+    marginTop: 2,
+  },
+  siteActiveBadge: {
+    backgroundColor: '#DCFCE7',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 3,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: '#86EFAC',
+  },
+  siteActiveText: {
+    fontSize: 10,
+    color: '#15803D',
+    fontWeight: '700',
+  },
+  statusRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: spacing.md,
+    paddingTop: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9',
+  },
+  statusItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  statusLabel: {
+    fontSize: fontSize.xs,
+    color: palette.textMuted,
+    fontWeight: '600',
+  },
+  syncItem: {
+    alignSelf: 'flex-end',
+  },
+  clinicalAlertBox: {
+    backgroundColor: '#FEF2F2',
+    borderRadius: radius.lg,
+    padding: spacing.md,
+    borderWidth: 1.5,
+    borderColor: '#F87171',
+  },
+  clinicalAlertTitle: {
+    fontSize: fontSize.md,
+    fontWeight: '700',
+    color: '#B91C1C',
+  },
+  clinicalAlertDesc: {
+    fontSize: fontSize.xs,
+    color: '#991B1B',
+    marginTop: 4,
+    lineHeight: 18,
+  },
+  rxSubCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: radius.md,
+    padding: spacing.sm,
+    marginTop: spacing.sm,
     borderWidth: 1,
     borderColor: '#FECACA',
   },
-  rxTitle: { fontSize: fontSize.xs, fontWeight: '700', color: palette.text },
-  rxDetails: { fontSize: fontSize.xs, color: palette.text, fontWeight: '500', marginVertical: 2 },
-  rxDate: { fontSize: 10, color: palette.textMuted },
-  clinicalButton: {
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 6,
+  rxTitle: {
+    fontSize: fontSize.xs,
+    fontWeight: '700',
+    color: '#B91C1C',
+  },
+  rxDetails: {
+    fontSize: fontSize.xs,
+    color: palette.text,
+    marginTop: 2,
+  },
+  consentCard: {
+    backgroundColor: '#F0FDFA',
+    borderRadius: radius.lg,
+    padding: spacing.md,
+    borderWidth: 1.5,
+    borderColor: palette.primary,
+  },
+  consentTitle: {
+    fontSize: fontSize.md,
+    fontWeight: '700',
+    color: palette.primaryDark,
+    marginBottom: 4,
+  },
+  consentBody: {
+    fontSize: fontSize.xs,
+    color: palette.text,
+    lineHeight: 18,
+  },
+  tourButton: {
+    backgroundColor: '#F0FDFA',
+    borderRadius: radius.lg,
+    padding: spacing.md,
+    borderWidth: 1.5,
+    borderColor: '#99F6E4',
+    flexDirection: 'row',
+    alignItems: 'center',
+    ...shadow.card,
+  },
+  tourIconCircle: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#CCFBF1',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: spacing.sm,
+  },
+  tourTitle: {
+    fontSize: fontSize.sm,
+    fontWeight: '700',
+    color: '#0F766E',
+  },
+  tourSubtitle: {
+    fontSize: 11,
+    color: '#115E59',
+    marginTop: 1,
+  },
+  tourArrow: {
+    fontSize: fontSize.xs,
+    fontWeight: '700',
+    color: '#0D9488',
+    backgroundColor: '#CCFBF1',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
     borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: '#FCA5A5',
   },
-  clinicalButtonText: { fontSize: fontSize.xs, fontWeight: '600', color: '#991B1B' },
-
-  negativeAlertBox: {
-    backgroundColor: '#ECFDF5',
-    padding: spacing.md,
-    borderRadius: radius.lg,
-    borderLeftWidth: 4,
-    borderLeftColor: palette.success,
-    gap: 3,
+  gridHeadingRow: {
+    marginTop: spacing.xs,
   },
-  negativeAlertTitle: { fontSize: fontSize.md, fontWeight: '700', color: '#065F46' },
-  negativeAlertText: { fontSize: fontSize.xs, color: '#047857', lineHeight: 18 },
-  negativeMeta: { fontSize: fontSize.xs, color: '#065F46', fontWeight: '600', marginTop: 2 },
-
-  awaitingAlertBox: {
-    backgroundColor: '#FFFBEB',
-    padding: spacing.md,
-    borderRadius: radius.lg,
-    borderLeftWidth: 4,
-    borderLeftColor: palette.warning,
-    gap: 2,
+  gridHeading: {
+    fontSize: fontSize.md,
+    fontWeight: fontWeight.bold as '700',
+    color: palette.text,
   },
-  awaitingTitle: { fontSize: fontSize.sm, fontWeight: '700', color: '#92400E' },
-  awaitingText: { fontSize: fontSize.xs, color: '#78350F', lineHeight: 18 },
-
-  neutralAlertBox: {
+  gridSubheading: {
+    fontSize: 11,
+    color: palette.textMuted,
+    marginTop: 1,
+  },
+  actionGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  actionCard: {
+    width: '48.5%',
     backgroundColor: palette.surface,
+    borderRadius: radius.xl,
     padding: spacing.md,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: palette.border,
+    borderWidth: 1.5,
+    minHeight: 130,
+    justifyContent: 'space-between',
+    ...shadow.card,
   },
-  neutralText: { fontSize: fontSize.xs, color: palette.textMuted, lineHeight: 18 },
+  actionIconBadge: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: spacing.xs,
+  },
+  actionIcon: {
+    fontSize: 24,
+  },
+  actionTitle: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.bold as '700',
+    color: palette.text,
+    marginTop: 4,
+  },
+  actionDesc: {
+    fontSize: 11,
+    color: palette.textMuted,
+    marginTop: 2,
+    lineHeight: 15,
+  },
+  footerSection: {
+    marginTop: spacing.md,
+  },
 });

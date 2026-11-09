@@ -14,5 +14,5 @@ export default function Index() {
     if (user?.role === 'HEALTH_WORKER') return <Redirect href="/(health-worker)/dashboard" />;
     return <Redirect href="/(worker)/dashboard" />;
   }
-  return <Redirect href="/language" />;
+  return <Redirect href="/sign-in" />;
 }
