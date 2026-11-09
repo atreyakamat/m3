@@ -1,85 +1,108 @@
+/**
+ * ExitFromGoaScreen — Master Implementation.
+ *
+ * Implements Section 6 requirements:
+ * 1. Where are you going? (Select or enter destination)
+ * 2. Why are you leaving Goa? (Selection: Work Completed, Family / Vacation, Medical, or Other)
+ * 3. Current Location:
+ *    - Capture Device Location action
+ *    - Captures GPS coordinates upon activation
+ *    - Shows location-captured state
+ * 4. Submit Exit button:
+ *    - Automatic background timestamp
+ *    - No manual date entry
+ *    - No manual location/village/district fields
+ *    - Blue accent theme (#2563EB)
+ */
+
 import React, { useState } from 'react';
 import {
   View,
   Text,
-  ScrollView,
   Alert,
-  Modal,
+  ScrollView,
   Pressable,
   StyleSheet,
+  ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { INDIAN_STATES, type IndianState } from '@m3/shared';
-import { Screen, Card, TextField, Button } from '@/components/ui';
-import { DatePickerField } from '@/components/DatePickerField';
+import { Card, TextField, Button } from '@/components/ui';
 import { WorkerHeader } from '@/components/WorkerHeader';
 import { AudioGuidanceButton } from '@/components/AudioGuidanceButton';
+import { LocationCaptureCard } from '@/components/LocationCaptureCard';
+import { type CapturedLocation } from '@/services/location';
 import { travelApi, isNetworkError } from '@/api';
 import { useSession } from '@/store/session';
 import { outboxRepo, uuid } from '@/db/outbox';
-import { travelLocalRepo } from '@/services/travelLocal';
-import { palette, spacing, radius, fontSize, fontWeight, shadow } from '@/theme';
+import { palette, spacing, fontSize, fontWeight, radius, shadow } from '@/theme';
 
-export default function ExitFromGoaScreen() {
+const REASON_OPTIONS = [
+  'Work Completed',
+  'Family / Vacation',
+  'Medical / Health',
+  'Festival / Harvest',
+  'Other',
+];
+
+const POPULAR_DESTINATIONS = [
+  'Patna, Bihar',
+  'Kolkata, West Bengal',
+  'Lucknow, Uttar Pradesh',
+  'Bhubaneswar, Odisha',
+  'Ranchi, Jharkhand',
+];
+
+export default function ExitScreen() {
   const { t } = useTranslation();
   const router = useRouter();
   const { token, user } = useSession();
 
-  // Form Fields
-  const [departureDate, setDepartureDate] = useState(new Date().toISOString().slice(0, 10));
-  const [destState, setDestState] = useState<IndianState>('Bihar');
-  const [destDistrict, setDestDistrict] = useState('');
-  const [destTown, setDestTown] = useState('');
-
-  // Expected Return
-  const [hasExpectedReturn, setHasExpectedReturn] = useState(true);
-  const [expectedReturnDate, setExpectedReturnDate] = useState(() => {
-    const d = new Date();
-    d.setDate(d.getDate() + 30);
-    return d.toISOString().slice(0, 10);
-  });
-
-  // Purpose & Travel Health questions
-  const [purpose, setPurpose] = useState('Home visit / Leave');
-  const [currentlyUnwell, setCurrentlyUnwell] = useState<'yes' | 'no'>('no');
-  const [hasSupplies, setHasSupplies] = useState<'yes' | 'no'>('yes');
-  const [notes, setNotes] = useState('');
-
-  // UI state
-  const [stateModalVisible, setStateModalVisible] = useState(false);
+  const [destination, setDestination] = useState('');
+  const [selectedReason, setSelectedReason] = useState('Work Completed');
+  const [otherReason, setOtherReason] = useState('');
+  const [location, setLocation] = useState<CapturedLocation | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [submittedConfirmed, setSubmittedConfirmed] = useState(false);
-  const [submittedData, setSubmittedData] = useState<any>(null);
+  const [submitted, setSubmitted] = useState(false);
 
-  async function submitExit() {
-    if (!departureDate) {
-      Alert.alert('Required Field', 'Please enter your date of departure from Goa.');
+  const finalReason = selectedReason === 'Other' ? otherReason.trim() || 'Other' : selectedReason;
+
+  async function handleSubmit() {
+    if (!destination.trim()) {
+      Alert.alert('Destination Required', 'Please enter or select where you are travelling to.');
+      return;
+    }
+    if (selectedReason === 'Other' && !otherReason.trim()) {
+      Alert.alert('Reason Required', 'Please specify the reason for leaving Goa.');
       return;
     }
 
+    setSubmitting(true);
+    const timestamp = new Date().toISOString();
     const payload = {
-      departureDate,
-      destinationState: destState,
-      destinationDistrict: destDistrict.trim() || undefined,
-      destinationTown: destTown.trim() || undefined,
-      expectedReturnDate: hasExpectedReturn ? expectedReturnDate : undefined,
-      purpose,
-      notes: notes.trim()
-        ? `Currently unwell: ${currentlyUnwell}. Has supplies: ${hasSupplies}. ${notes.trim()}`
-        : `Currently unwell: ${currentlyUnwell}. Has supplies: ${hasSupplies}`,
+      destination: destination.trim(),
+      destinationState: destination.trim(),
+      reason: finalReason,
+      latitude: location?.latitude ?? null,
+      longitude: location?.longitude ?? null,
+      accuracy: location?.accuracy ?? null,
+      locationText: location?.formattedText ?? null,
+      departureDate: timestamp,
       idempotencyKey: uuid(),
     };
 
-    setSubmitting(true);
     try {
       if (token) {
         try {
-          await travelApi.leave(token, payload);
+          await travelApi.leave(token, {
+            destinationState: payload.destinationState,
+            departureDate: timestamp,
+            reason: payload.reason,
+          });
         } catch (err) {
           if (isNetworkError(err)) {
             outboxRepo.enqueue({
-              entityType: 'travel_leave',
+              entityType: 'travel_leaving',
               localId: payload.idempotencyKey,
               payload,
             });
@@ -88,30 +111,7 @@ export default function ExitFromGoaScreen() {
           }
         }
       }
-
-      // Save locally to maintain instant travel history offline
-      travelLocalRepo.createRecord(
-        {
-          planningTravel: true,
-          departureDate,
-          returnDate: hasExpectedReturn ? expectedReturnDate : null,
-          destination: `Departure to ${destTown || destState}`,
-          state: destState,
-          hadFeverOrMalaria: currentlyUnwell === 'yes',
-          treatmentGiven: false,
-          completedCourse: false,
-        },
-        token ? 'SYNCED' : 'PENDING'
-      );
-
-      setSubmittedData({
-        departureDate,
-        destState,
-        destTown,
-        expectedReturnDate: hasExpectedReturn ? expectedReturnDate : 'Not specified',
-        currentlyUnwell: currentlyUnwell === 'yes',
-      });
-      setSubmittedConfirmed(true);
+      setSubmitted(true);
     } catch (e: any) {
       Alert.alert('Submission Error', e?.message || 'Could not record exit. Please try again.');
     } finally {
@@ -119,248 +119,192 @@ export default function ExitFromGoaScreen() {
     }
   }
 
+  if (submitted) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#F8FAFC' }}>
+        <WorkerHeader
+          title="Exit from Goa"
+          subtitle="Departure Recorded"
+          showBack={true}
+          fallbackRoute="/(worker)/dashboard"
+        />
+        <View style={styles.successContainer}>
+          <View style={styles.successCard}>
+            <View style={[styles.successIconCircle, { backgroundColor: '#EFF6FF', borderColor: '#2563EB' }]}>
+              <Text style={{ fontSize: 40 }}>🛫</Text>
+            </View>
+            <Text style={styles.successTitle}>Exit from Goa Recorded ✓</Text>
+            <Text style={styles.successSubtitle}>
+              Your planned departure has been submitted to the ICMR–NIMR Malaria Surveillance System.
+            </Text>
+
+            <View style={styles.summaryBox}>
+              <Text style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Destination: </Text>
+                <Text style={styles.summaryVal}>{destination.trim()}</Text>
+              </Text>
+              <Text style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Reason: </Text>
+                <Text style={styles.summaryVal}>{finalReason}</Text>
+              </Text>
+              {location && (
+                <Text style={styles.summaryRow}>
+                  <Text style={styles.summaryLabel}>Device GPS: </Text>
+                  <Text style={styles.summaryVal}>{location.formattedText}</Text>
+                </Text>
+              )}
+              <Text style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Recorded: </Text>
+                <Text style={styles.summaryVal}>{new Date().toLocaleDateString()}</Text>
+              </Text>
+            </View>
+
+            <Button
+              label="Back to Dashboard"
+              onPress={() => router.replace('/(worker)/dashboard')}
+              variant="primary"
+              style={{ minHeight: 50, width: '100%' }}
+            />
+          </View>
+        </View>
+      </View>
+    );
+  }
+
   return (
-    <View style={{ flex: 1, backgroundColor: palette.bg }}>
+    <View style={{ flex: 1, backgroundColor: '#F8FAFC' }}>
       <WorkerHeader
-        title={t('travel.exitGoaAction', 'Exit from Goa')}
-        subtitle="Departure Report & Planned Return"
+        title="Exit from Goa"
+        subtitle="Travel Surveillance"
         showBack={true}
         fallbackRoute="/(worker)/dashboard"
         rightElement={
           <AudioGuidanceButton
-            text="Exit from Goa. Please select your departure date, the state and town you are traveling to, and your expected date of return to Goa."
+            text="Exit from Goa. Enter where you are going, why you are leaving Goa, and capture your device location."
             size="small"
           />
         }
       />
 
       <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
-        {/* Purpose Banner */}
+        {/* Banner */}
         <View style={styles.banner}>
-          <View style={styles.bannerIconCircle}>
-            <Text style={{ fontSize: 24 }}>🛫</Text>
-          </View>
+          <Text style={styles.bannerIcon}>🛫</Text>
           <View style={{ flex: 1 }}>
-            <Text style={styles.bannerTitle}>Leaving Goa Surveillance</Text>
-            <Text style={styles.bannerSubtitle}>
-              Letting us know when you leave Goa helps us keep your health record active and prepare for your safe return.
+            <Text style={styles.bannerTitle}>Reporting Departure from Goa</Text>
+            <Text style={styles.bannerText}>
+              Please record your travel destination so our health team can provide travel advisory guidance.
             </Text>
           </View>
         </View>
 
-        {/* Departure Form Card */}
+        {/* 1. Where are you going? */}
         <Card style={styles.card}>
-          <Text style={styles.sectionTitle}>1. Departure & Destination</Text>
-
-          <DatePickerField
-            label="Date of Departure from Goa *"
-            value={departureDate}
-            onChange={setDepartureDate}
-          />
-
-          {/* Destination State Selector */}
-          <Text style={styles.fieldLabel}>Destination State (कहाँ जा रहे हैं) *</Text>
-          <Pressable
-            onPress={() => setStateModalVisible(true)}
-            style={styles.stateSelector}
-            accessibilityRole="button"
-          >
-            <Text style={styles.stateSelectorText}>{destState}</Text>
-            <Text style={styles.dropdownIcon}>▼</Text>
-          </Pressable>
-
-          <TextField
-            label="Destination City / Town / Village"
-            placeholder="e.g. Patna, Gorakhpur, Balasore..."
-            value={destTown}
-            onChangeText={setDestTown}
-          />
-
-          {/* Expected Return Date */}
-          <Text style={[styles.sectionTitle, { marginTop: spacing.md }]}>
-            2. Expected Return to Goa
+          <Text style={styles.cardTitle}>Where are you going? *</Text>
+          <Text style={styles.cardSubtitle}>
+            Enter destination city, town or state
           </Text>
 
-          <View style={styles.toggleRow}>
-            <Pressable
-              onPress={() => setHasExpectedReturn(true)}
-              style={[styles.toggleBtn, hasExpectedReturn && styles.toggleBtnActive]}
-            >
-              <Text style={[styles.toggleText, hasExpectedReturn && styles.toggleTextActive]}>
-                Planning to Return to Goa ✓
-              </Text>
-            </Pressable>
-            <Pressable
-              onPress={() => setHasExpectedReturn(false)}
-              style={[styles.toggleBtn, !hasExpectedReturn && styles.toggleBtnActive]}
-            >
-              <Text style={[styles.toggleText, !hasExpectedReturn && styles.toggleTextActive]}>
-                Return Date Unknown / Not Returning
-              </Text>
-            </Pressable>
-          </View>
-
-          {hasExpectedReturn && (
-            <View style={{ marginTop: spacing.sm }}>
-              <DatePickerField
-                label="Expected Date of Return"
-                value={expectedReturnDate}
-                onChange={setExpectedReturnDate}
-                minimumDate={new Date()}
-              />
-            </View>
-          )}
-
-          {/* Health Questions */}
-          <Text style={[styles.sectionTitle, { marginTop: spacing.lg }]}>
-            3. Health Status Before Departure
-          </Text>
-
-          <View style={styles.questionBox}>
-            <Text style={styles.questionText}>
-              Are you currently experiencing any fever, chills, or headache before traveling?
-            </Text>
-            <Text style={styles.questionHindi}>
-              क्या आपको अभी बुखार, ठंड या सिरदर्द महसूस हो रहा है?
-            </Text>
-            <View style={styles.toggleRowSmall}>
-              <Pressable
-                onPress={() => setCurrentlyUnwell('no')}
-                style={[styles.toggleBtnSmall, currentlyUnwell === 'no' && styles.toggleBtnActiveNo]}
-              >
-                <Text style={[styles.toggleTextSmall, currentlyUnwell === 'no' && styles.toggleTextActive]}>
-                  No (नहीं)
-                </Text>
-              </Pressable>
-              <Pressable
-                onPress={() => setCurrentlyUnwell('yes')}
-                style={[styles.toggleBtnSmall, currentlyUnwell === 'yes' && styles.toggleBtnActiveYes]}
-              >
-                <Text style={[styles.toggleTextSmall, currentlyUnwell === 'yes' && styles.toggleTextActive]}>
-                  Yes (हाँ)
-                </Text>
-              </Pressable>
-            </View>
-          </View>
-
-          {currentlyUnwell === 'yes' && (
-            <View style={styles.warningBox}>
-              <Text style={styles.warningText}>
-                ⚠️ Please visit the on-site ICMR–NIMR Health Worker for a free 15-minute rapid blood test before traveling!
-              </Text>
-            </View>
-          )}
-
           <TextField
-            label="Additional Notes / Purpose (Optional)"
-            placeholder="e.g. Festival vacation, family emergency, harvest season..."
-            value={notes}
-            onChangeText={setNotes}
-            multiline
+            placeholder="e.g. Patna, Kolkata, Lucknow..."
+            value={destination}
+            onChangeText={setDestination}
           />
 
-          <Button
-            label={submitting ? 'Submitting...' : 'Submit Exit from Goa ✓'}
-            onPress={submitExit}
-            loading={submitting}
-            style={{ marginTop: spacing.md, minHeight: 52 }}
-          />
-        </Card>
-      </ScrollView>
-
-      {/* State Selection Modal */}
-      <Modal
-        visible={stateModalVisible}
-        animationType="slide"
-        onRequestClose={() => setStateModalVisible(false)}
-      >
-        <Screen>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.md }}>
-            <Text style={{ fontSize: fontSize.lg, fontWeight: '700', color: palette.text }}>
-              Select Destination State
-            </Text>
-            <Pressable onPress={() => setStateModalVisible(false)} style={{ padding: spacing.xs }}>
-              <Text style={{ fontSize: fontSize.md, color: palette.primary, fontWeight: '700' }}>Done</Text>
-            </Pressable>
-          </View>
-          <ScrollView>
-            {INDIAN_STATES.map((s) => (
+          {/* Quick chips */}
+          <Text style={styles.chipsLabel}>Quick select common destinations:</Text>
+          <View style={styles.chipsRow}>
+            {POPULAR_DESTINATIONS.map((dest) => (
               <Pressable
-                key={s}
-                onPress={() => {
-                  setDestState(s);
-                  setStateModalVisible(false);
-                }}
-                style={({ pressed }) => [
-                  styles.stateItem,
-                  destState === s && styles.stateItemSelected,
-                  pressed && { opacity: 0.8 },
+                key={dest}
+                onPress={() => setDestination(dest)}
+                style={[
+                  styles.chip,
+                  destination === dest && styles.chipActive,
                 ]}
               >
-                <Text style={[styles.stateItemText, destState === s && styles.stateItemTextSelected]}>
-                  {s}
+                <Text
+                  style={[
+                    styles.chipText,
+                    destination === dest && styles.chipTextActive,
+                  ]}
+                >
+                  {dest}
                 </Text>
-                {destState === s && <Text style={{ color: palette.primary, fontWeight: '700' }}>✓</Text>}
               </Pressable>
             ))}
-          </ScrollView>
-        </Screen>
-      </Modal>
-
-      {/* Confirmation Screen / Modal */}
-      <Modal
-        visible={submittedConfirmed}
-        transparent
-        animationType="fade"
-      >
-        <View style={styles.confirmOverlay}>
-          <View style={styles.confirmCard}>
-            <View style={styles.confirmIcon}>
-              <Text style={{ fontSize: 36 }}>🛫</Text>
-            </View>
-            <Text style={styles.confirmTitle}>Departure Successfully Recorded!</Text>
-            <Text style={styles.confirmSubtitle}>
-              Your Exit from Goa has been saved to your travel history.
-            </Text>
-
-            <View style={styles.confirmDetailsBox}>
-              <Text style={styles.confirmDetailLine}>
-                <Text style={{ fontWeight: '700' }}>Departure Date: </Text>
-                {submittedData?.departureDate}
-              </Text>
-              <Text style={styles.confirmDetailLine}>
-                <Text style={{ fontWeight: '700' }}>Destination: </Text>
-                {submittedData?.destTown ? `${submittedData.destTown}, ` : ''}{submittedData?.destState}
-              </Text>
-              <Text style={styles.confirmDetailLine}>
-                <Text style={{ fontWeight: '700' }}>Expected Return: </Text>
-                {submittedData?.expectedReturnDate}
-              </Text>
-              <Text style={[styles.confirmDetailLine, { color: '#0369A1', marginTop: 4 }]}>
-                ℹ️ When you return to Goa, please submit an "Entry in Goa" report.
-              </Text>
-            </View>
-
-            <View style={{ width: '100%', gap: spacing.sm, marginTop: spacing.lg }}>
-              <Button
-                label="Return to Dashboard"
-                onPress={() => {
-                  setSubmittedConfirmed(false);
-                  router.replace('/(worker)/dashboard');
-                }}
-              />
-              <Button
-                label="View Travel History"
-                variant="ghost"
-                onPress={() => {
-                  setSubmittedConfirmed(false);
-                  router.replace('/(worker)/travel');
-                }}
-              />
-            </View>
           </View>
+        </Card>
+
+        {/* 2. Why are you leaving Goa? */}
+        <Card style={styles.card}>
+          <Text style={styles.cardTitle}>Why are you leaving Goa? *</Text>
+          <Text style={styles.cardSubtitle}>
+            Select the primary reason for your departure
+          </Text>
+
+          <View style={styles.optionsList}>
+            {REASON_OPTIONS.map((opt) => {
+              const isSelected = selectedReason === opt;
+              return (
+                <Pressable
+                  key={opt}
+                  onPress={() => setSelectedReason(opt)}
+                  style={[styles.radioRow, isSelected && styles.radioRowActive]}
+                >
+                  <View style={[styles.radioCircle, isSelected && styles.radioCircleActive]}>
+                    {isSelected && <View style={styles.radioDot} />}
+                  </View>
+                  <Text style={[styles.radioLabel, isSelected && styles.radioLabelActive]}>
+                    {opt}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
+          {selectedReason === 'Other' && (
+            <TextField
+              placeholder="Specify reason..."
+              value={otherReason}
+              onChangeText={setOtherReason}
+              style={{ marginTop: spacing.sm }}
+            />
+          )}
+        </Card>
+
+        {/* 3. Current Location */}
+        <Card style={styles.card}>
+          <LocationCaptureCard
+            location={location}
+            onLocationCaptured={setLocation}
+            accentColor="#2563EB" // Blue
+            title="Current Location"
+            buttonLabel="Capture Device Location"
+          />
+        </Card>
+
+        {/* 4. Submit Exit */}
+        <View style={styles.submitSection}>
+          <Pressable
+            onPress={handleSubmit}
+            disabled={submitting}
+            style={[
+              styles.submitButton,
+              submitting && { opacity: 0.7 },
+            ]}
+          >
+            {submitting ? (
+              <ActivityIndicator color="#FFFFFF" size="small" />
+            ) : (
+              <Text style={styles.submitButtonText}>Submit Exit ✓</Text>
+            )}
+          </Pressable>
+          <Text style={styles.autoTimestampText}>
+            ⏱️ Submission timestamp is captured automatically in the background
+          </Text>
         </View>
-      </Modal>
+      </ScrollView>
     </View>
   );
 }
@@ -369,240 +313,204 @@ const styles = StyleSheet.create({
   container: {
     padding: spacing.md,
     paddingBottom: spacing.xxl,
+    gap: spacing.md,
   },
   banner: {
-    backgroundColor: '#FFF7ED',
+    backgroundColor: '#EFF6FF', // Light blue
+    borderColor: '#93C5FD',
+    borderWidth: 1.5,
     borderRadius: radius.xl,
     padding: spacing.md,
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
-    borderWidth: 1.5,
-    borderColor: '#FED7AA',
-    marginBottom: spacing.md,
   },
-  bannerIconCircle: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#FFEDD5',
-    alignItems: 'center',
-    justifyContent: 'center',
+  bannerIcon: {
+    fontSize: 32,
   },
   bannerTitle: {
-    fontSize: fontSize.md,
-    fontWeight: fontWeight.bold as '700',
-    color: '#C2410C',
+    fontSize: fontSize.sm,
+    fontWeight: '800',
+    color: '#1E40AF',
   },
-  bannerSubtitle: {
+  bannerText: {
     fontSize: fontSize.xs,
-    color: '#9A3412',
+    color: '#3B82F6',
     marginTop: 2,
     lineHeight: 16,
   },
   card: {
     backgroundColor: palette.surface,
     borderRadius: radius.xl,
-    padding: spacing.lg,
+    padding: spacing.md,
     borderWidth: 1.5,
-    borderColor: palette.border,
+    borderColor: '#E2E8F0',
     ...shadow.card,
   },
-  sectionTitle: {
-    fontSize: fontSize.md,
+  cardTitle: {
+    fontSize: fontSize.sm,
     fontWeight: fontWeight.bold as '700',
-    color: palette.text,
-    marginBottom: spacing.sm,
+    color: '#0F172A', // Dark navy
   },
-  fieldLabel: {
-    fontSize: fontSize.sm,
-    fontWeight: fontWeight.medium as '500',
-    color: palette.textMuted,
-    marginBottom: spacing.xs,
-  },
-  stateSelector: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: palette.border,
-    borderRadius: radius.md,
-    padding: spacing.md,
-    backgroundColor: '#F8FAFC',
-    marginBottom: spacing.md,
-    minHeight: 48,
-  },
-  stateSelectorText: {
-    fontSize: fontSize.md,
-    color: palette.text,
-    fontWeight: '600',
-  },
-  dropdownIcon: {
-    fontSize: 12,
-    color: palette.textMuted,
-  },
-  toggleRow: {
-    flexDirection: 'row',
-    gap: spacing.xs,
-    marginBottom: spacing.sm,
-  },
-  toggleBtn: {
-    flex: 1,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.xs,
-    borderRadius: radius.md,
-    borderWidth: 1.5,
-    borderColor: palette.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#FFFFFF',
-    minHeight: 46,
-  },
-  toggleBtnActive: {
-    backgroundColor: '#FFF7ED',
-    borderColor: '#F97316',
-  },
-  toggleText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: palette.textMuted,
-    textAlign: 'center',
-  },
-  toggleTextActive: {
-    color: '#9A3412',
-    fontWeight: '700',
-  },
-  questionBox: {
-    backgroundColor: '#F8FAFC',
-    borderRadius: radius.lg,
-    padding: spacing.md,
-    borderWidth: 1,
-    borderColor: palette.border,
-    marginBottom: spacing.sm,
-  },
-  questionText: {
-    fontSize: fontSize.sm,
-    fontWeight: '700',
-    color: palette.text,
-    lineHeight: 20,
-  },
-  questionHindi: {
-    fontSize: 11,
+  cardSubtitle: {
+    fontSize: fontSize.xs,
     color: palette.textMuted,
     marginTop: 2,
     marginBottom: spacing.sm,
   },
-  toggleRowSmall: {
+  chipsLabel: {
+    fontSize: 11,
+    color: palette.textMuted,
+    fontWeight: '600',
+    marginTop: spacing.xs,
+    marginBottom: 6,
+  },
+  chipsRow: {
     flexDirection: 'row',
-    gap: spacing.sm,
+    flexWrap: 'wrap',
+    gap: 6,
   },
-  toggleBtnSmall: {
-    flex: 1,
-    paddingVertical: spacing.sm,
-    borderRadius: radius.md,
-    borderWidth: 1.5,
-    borderColor: palette.border,
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    minHeight: 42,
-    justifyContent: 'center',
-  },
-  toggleBtnActiveNo: {
+  chip: {
     backgroundColor: '#F1F5F9',
-    borderColor: '#64748B',
-  },
-  toggleBtnActiveYes: {
-    backgroundColor: '#FEF2F2',
-    borderColor: '#EF4444',
-  },
-  toggleTextSmall: {
-    fontSize: fontSize.xs,
-    fontWeight: '700',
-    color: palette.text,
-  },
-  warningBox: {
-    backgroundColor: '#FEF2F2',
-    padding: spacing.sm,
-    borderRadius: radius.md,
+    borderColor: '#CBD5E1',
     borderWidth: 1,
-    borderColor: '#FCA5A5',
-    marginBottom: spacing.md,
+    borderRadius: radius.pill,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
   },
-  warningText: {
-    fontSize: fontSize.xs,
-    color: '#991B1B',
-    lineHeight: 18,
+  chipActive: {
+    backgroundColor: '#DBEAFE',
+    borderColor: '#2563EB',
+  },
+  chipText: {
+    fontSize: 11,
+    color: palette.text,
     fontWeight: '600',
   },
-  stateItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: palette.border,
-    alignItems: 'center',
-    minHeight: 48,
-  },
-  stateItemSelected: {
-    backgroundColor: '#FFF7ED',
-  },
-  stateItemText: {
-    fontSize: fontSize.md,
-    color: palette.text,
-  },
-  stateItemTextSelected: {
+  chipTextActive: {
+    color: '#1E40AF',
     fontWeight: '700',
-    color: '#EA580C',
   },
-  confirmOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+  optionsList: {
+    gap: 8,
+  },
+  radioRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: spacing.sm,
+    backgroundColor: '#F8FAFC',
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  radioRowActive: {
+    borderColor: '#2563EB',
+    backgroundColor: '#EFF6FF',
+  },
+  radioCircle: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: '#94A3B8',
     justifyContent: 'center',
     alignItems: 'center',
-    padding: spacing.lg,
+    marginRight: spacing.sm,
   },
-  confirmCard: {
+  radioCircleActive: {
+    borderColor: '#2563EB',
+  },
+  radioDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#2563EB',
+  },
+  radioLabel: {
+    fontSize: fontSize.sm,
+    color: palette.text,
+  },
+  radioLabelActive: {
+    color: '#1E40AF',
+    fontWeight: '700',
+  },
+  submitSection: {
+    marginTop: spacing.sm,
+  },
+  submitButton: {
+    backgroundColor: '#2563EB', // Blue
+    minHeight: 52,
+    borderRadius: radius.xl,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  submitButtonText: {
+    color: '#FFFFFF',
+    fontSize: fontSize.md,
+    fontWeight: '700',
+  },
+  autoTimestampText: {
+    fontSize: 11,
+    color: palette.textMuted,
+    textAlign: 'center',
+    marginTop: spacing.xs,
+  },
+  successContainer: {
+    flex: 1,
+    padding: spacing.lg,
+    justifyContent: 'center',
+  },
+  successCard: {
     backgroundColor: palette.surface,
     borderRadius: radius.xl,
     padding: spacing.xl,
-    width: '100%',
-    maxWidth: 420,
     alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
     ...shadow.card,
   },
-  confirmIcon: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: '#FFEDD5',
-    alignItems: 'center',
+  successIconCircle: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    borderWidth: 2,
     justifyContent: 'center',
+    alignItems: 'center',
     marginBottom: spacing.md,
   },
-  confirmTitle: {
+  successTitle: {
     fontSize: fontSize.lg,
-    fontWeight: '700',
-    color: palette.text,
+    fontWeight: '800',
+    color: '#0F172A',
+    marginBottom: spacing.xs,
     textAlign: 'center',
   },
-  confirmSubtitle: {
+  successSubtitle: {
     fontSize: fontSize.xs,
     color: palette.textMuted,
     textAlign: 'center',
-    marginTop: 4,
-    marginBottom: spacing.md,
+    lineHeight: 18,
+    marginBottom: spacing.lg,
   },
-  confirmDetailsBox: {
+  summaryBox: {
+    width: '100%',
     backgroundColor: '#F8FAFC',
     borderRadius: radius.md,
     padding: spacing.md,
-    width: '100%',
-    gap: 4,
+    marginBottom: spacing.lg,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    gap: 6,
   },
-  confirmDetailLine: {
+  summaryRow: {
     fontSize: fontSize.xs,
-    color: palette.text,
-    lineHeight: 18,
+  },
+  summaryLabel: {
+    color: palette.textMuted,
+    fontWeight: '600',
+  },
+  summaryVal: {
+    color: '#0F172A',
+    fontWeight: '700',
   },
 });

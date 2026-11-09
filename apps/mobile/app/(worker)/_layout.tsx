@@ -20,6 +20,9 @@ export default function WorkerLayout() {
       <Stack.Screen name="dashboard" />
       <Stack.Screen name="entry" />
       <Stack.Screen name="exit" />
+      <Stack.Screen name="family" />
+      <Stack.Screen name="roommate" />
+      <Stack.Screen name="household" />
       <Stack.Screen name="pass" />
       <Stack.Screen name="profile" />
       <Stack.Screen name="screening" />

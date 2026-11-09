@@ -182,11 +182,11 @@ export default function SignUpScreen() {
 
       Alert.alert(
         'Registration Successful! 🎉',
-        `Welcome ${name.trim()} to the M3 Malaria Surveillance Project.\n\nAssigned Site: ${selectedSite.name}.\nYour baseline profile is now active.`,
+        `Welcome ${name.trim()} to the M3 Malaria Surveillance Project.\n\nAssigned Site: ${selectedSite.name}.\nPlease capture your device location to finalize registration.`,
         [
           {
-            text: 'Go to Dashboard',
-            onPress: () => router.replace('/(worker)/dashboard'),
+            text: 'Capture Location →',
+            onPress: () => router.replace('/register-location' as never),
           },
         ]
       );

@@ -1,21 +1,26 @@
 /**
- * TransferScreen — Worksite Transfer Workflow for Workers.
+ * TransferScreen — Master Implementation.
  *
- * Implements Section 9 requirements:
- * - Current construction site and current contractor.
- * - Searchable requested destination site and destination contractor.
- * - Reason for transfer field.
- * - 5 clear status stages display:
- *   1. Request submitted
- *   2. Destination site review
- *   3. Approval or rejection
- *   4. Current contractor release
- *   5. Transfer completed
- * - Supports worker-initiated requests and contractor-initiated requests with Accept/Reject.
- * - Enforces that transfer requires approval and does not change site immediately.
+ * Implements Section 11 requirements:
+ * 1. Current Site: Shows worker's currently assigned site.
+ * 2. Search or Select a Site:
+ *    - Search field by site name or area
+ *    - Selectable list of available sites
+ *    - Select one destination site
+ * 3. Current Location:
+ *    - Capture Device Location action
+ *    - Captures GPS coordinates upon activation
+ *    - Shows captured-location state
+ * 4. Submit Transfer Request:
+ *    - No contractor name request
+ *    - No destination contractor selection
+ *    - No unnecessary reason fields
+ *    - Saves destination site, coordinates & submission timestamp
+ * 5. Displays appropriate transfer request status.
+ * 6. Amber/orange accent theme (#D97706).
  */
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -25,13 +30,15 @@ import {
   StyleSheet,
   ActivityIndicator,
 } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import type { TransferStatus } from '@m3/shared';
-import { Card, Body, TextField, SelectRow, Button } from '@/components/ui';
+import { Card, TextField, Button } from '@/components/ui';
 import { TransferStatusChip } from '@/components/StatusChips';
 import { WorkerHeader } from '@/components/WorkerHeader';
 import { AudioGuidanceButton } from '@/components/AudioGuidanceButton';
+import { LocationCaptureCard } from '@/components/LocationCaptureCard';
+import { type CapturedLocation } from '@/services/location';
 import {
   transferApi,
   sitesApi,
@@ -44,34 +51,9 @@ import {
 import { useSession } from '@/store/session';
 import { palette, spacing, fontSize, fontWeight, radius, shadow } from '@/theme';
 
-const TRANSFER_STAGES = [
-  { step: 1, label: 'Request Submitted', icon: '📝', desc: 'Transfer logged in system' },
-  { step: 2, label: 'Destination Review', icon: '🔍', desc: 'New site evaluates vacancy' },
-  { step: 3, label: 'Approval / Decision', icon: '⚖️', desc: 'Both contractors align' },
-  { step: 4, label: 'Contractor Release', icon: '📋', desc: 'Release clearance authorized' },
-  { step: 5, label: 'Transfer Completed', icon: '✅', desc: 'Worksite assignment updated' },
-];
-
-function getStageIndex(status: string): number {
-  switch (status) {
-    case 'PENDING_WORKER_RESPONSE':
-      return 1;
-    case 'PENDING_DESTINATION_CONTRACTOR':
-      return 2;
-    case 'PENDING_CURRENT_CONTRACTOR':
-      return 4;
-    case 'ACCEPTED':
-      return 5;
-    case 'REJECTED':
-    case 'CANCELLED':
-      return 3;
-    default:
-      return 1;
-  }
-}
-
 export default function TransferScreen() {
   const { t } = useTranslation();
+  const router = useRouter();
   const { token } = useSession();
 
   const [profile, setProfile] = useState<WorkerProfile | null>(null);
@@ -79,32 +61,36 @@ export default function TransferScreen() {
   const [search, setSearch] = useState('');
   const [sites, setSites] = useState<SiteSummary[]>([]);
   const [selectedDestination, setSelectedDestination] = useState<SiteSummary | null>(null);
-  const [reason, setReason] = useState('');
+  const [location, setLocation] = useState<CapturedLocation | null>(null);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  const load = useCallback(async () => {
+  const loadData = useCallback(async () => {
     if (!token) return;
     try {
-      const [p, r] = await Promise.all([workerApi.me(token), transferApi.mine(token)]);
-      setProfile(p);
+      const [p, r] = await Promise.all([
+        workerApi.me(token).catch(() => null),
+        transferApi.mine(token).catch(() => [] as TransferDto[]),
+      ]);
+      if (p) setProfile(p);
       setRequests(r);
     } catch (e) {
       if (e instanceof ApiError && e.status !== 0) {
-        Alert.alert(t('transfer.title', 'Transfer Site'), e.message);
+        Alert.alert('Transfer Site', e.message);
       }
     } finally {
       setLoading(false);
     }
-  }, [token, t]);
+  }, [token]);
 
   useFocusEffect(
     useCallback(() => {
-      void load();
-    }, [load])
+      void loadData();
+    }, [loadData])
   );
 
-  async function doSearch(q: string) {
+  // Search sites by name or area
+  async function handleSearch(q: string) {
     setSearch(q);
     if (!token) return;
     if (!q.trim()) {
@@ -113,9 +99,10 @@ export default function TransferScreen() {
     }
     try {
       const res = await sitesApi.search(token, q);
+      // Filter out current site
       setSites(res.items.filter((s) => s.siteId !== profile?.currentSite?.siteId));
     } catch {
-      // non-fatal
+      // Non-fatal
     }
   }
 
@@ -124,26 +111,27 @@ export default function TransferScreen() {
       Alert.alert('Selection Required', 'Please search and select a destination construction site.');
       return;
     }
-    if (!reason.trim()) {
-      Alert.alert('Reason Required', 'Please provide a brief reason for requesting a transfer.');
-      return;
-    }
 
     if (!token) return;
     try {
       setBusy(true);
+      const timestamp = new Date().toISOString();
+      const note = location
+        ? `Worker-initiated transfer. GPS: ${location.formattedText} at ${timestamp}`
+        : `Worker-initiated transfer requested at ${timestamp}`;
+
       await transferApi.create(token, {
         toSiteId: selectedDestination.siteId,
-        note: reason.trim(),
+        note,
       });
+
       setSelectedDestination(null);
-      setReason('');
       setSearch('');
       setSites([]);
-      await load();
+      await loadData();
       Alert.alert(
         'Transfer Request Submitted! ✓',
-        `Your request to transfer to ${selectedDestination.name} has entered Stage 1. It is now undergoing destination review.`
+        `Your request to move to ${selectedDestination.name} has been submitted for contractor clearance and review.`
       );
     } catch (e: any) {
       Alert.alert('Error', e?.message || 'Could not submit transfer request.');
@@ -156,7 +144,7 @@ export default function TransferScreen() {
     try {
       setBusy(true);
       await fn();
-      await load();
+      await loadData();
     } catch (e: any) {
       Alert.alert('Error', e?.message || 'Operation failed.');
     } finally {
@@ -165,244 +153,201 @@ export default function TransferScreen() {
   }
 
   const currentSiteName = profile?.currentSite?.name || 'Candolim Beach Resort Project';
-  const currentContractorName = profile?.currentContractor?.name || 'Goa Infra Buildcon Ltd';
   const currentSiteArea = profile?.currentSite?.area || 'Candolim, North Goa';
+  const currentSiteId = profile?.currentSite?.siteId || 'SITE-SIM01';
 
-  const activeRequest = requests.find((r) => !['ACCEPTED', 'REJECTED', 'CANCELLED'].includes(r.status));
-  const activeStage = activeRequest ? getStageIndex(activeRequest.status) : 1;
+  const activeRequest = requests.find(
+    (r) => !['ACCEPTED', 'REJECTED', 'CANCELLED'].includes(r.status)
+  );
 
   return (
-    <View style={{ flex: 1, backgroundColor: palette.bg }}>
+    <View style={{ flex: 1, backgroundColor: '#F8FAFC' }}>
       <WorkerHeader
-        title={t('nav.transfer', 'Transfer Site')}
-        subtitle="Worksite Transfer Workflow"
+        title="Transfer Site"
+        subtitle="Worksite Reassignment"
         showBack={true}
         fallbackRoute="/(worker)/dashboard"
         rightElement={
           <AudioGuidanceButton
-            text="Transfer site. Request a change of construction site. Select your new worksite and state the reason. Your current site remains active until all 5 approval stages are complete."
+            text="Transfer site. Request a change of worksite. Select your destination site, capture your device location, and submit your transfer request."
             size="small"
           />
         }
       />
 
       <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
-        {/* Current Site & Contractor Card */}
-        <Card style={styles.currentSiteCard}>
-          <Text style={styles.cardHeaderSmall}>CURRENT ASSIGNED WORKSITE</Text>
-          <Text style={styles.siteTitle}>{currentSiteName}</Text>
-          <Text style={styles.siteMeta}>📍 {currentSiteArea}</Text>
-
-          <View style={styles.contractorBox}>
-            <Text style={styles.contractorLabel}>Current Contractor / Company:</Text>
-            <Text style={styles.contractorName}>{currentContractorName}</Text>
-          </View>
-        </Card>
-
-        {/* 5-Stage Transfer Progress Workflow Banner */}
-        <Card style={styles.stagesCard}>
-          <Text style={styles.stagesTitle}>5-Stage Transfer Workflow</Text>
-          <Text style={styles.stagesSubtitle}>
-            Mandatory protocol stages before worksite reassignment
-          </Text>
-
-          <View style={styles.stepperContainer}>
-            {TRANSFER_STAGES.map((s, idx) => {
-              const isPassed = activeRequest ? activeStage >= s.step : false;
-              const isCurrent = activeRequest ? activeStage === s.step : idx === 0;
-
-              return (
-                <View key={s.step} style={styles.stageStepRow}>
-                  <View style={styles.stepIndicatorCol}>
-                    <View
-                      style={[
-                        styles.stepCircle,
-                        isCurrent && styles.stepCircleCurrent,
-                        isPassed && styles.stepCirclePassed,
-                      ]}
-                    >
-                      <Text style={styles.stepIcon}>{s.icon}</Text>
-                    </View>
-                    {idx < TRANSFER_STAGES.length - 1 && (
-                      <View
-                        style={[
-                          styles.stepLine,
-                          isPassed && styles.stepLinePassed,
-                        ]}
-                      />
-                    )}
-                  </View>
-
-                  <View style={styles.stageDetailsCol}>
-                    <Text style={[styles.stageStepLabel, isCurrent && styles.stageStepLabelCurrent]}>
-                      Stage {s.step}: {s.label}
-                    </Text>
-                    <Text style={styles.stageStepDesc}>{s.desc}</Text>
-                  </View>
-                </View>
-              );
-            })}
-          </View>
-
-          <View style={styles.ruleNotice}>
-            <Text style={styles.ruleNoticeText}>
-              ⚠️ <Text style={{ fontWeight: '700' }}>Important:</Text> Submitting a request does NOT immediately change your site. You must continue reporting at your current site until Stage 5 is finalized.
+        {/* Banner */}
+        <View style={styles.banner}>
+          <Text style={styles.bannerIcon}>🔄</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.bannerTitle}>Worksite Transfer Request</Text>
+            <Text style={styles.bannerText}>
+              Your current site assignment remains active until transfer approvals are finalized.
             </Text>
           </View>
+        </View>
+
+        {/* 1. Current Site */}
+        <Card style={styles.card}>
+          <Text style={styles.cardHeaderSmall}>CURRENT ASSIGNED SITE</Text>
+          <Text style={styles.currentSiteName}>{currentSiteName}</Text>
+          <Text style={styles.currentSiteArea}>📍 {currentSiteArea}</Text>
+          <Text style={styles.currentSiteId}>Site ID: {currentSiteId}</Text>
         </Card>
 
-        {/* Transfer Request Form (if no open request) */}
-        {!activeRequest ? (
-          <Card style={styles.requestFormCard}>
-            <Text style={styles.formHeading}>Request a Site Transfer</Text>
-            <Text style={styles.formSub}>
-              Choose destination worksite in Goa and provide the reason
-            </Text>
-
-            {/* Selected Destination Card */}
-            {selectedDestination ? (
-              <View style={styles.destinationChosenCard}>
-                <View style={styles.chosenBadge}>
-                  <Text style={styles.chosenBadgeText}>Requested Destination</Text>
-                </View>
-                <Text style={styles.destName}>{selectedDestination.name}</Text>
-                <Text style={styles.destArea}>📍 {selectedDestination.area}</Text>
-                <Text style={styles.destId}>Site ID: {selectedDestination.siteId}</Text>
-
-                <View style={styles.destContractorRow}>
-                  <Text style={styles.destContractorLabel}>Destination Contractor:</Text>
-                  <Text style={styles.destContractorVal}>Project Assigned Contractor</Text>
-                </View>
-
-                <Pressable
-                  onPress={() => setSelectedDestination(null)}
-                  style={{ alignSelf: 'flex-start', marginTop: spacing.xs }}
-                >
-                  <Text style={{ fontSize: 11, color: palette.danger, fontWeight: '700' }}>
-                    ✕ Change Destination
-                  </Text>
-                </Pressable>
-              </View>
-            ) : (
-              <>
-                <TextField
-                  label="Search Destination Worksite"
-                  placeholder="Type site name (e.g. Panaji, Margao, Vasco...)"
-                  value={search}
-                  onChangeText={doSearch}
-                />
-
-                {sites.length > 0 && (
-                  <View style={{ marginBottom: spacing.md }}>
-                    <Text style={{ fontSize: fontSize.xs, color: palette.textMuted, marginBottom: 4 }}>
-                      Select from search results:
-                    </Text>
-                    {sites.map((s) => (
-                      <SelectRow
-                        key={s.siteId}
-                        label={s.name}
-                        sublabel={`${s.siteId} · ${s.area}`}
-                        onPress={() => {
-                          setSelectedDestination(s);
-                          setSites([]);
-                          setSearch('');
-                        }}
-                      />
-                    ))}
-                  </View>
-                )}
-              </>
-            )}
-
-            <TextField
-              label="Reason for Transfer *"
-              placeholder="e.g. Contract completed, employer reassignment, accommodation change..."
-              value={reason}
-              onChangeText={setReason}
-              multiline
-            />
-
-            <Button
-              label={busy ? 'Submitting...' : 'Submit Transfer Request ✓'}
-              onPress={submitTransferRequest}
-              loading={busy}
-              disabled={!selectedDestination || busy}
-              style={{ marginTop: spacing.sm, minHeight: 52 }}
-            />
-          </Card>
-        ) : (
-          /* Active Request Banner */
+        {/* 2. Active Transfer in Progress (if any) */}
+        {activeRequest ? (
           <Card style={styles.activeBannerCard}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text style={styles.activeBannerTitle}>Active Transfer in Progress</Text>
+            <View style={styles.activeHeader}>
+              <Text style={styles.activeBannerTitle}>Transfer Request in Progress</Text>
               <TransferStatusChip status={activeRequest.status as TransferStatus} />
             </View>
 
-            <Text style={styles.activeTransferRoute}>
+            <Text style={styles.activeRouteText}>
               {activeRequest.fromSite?.name || currentSiteName} → {activeRequest.toSite.name}
             </Text>
 
             <Text style={styles.initiatorText}>
               {activeRequest.initiatorType === 'CONTRACTOR'
                 ? '📋 Initiated by Contractor: Requires your acceptance'
-                : '👤 Requested by you: Currently undergoing contractor review'}
+                : '👤 Requested by you: Currently undergoing review and release clearance'}
             </Text>
 
-            {/* Action buttons if contractor initiated */}
+            {/* Contractor-initiated accept/reject */}
             {activeRequest.status === 'PENDING_WORKER_RESPONSE' && (
-              <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md }}>
-                <View style={{ flex: 1 }}>
-                  <Button
-                    label="Accept Transfer ✓"
-                    onPress={() => void act(() => transferApi.accept(token!, activeRequest.id))}
-                    loading={busy}
-                  />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Button
-                    label="Reject"
-                    variant="danger"
-                    onPress={() => void act(() => transferApi.reject(token!, activeRequest.id))}
-                    loading={busy}
-                  />
-                </View>
+              <View style={styles.decisionRow}>
+                <Pressable
+                  onPress={() => void act(() => transferApi.accept(token!, activeRequest.id))}
+                  disabled={busy}
+                  style={[styles.decisionBtn, { backgroundColor: '#16A34A' }]}
+                >
+                  <Text style={styles.decisionBtnText}>Accept Transfer ✓</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => void act(() => transferApi.reject(token!, activeRequest.id))}
+                  disabled={busy}
+                  style={[styles.decisionBtn, { backgroundColor: '#DC2626' }]}
+                >
+                  <Text style={styles.decisionBtnText}>Reject</Text>
+                </Pressable>
               </View>
             )}
 
+            {/* Cancel option */}
             {activeRequest.status !== 'PENDING_WORKER_RESPONSE' && (
-              <View style={{ marginTop: spacing.md }}>
-                <Button
-                  label="Cancel Request"
-                  variant="ghost"
-                  onPress={() => void act(() => transferApi.cancel(token!, activeRequest.id))}
-                  loading={busy}
-                />
-              </View>
+              <Pressable
+                onPress={() => void act(() => transferApi.cancel(token!, activeRequest.id))}
+                disabled={busy}
+                style={styles.cancelBtn}
+              >
+                <Text style={styles.cancelBtnText}>Cancel Transfer Request</Text>
+              </Pressable>
             )}
+          </Card>
+        ) : (
+          /* 3. Search or Select Destination Site */
+          <Card style={styles.card}>
+            <Text style={styles.cardTitle}>Search or Select Destination Site *</Text>
+            <Text style={styles.cardSubtitle}>
+              Find the new construction worksite in Goa you are moving to
+            </Text>
+
+            {selectedDestination ? (
+              <View style={styles.selectedSiteCard}>
+                <View style={styles.selectedBadge}>
+                  <Text style={styles.selectedBadgeText}>Selected Destination</Text>
+                </View>
+                <Text style={styles.selectedSiteTitle}>{selectedDestination.name}</Text>
+                <Text style={styles.selectedSiteArea}>📍 {selectedDestination.area}</Text>
+                <Text style={styles.selectedSiteId}>Site ID: {selectedDestination.siteId}</Text>
+
+                <Pressable
+                  onPress={() => setSelectedDestination(null)}
+                  style={styles.changeLink}
+                >
+                  <Text style={styles.changeLinkText}>✕ Choose Different Site</Text>
+                </Pressable>
+              </View>
+            ) : (
+              <>
+                <TextField
+                  placeholder="Type site name or area (e.g. Panaji, Margao, Vasco...)"
+                  value={search}
+                  onChangeText={handleSearch}
+                />
+
+                {sites.length > 0 && (
+                  <View style={styles.resultsList}>
+                    <Text style={styles.resultsHeading}>Available Worksites:</Text>
+                    {sites.map((s) => (
+                      <Pressable
+                        key={s.siteId}
+                        onPress={() => {
+                          setSelectedDestination(s);
+                          setSites([]);
+                          setSearch('');
+                        }}
+                        style={styles.resultItem}
+                      >
+                        <Text style={styles.resultName}>{s.name}</Text>
+                        <Text style={styles.resultMeta}>
+                          {s.siteId} · 📍 {s.area}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                )}
+              </>
+            )}
+
+            {/* 4. Current Location */}
+            <View style={{ marginTop: spacing.md, paddingTop: spacing.sm, borderTopWidth: 1, borderTopColor: '#F1F5F9' }}>
+              <LocationCaptureCard
+                location={location}
+                onLocationCaptured={setLocation}
+                accentColor="#D97706" // Amber/Orange
+                title="Current Location"
+                buttonLabel="Capture Device Location"
+              />
+            </View>
+
+            {/* 5. Submit Transfer Request */}
+            <Pressable
+              onPress={submitTransferRequest}
+              disabled={!selectedDestination || busy}
+              style={[
+                styles.submitBtn,
+                (!selectedDestination || busy) && { opacity: 0.6 },
+              ]}
+            >
+              {busy ? (
+                <ActivityIndicator color="#FFFFFF" size="small" />
+              ) : (
+                <Text style={styles.submitBtnText}>Submit Transfer Request ✓</Text>
+              )}
+            </Pressable>
           </Card>
         )}
 
         {/* Transfer History */}
         <View style={styles.historySection}>
           <Text style={styles.historyTitle}>Transfer History ({requests.length})</Text>
-
           {loading ? (
-            <ActivityIndicator color={palette.primary} style={{ marginTop: spacing.md }} />
+            <ActivityIndicator color="#D97706" style={{ marginTop: spacing.sm }} />
           ) : requests.length === 0 ? (
-            <Text style={{ fontSize: fontSize.xs, color: palette.textMuted, marginTop: 4 }}>
-              No previous transfer requests.
-            </Text>
+            <Text style={styles.emptyHistoryText}>No previous transfer requests logged.</Text>
           ) : (
             requests.map((r) => (
               <Card key={r.id} style={styles.historyCard}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <Text style={styles.historyRoute} numberOfLines={1}>
+                <View style={styles.historyRow}>
+                  <Text style={styles.historyRouteText} numberOfLines={1}>
                     {(r.fromSite?.name ?? 'Previous')} → {r.toSite.name}
                   </Text>
                   <TransferStatusChip status={r.status as TransferStatus} />
                 </View>
-                <Text style={styles.historyMeta}>
-                  {r.initiatorType === 'CONTRACTOR' ? 'Contractor-initiated' : 'Worker-initiated'}
+                <Text style={styles.historyMetaText}>
+                  {r.initiatorType === 'CONTRACTOR' ? 'Contractor-initiated' : 'Worker-initiated'} •{' '}
+                  {new Date(r.createdAt).toLocaleDateString()}
                 </Text>
               </Card>
             ))
@@ -419,14 +364,36 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.xxl,
     gap: spacing.md,
   },
-  currentSiteCard: {
+  banner: {
+    backgroundColor: '#FFFBEB', // Light amber
+    borderColor: '#FDE68A',
+    borderWidth: 1.5,
+    borderRadius: radius.xl,
+    padding: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  bannerIcon: {
+    fontSize: 32,
+  },
+  bannerTitle: {
+    fontSize: fontSize.sm,
+    fontWeight: '800',
+    color: '#B45309',
+  },
+  bannerText: {
+    fontSize: fontSize.xs,
+    color: '#D97706',
+    marginTop: 2,
+    lineHeight: 16,
+  },
+  card: {
     backgroundColor: palette.surface,
     borderRadius: radius.xl,
     padding: spacing.md,
     borderWidth: 1.5,
     borderColor: '#E2E8F0',
-    borderLeftWidth: 5,
-    borderLeftColor: palette.primary,
     ...shadow.card,
   },
   cardHeaderSmall: {
@@ -435,244 +402,214 @@ const styles = StyleSheet.create({
     color: palette.textMuted,
     letterSpacing: 0.5,
   },
-  siteTitle: {
+  currentSiteName: {
     fontSize: fontSize.md,
     fontWeight: fontWeight.bold as '700',
-    color: palette.text,
+    color: '#0F172A',
     marginTop: 2,
   },
-  siteMeta: {
+  currentSiteArea: {
     fontSize: fontSize.xs,
-    color: palette.primaryDark,
+    color: '#D97706',
     marginTop: 2,
   },
-  contractorBox: {
-    backgroundColor: '#F8FAFC',
-    borderRadius: radius.md,
-    padding: spacing.sm,
-    marginTop: spacing.sm,
-    borderWidth: 1,
-    borderColor: palette.border,
-  },
-  contractorLabel: {
-    fontSize: 10,
-    color: palette.textMuted,
-    fontWeight: '600',
-  },
-  contractorName: {
-    fontSize: fontSize.xs,
-    fontWeight: '700',
-    color: palette.text,
-    marginTop: 2,
-  },
-  stagesCard: {
-    backgroundColor: palette.surface,
-    borderRadius: radius.xl,
-    padding: spacing.md,
-    borderWidth: 1.5,
-    borderColor: palette.border,
-    ...shadow.card,
-  },
-  stagesTitle: {
-    fontSize: fontSize.md,
-    fontWeight: fontWeight.bold as '700',
-    color: palette.text,
-  },
-  stagesSubtitle: {
-    fontSize: fontSize.xs,
-    color: palette.textMuted,
-    marginTop: 2,
-    marginBottom: spacing.md,
-  },
-  stepperContainer: {
-    gap: 0,
-  },
-  stageStepRow: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-  },
-  stepIndicatorCol: {
-    alignItems: 'center',
-    width: 36,
-  },
-  stepCircle: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: '#F1F5F9',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: palette.border,
-  },
-  stepCircleCurrent: {
-    backgroundColor: '#E0F2FE',
-    borderColor: '#0284C7',
-  },
-  stepCirclePassed: {
-    backgroundColor: '#DCFCE7',
-    borderColor: '#16A34A',
-  },
-  stepIcon: {
-    fontSize: 16,
-  },
-  stepLine: {
-    width: 2,
-    height: 24,
-    backgroundColor: palette.border,
-  },
-  stepLinePassed: {
-    backgroundColor: '#16A34A',
-  },
-  stageDetailsCol: {
-    flex: 1,
-    paddingTop: 4,
-    paddingBottom: spacing.sm,
-  },
-  stageStepLabel: {
-    fontSize: fontSize.xs,
-    fontWeight: '700',
-    color: palette.text,
-  },
-  stageStepLabelCurrent: {
-    color: palette.primary,
-  },
-  stageStepDesc: {
+  currentSiteId: {
     fontSize: 11,
     color: palette.textMuted,
-    marginTop: 1,
+    marginTop: 2,
   },
-  ruleNotice: {
+  cardTitle: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.bold as '700',
+    color: '#0F172A',
+  },
+  cardSubtitle: {
+    fontSize: fontSize.xs,
+    color: palette.textMuted,
+    marginTop: 2,
+    marginBottom: spacing.sm,
+  },
+  selectedSiteCard: {
     backgroundColor: '#FFFBEB',
-    padding: spacing.sm,
-    borderRadius: radius.md,
-    marginTop: spacing.sm,
-    borderWidth: 1,
-    borderColor: '#FDE68A',
-  },
-  ruleNoticeText: {
-    fontSize: 11,
-    color: '#92400E',
-    lineHeight: 16,
-  },
-  requestFormCard: {
-    backgroundColor: palette.surface,
-    borderRadius: radius.xl,
-    padding: spacing.lg,
+    borderColor: '#D97706',
     borderWidth: 1.5,
-    borderColor: palette.border,
-    ...shadow.card,
-  },
-  formHeading: {
-    fontSize: fontSize.md,
-    fontWeight: '700',
-    color: palette.text,
-  },
-  formSub: {
-    fontSize: fontSize.xs,
-    color: palette.textMuted,
-    marginTop: 2,
-    marginBottom: spacing.md,
-  },
-  destinationChosenCard: {
-    backgroundColor: '#F0FDFA',
     borderRadius: radius.lg,
     padding: spacing.md,
-    borderWidth: 1.5,
-    borderColor: palette.primary,
-    marginBottom: spacing.md,
   },
-  chosenBadge: {
-    alignSelf: 'flex-start',
-    backgroundColor: palette.primary,
-    borderRadius: radius.pill,
+  selectedBadge: {
+    backgroundColor: '#D97706',
     paddingHorizontal: 8,
-    paddingVertical: 2,
-    marginBottom: 4,
+    paddingVertical: 3,
+    borderRadius: 4,
+    alignSelf: 'flex-start',
+    marginBottom: 6,
   },
-  chosenBadgeText: {
+  selectedBadgeText: {
     color: '#FFFFFF',
     fontSize: 10,
     fontWeight: '700',
   },
-  destName: {
-    fontSize: fontSize.md,
-    fontWeight: '700',
-    color: palette.text,
-  },
-  destArea: {
-    fontSize: fontSize.xs,
-    color: palette.primaryDark,
-    marginTop: 2,
-  },
-  destId: {
-    fontSize: 11,
-    color: palette.textMuted,
-    marginTop: 2,
-  },
-  destContractorRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: spacing.xs,
-  },
-  destContractorLabel: {
-    fontSize: 11,
-    color: palette.textMuted,
-  },
-  destContractorVal: {
-    fontSize: 11,
-    color: palette.text,
-    fontWeight: '600',
-  },
-  activeBannerCard: {
-    backgroundColor: '#EFF6FF',
-    borderRadius: radius.xl,
-    padding: spacing.md,
-    borderWidth: 1.5,
-    borderColor: '#93C5FD',
-  },
-  activeBannerTitle: {
-    fontSize: fontSize.md,
-    fontWeight: '700',
-    color: '#1E40AF',
-  },
-  activeTransferRoute: {
+  selectedSiteTitle: {
     fontSize: fontSize.sm,
     fontWeight: '700',
-    color: palette.text,
-    marginTop: spacing.xs,
+    color: '#0F172A',
+  },
+  selectedSiteArea: {
+    fontSize: fontSize.xs,
+    color: '#B45309',
+    marginTop: 2,
+  },
+  selectedSiteId: {
+    fontSize: 11,
+    color: palette.textMuted,
+    marginTop: 2,
+  },
+  changeLink: {
+    marginTop: spacing.sm,
+    alignSelf: 'flex-start',
+  },
+  changeLinkText: {
+    fontSize: 11,
+    color: palette.danger,
+    fontWeight: '700',
+  },
+  resultsList: {
+    marginTop: spacing.sm,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: radius.md,
+    backgroundColor: '#F8FAFC',
+    maxHeight: 200,
+  },
+  resultsHeading: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: palette.textMuted,
+    padding: spacing.xs,
+    paddingLeft: spacing.sm,
+    backgroundColor: '#F1F5F9',
+  },
+  resultItem: {
+    padding: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+  },
+  resultName: {
+    fontSize: fontSize.xs,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  resultMeta: {
+    fontSize: 11,
+    color: palette.textMuted,
+    marginTop: 1,
+  },
+  submitBtn: {
+    backgroundColor: '#D97706', // Amber/orange accent
+    minHeight: 52,
+    borderRadius: radius.xl,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: spacing.md,
+  },
+  submitBtnText: {
+    color: '#FFFFFF',
+    fontSize: fontSize.md,
+    fontWeight: '700',
+  },
+  activeBannerCard: {
+    backgroundColor: palette.surface,
+    borderRadius: radius.xl,
+    padding: spacing.md,
+    borderWidth: 2,
+    borderColor: '#F59E0B',
+    ...shadow.card,
+  },
+  activeHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing.xs,
+  },
+  activeBannerTitle: {
+    fontSize: fontSize.sm,
+    fontWeight: '700',
+    color: '#B45309',
+  },
+  activeRouteText: {
+    fontSize: fontSize.md,
+    fontWeight: '800',
+    color: '#0F172A',
+    marginBottom: 4,
   },
   initiatorText: {
     fontSize: fontSize.xs,
-    color: '#3B82F6',
-    marginTop: 4,
+    color: palette.textMuted,
+    lineHeight: 16,
+    marginBottom: spacing.sm,
+  },
+  decisionRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: spacing.xs,
+  },
+  decisionBtn: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: radius.lg,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  decisionBtnText: {
+    color: '#FFFFFF',
+    fontSize: fontSize.xs,
+    fontWeight: '700',
+  },
+  cancelBtn: {
+    paddingVertical: spacing.xs,
+    alignItems: 'center',
+  },
+  cancelBtnText: {
+    fontSize: fontSize.xs,
+    color: palette.danger,
+    fontWeight: '600',
   },
   historySection: {
     marginTop: spacing.xs,
   },
   historyTitle: {
-    fontSize: fontSize.md,
-    fontWeight: '700',
-    color: palette.text,
-    marginBottom: spacing.xs,
+    fontSize: fontSize.xs,
+    fontWeight: '800',
+    color: '#64748B',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    marginBottom: spacing.sm,
+  },
+  emptyHistoryText: {
+    fontSize: fontSize.xs,
+    color: palette.textMuted,
   },
   historyCard: {
     backgroundColor: palette.surface,
+    padding: spacing.sm,
     borderRadius: radius.lg,
-    padding: spacing.md,
     borderWidth: 1,
-    borderColor: palette.border,
+    borderColor: '#E2E8F0',
     marginBottom: spacing.xs,
   },
-  historyRoute: {
+  historyRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  historyRouteText: {
     fontSize: fontSize.xs,
     fontWeight: '700',
-    color: palette.text,
+    color: '#0F172A',
     flex: 1,
   },
-  historyMeta: {
-    fontSize: 11,
+  historyMetaText: {
+    fontSize: 10,
     color: palette.textMuted,
     marginTop: 2,
   },

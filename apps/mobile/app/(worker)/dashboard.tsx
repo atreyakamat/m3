@@ -1,233 +1,176 @@
-import React, { useCallback, useState } from 'react';
+/**
+ * Worker Dashboard — Master Implementation.
+ *
+ * Implements Section 5 requirements:
+ * - Exactly six primary actions in a 2-column, 3-row grid:
+ *   Top row:    [Exit from Goa (Left, Blue)]    [Entry in Goa (Right, Teal)]
+ *   Middle row: [Not Feeling Well (Left, Red)]  [Family (Right, Green)]
+ *   Bottom row: [Roommate (Left, Purple)]       [Transfer Site (Right, Amber)]
+ * - Realistic smartphone layout with light theme.
+ * - Consistent typography, clean rounded cards, large touch targets.
+ * - No Construction Site card, no unnecessary subtitles or decorative elements.
+ */
+
+import React, { useCallback, useEffect, useState } from 'react';
 import {
-  View,
-  Text,
-  Pressable,
   ActivityIndicator,
+  Alert,
+  Dimensions,
+  Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
+  Text,
+  View,
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { Card, Body, Button } from '@/components/ui';
-import { MalariaStatusChip, SyncStateChip } from '@/components/StatusChips';
-import { WorkerHeader } from '@/components/WorkerHeader';
-import { workerApi, recordsApi, type WorkerProfile, ApiError, isNetworkError } from '@/api';
-import { useSession } from '@/store/session';
-import { outboxRepo, uuid } from '@/db/outbox';
-import { pendingCount, flushOutbox } from '@/services/sync';
-import { screeningLocalRepo } from '@/services/screeningLocal';
 import { AudioGuidanceButton } from '@/components/AudioGuidanceButton';
+import { WorkerHeader } from '@/components/WorkerHeader';
 import {
-  WorkerGuidedTour,
-  TOUR_COMPLETION_STORAGE_KEY,
-} from '@/components/worker-guide';
+  workerApi,
+  recordsApi,
+  type WorkerProfile,
+  type EpisodeDto,
+  isNetworkError,
+} from '@/api';
+import { useSession } from '@/store/session';
+import { flushOutbox, pendingCount } from '@/services/sync';
 import { palette, spacing, radius, fontSize, fontWeight, shadow } from '@/theme';
 
-// The 8 Primary Dashboard Action Buttons in clean 2-column grid
 interface DashboardAction {
   id: string;
   route: string;
-  titleKey: string;
-  defaultTitle: string;
-  descKey: string;
-  defaultDesc: string;
+  title: string;
+  subtitle: string;
   icon: string;
-  badgeBg: string;
+  accentColor: string;
+  lightBg: string;
   borderColor: string;
 }
 
 const DASHBOARD_ACTIONS: DashboardAction[] = [
-  {
-    id: 'entry',
-    route: '/(worker)/entry',
-    titleKey: 'travel.enterGoaAction',
-    defaultTitle: 'Entry in Goa',
-    descKey: 'travel.enterGoaDesc',
-    defaultDesc: 'Arrival health check & log',
-    icon: '🛬',
-    badgeBg: '#E0F2FE',
-    borderColor: '#7DD3FC',
-  },
+  // Top row
   {
     id: 'exit',
     route: '/(worker)/exit',
-    titleKey: 'travel.exitGoaAction',
-    defaultTitle: 'Exit from Goa',
-    descKey: 'travel.exitGoaDesc',
-    defaultDesc: 'Departure & return report',
+    title: 'Exit from Goa',
+    subtitle: 'Report departure',
     icon: '🛫',
-    badgeBg: '#FFEDD5',
-    borderColor: '#FDBA74',
+    accentColor: '#2563EB', // Blue
+    lightBg: '#EFF6FF',
+    borderColor: '#93C5FD',
   },
+  {
+    id: 'entry',
+    route: '/(worker)/entry',
+    title: 'Entry in Goa',
+    subtitle: 'Report arrival',
+    icon: '🛬',
+    accentColor: '#0D9488', // Teal
+    lightBg: '#F0FDFA',
+    borderColor: '#99F6E4',
+  },
+  // Middle row
   {
     id: 'unwell',
     route: '/(worker)/unwell',
-    titleKey: 'nav.feelingUnwell',
-    defaultTitle: 'Not Feeling Well',
-    descKey: 'nav.unwellDesc',
-    defaultDesc: 'Symptoms or voice note',
+    title: 'Not Feeling Well',
+    subtitle: 'Report symptoms',
     icon: '🤒',
-    badgeBg: '#FFE4E6',
-    borderColor: '#FDA4AF',
+    accentColor: '#DC2626', // Red
+    lightBg: '#FEF2F2',
+    borderColor: '#FCA5A5',
   },
   {
-    id: 'household',
-    route: '/(worker)/household',
-    titleKey: 'nav.household',
-    defaultTitle: 'Household',
-    descKey: 'nav.householdDesc',
-    defaultDesc: 'Roommates & family',
+    id: 'family',
+    route: '/(worker)/family',
+    title: 'Family',
+    subtitle: 'Add family member',
     icon: '👨‍👩‍👧',
-    badgeBg: '#F3E8FF',
+    accentColor: '#16A34A', // Green
+    lightBg: '#F0FDF4',
+    borderColor: '#86EFAC',
+  },
+  // Bottom row
+  {
+    id: 'roommate',
+    route: '/(worker)/roommate',
+    title: 'Roommate',
+    subtitle: 'Add roommate',
+    icon: '👥',
+    accentColor: '#9333EA', // Purple
+    lightBg: '#FAF5FF',
     borderColor: '#D8B4FE',
   },
   {
     id: 'transfer',
     route: '/(worker)/transfer',
-    titleKey: 'nav.transfer',
-    defaultTitle: 'Transfer Site',
-    descKey: 'nav.transferDesc',
-    defaultDesc: 'Request worksite move',
+    title: 'Transfer Site',
+    subtitle: 'Request site move',
     icon: '🔄',
-    badgeBg: '#D1FAE5',
-    borderColor: '#6EE7B7',
-  },
-  {
-    id: 'site',
-    route: '/(worker)/site',
-    titleKey: 'nav.site',
-    defaultTitle: 'Construction Site',
-    descKey: 'nav.siteDesc',
-    defaultDesc: 'Assigned site details',
-    icon: '🏗️',
-    badgeBg: '#CCFBF1',
-    borderColor: '#99F6E4',
-  },
-  {
-    id: 'profile',
-    route: '/(worker)/profile',
-    titleKey: 'nav.profile',
-    defaultTitle: 'My Profile',
-    descKey: 'nav.profileDesc',
-    defaultDesc: 'Worker ID & identity',
-    icon: '👤',
-    badgeBg: '#E0E7FF',
-    borderColor: '#A5B4FC',
-  },
-  {
-    id: 'screening',
-    route: '/(worker)/screening',
-    titleKey: 'nav.screening',
-    defaultTitle: 'Initial Screening',
-    descKey: 'nav.screeningDesc',
-    defaultDesc: 'Baseline health records',
-    icon: '📋',
-    badgeBg: '#EDE9FE',
-    borderColor: '#C4B5FD',
+    accentColor: '#D97706', // Amber/Orange
+    lightBg: '#FFFBEB',
+    borderColor: '#FDE68A',
   },
 ];
 
 export default function Dashboard() {
   const { t } = useTranslation();
   const router = useRouter();
-  const { token, user, signOut, language, setLanguage } = useSession();
+  const { token, user, signOut } = useSession();
+
   const [profile, setProfile] = useState<WorkerProfile | null>(null);
-  const [latestDiag, setLatestDiag] = useState<{ result: string; testType: string; species?: string; testDate: string } | null>(null);
-  const [currentRx, setCurrentRx] = useState<{ details: string; issuedAt: string } | null>(null);
   const [loading, setLoading] = useState(true);
-  const [offline, setOffline] = useState(false);
-  const [queued, setQueued] = useState(0);
-  const [tourVisible, setTourVisible] = useState(false);
-  const [installConsentPrompt, setInstallConsentPrompt] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [outboxPending, setOutboxPending] = useState(0);
 
-  React.useEffect(() => {
-    void AsyncStorage.getItem(TOUR_COMPLETION_STORAGE_KEY).then((done) => {
-      if (!done) {
-        setTourVisible(true);
-      }
-    });
-  }, []);
-
-  const load = useCallback(async () => {
+  const loadData = useCallback(async () => {
     if (!token) return;
     try {
-      try {
-        await flushOutbox(token);
-      } catch {
-        /* offline or non-fatal */
-      }
+      const [p] = await Promise.all([
+        workerApi.me(token).catch((err) => {
+          if (isNetworkError(err)) return null;
+          throw err;
+        }),
+        flushOutbox(token).catch(() => {}),
+      ]);
 
-      const p = await workerApi.me(token);
-      setProfile(p);
-      setOffline(false);
-
-      if (p.preferredLanguage && p.preferredLanguage !== language) {
-        void setLanguage(p.preferredLanguage);
+      if (p) {
+        setProfile(p);
       }
-
-      // Check App Installation Consent status
-      const workerId = user?.workerId || user?.userId || 'current_worker';
-      const storedConsent = await AsyncStorage.getItem(`m3_install_consent_${workerId}`);
-      if (!storedConsent) {
-        setInstallConsentPrompt(true);
-      }
-
-      // If positive or has diagnostics, load clinical records
-      try {
-        const diags = (await recordsApi.diagnostics(token)) as { result: string; testType: string; species?: string; testDate: string }[];
-        if (diags && diags.length > 0) {
-          setLatestDiag(diags[0]);
-        }
-        if (p.malariaStatus === 'POSITIVE') {
-          const rx = (await recordsApi.currentPrescription(token)) as { details: string; issuedAt: string } | null;
-          setCurrentRx(rx);
-        }
-      } catch {
-        /* non-fatal */
-      }
-    } catch (e) {
-      if (isNetworkError(e)) {
-        setOffline(true);
-      } else if (e instanceof ApiError && e.status === 401) {
-        void signOut();
-      }
+      setOutboxPending(pendingCount());
+    } catch {
+      // Non-fatal
     } finally {
       setLoading(false);
-      try {
-        setQueued(pendingCount());
-      } catch {
-        /* db not ready */
-      }
+      setRefreshing(false);
     }
-  }, [token, signOut, user, language, setLanguage]);
+  }, [token]);
 
-  useFocusEffect(
-    useCallback(() => {
-      void load();
-    }, [load])
-  );
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
 
-  const status = profile?.malariaStatus ?? 'NO_RESULT';
-  const isPositive = status === 'POSITIVE';
-  const workerDisplayName = profile?.name || user?.displayName || 'Worker';
-  const currentSiteName = profile?.currentSite?.name || 'Candolim Beach Resort Project';
-  const currentSiteArea = profile?.currentSite?.area || 'Candolim, North Goa';
-  const currentSiteId = profile?.currentSite?.siteId || 'SITE-GOA-001';
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    void loadData();
+  }, [loadData]);
+
+  const workerName = profile?.name || user?.displayName || 'Worker';
+  const workerCode = profile?.workerId || user?.workerId || 'M3-R2G6N3';
+  const siteName = profile?.currentSite?.name || 'Candolim Beach Resort Project';
+  const siteArea = profile?.currentSite?.area || 'Candolim, North Goa';
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: palette.bg }} edges={['bottom']}>
-      {/* Worker Header with Language Switcher */}
+    <View style={styles.container}>
+      {/* Top Header */}
       <WorkerHeader
-        title={t('dashboard.greeting', { name: workerDisplayName, defaultValue: `Namaste, ${workerDisplayName} 👋` })}
-        subtitle={user?.workerId ? `Worker ID: ${user.workerId}` : 'ICMR–NIMR Malaria Surveillance'}
-        showBack={false}
+        title="M3 Malaria Surveillance"
+        subtitle={`Worker ID: ${workerCode}`}
         rightElement={
           <AudioGuidanceButton
-            text="Welcome to your M3 worker dashboard. Here you can report entry or exit from Goa, report symptoms if unwell, manage household members, check assigned construction site, view profile, and access screening records."
+            text={`Worker dashboard. Welcome ${workerName}. Select from the six options: Exit from Goa, Entry in Goa, Not Feeling Well, Family, Roommate, or Transfer Site.`}
             size="small"
           />
         }
@@ -235,399 +178,174 @@ export default function Dashboard() {
 
       <ScrollView
         contentContainerStyle={styles.scrollContent}
-        refreshControl={<RefreshControl refreshing={loading} onRefresh={() => void load()} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[palette.primary]} />}
       >
-        {/* Offline Warning Banner */}
-        {offline && (
-          <View style={styles.offlineBanner}>
-            <Text style={styles.offlineText}>
-              📶 {t('status.offline', 'Offline Mode: Changes will save locally and sync when connected.')}
-            </Text>
-          </View>
-        )}
-
-        {/* Current Assigned Construction Site Card */}
-        <Card style={styles.siteCard}>
-          <View style={styles.siteCardHeader}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.siteCardLabel}>
-                {t('dashboard.currentSite', 'Currently Assigned Construction Site')}
-              </Text>
-              <Text style={styles.siteName}>{currentSiteName}</Text>
-              <Text style={styles.siteLocation}>📍 {currentSiteArea}</Text>
-              <Text style={styles.siteIdText}>Site ID: {currentSiteId}</Text>
-            </View>
-            <View style={styles.siteActiveBadge}>
-              <Text style={styles.siteActiveText}>● Active Site</Text>
-            </View>
-          </View>
-
-          {/* Worker Status Row */}
-          <View style={styles.statusRow}>
-            <View style={styles.statusItem}>
-              <Text style={styles.statusLabel}>{t('dashboard.malariaStatus', 'Malaria Status:')}</Text>
-              <MalariaStatusChip status={status} />
-            </View>
-
-            {queued > 0 && (
-              <View style={styles.syncItem}>
-                <SyncStateChip state="PENDING" />
-              </View>
-            )}
-          </View>
-        </Card>
-
-        {/* Clinical Alert if Positive */}
-        {isPositive && (
-          <View style={styles.clinicalAlertBox}>
-            <Text style={styles.clinicalAlertTitle}>🚨 Positive Malaria Diagnosis</Text>
-            <Text style={styles.clinicalAlertDesc}>
-              Medical care and prescription issued. Please complete all prescribed medication doses.
-            </Text>
-            {currentRx && (
-              <View style={styles.rxSubCard}>
-                <Text style={styles.rxTitle}>💊 Active Prescription:</Text>
-                <Text style={styles.rxDetails}>{currentRx.details}</Text>
-              </View>
-            )}
-          </View>
-        )}
-
-        {/* App Installation Consent Modal / Prompt */}
-        {installConsentPrompt && (
-          <Card style={styles.consentCard}>
-            <Text style={styles.consentTitle}>📋 App Installation Consent</Text>
-            <Body style={styles.consentBody}>
-              Welcome to the M3 Malaria Surveillance Platform. Do you agree to use this application for health monitoring and malaria prevention in Goa?
-            </Body>
-            <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md }}>
-              <View style={{ flex: 1 }}>
-                <Button
-                  label="I Agree"
-                  onPress={async () => {
-                    const payload = {
-                      consentVersion: '1.0',
-                      language,
-                      status: 'ACCEPTED',
-                      deviceInfo: 'Worker Mobile App',
-                    };
-                    if (token) {
-                      try {
-                        await workerApi.consentInstall(token, payload);
-                      } catch {
-                        /* offline */
-                      }
-                    }
-                    const workerId = user?.workerId || user?.userId || 'current_worker';
-                    await AsyncStorage.setItem(`m3_install_consent_${workerId}`, 'ACCEPTED');
-                    setInstallConsentPrompt(false);
-                  }}
-                />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Button
-                  label="Later"
-                  variant="ghost"
-                  onPress={() => setInstallConsentPrompt(false)}
-                />
-              </View>
-            </View>
-          </Card>
-        )}
-
-        {/* Visual Tour & Audio Guide Launcher */}
-        <Pressable
-          onPress={() => setTourVisible(true)}
-          style={({ pressed }) => [styles.tourButton, pressed && { opacity: 0.9 }]}
-          accessibilityRole="button"
-          accessibilityLabel="Open Visual Tour"
-        >
-          <View style={styles.tourIconCircle}>
-            <Text style={{ fontSize: 22 }}>📖</Text>
+        {/* Worker Greeting & Assigned Site Card */}
+        <View style={styles.workerCard}>
+          <View style={styles.workerAvatar}>
+            <Text style={{ fontSize: 24 }}>👷‍♂️</Text>
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.tourTitle}>Visual Tour & Spoken Guide</Text>
-            <Text style={styles.tourSubtitle}>चित्र और आवाज़ से समझें • Tap to replay guide</Text>
+            <Text style={styles.greetingText}>Namaste, {workerName}</Text>
+            <View style={styles.siteBadgeRow}>
+              <Text style={styles.siteIcon}>🏗️</Text>
+              <Text style={styles.siteNameText} numberOfLines={1}>
+                {siteName}
+              </Text>
+            </View>
+            <Text style={styles.siteAreaText}>📍 {siteArea}</Text>
           </View>
-          <Text style={styles.tourArrow}>View →</Text>
-        </Pressable>
-
-        {/* Section Heading */}
-        <View style={styles.gridHeadingRow}>
-          <Text style={styles.gridHeading}>
-            {t('dashboard.quickActions', 'Worker Actions')}
-          </Text>
-          <Text style={styles.gridSubheading}>Select an action below</Text>
         </View>
 
-        {/* ── The 8 Primary Actions in a Clean Two-Column Grid ── */}
-        <View style={styles.actionGrid}>
-          {DASHBOARD_ACTIONS.map((action) => (
+        {outboxPending > 0 && (
+          <View style={styles.syncNotice}>
+            <Text style={styles.syncNoticeText}>
+              🔄 {outboxPending} unsynced submission(s) queued offline. Will sync automatically upon connection.
+            </Text>
+          </View>
+        )}
+
+        {/* Section Heading */}
+        <Text style={styles.sectionHeading}>Worker Actions</Text>
+
+        {/* Primary 6 Actions in 2-Column Grid */}
+        <View style={styles.actionsGrid}>
+          {DASHBOARD_ACTIONS.map((item) => (
             <Pressable
-              key={action.id}
-              onPress={() => router.push(action.route as never)}
+              key={item.id}
               style={({ pressed }) => [
                 styles.actionCard,
-                { borderColor: action.borderColor },
-                pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] },
+                {
+                  borderColor: item.borderColor,
+                  backgroundColor: item.lightBg,
+                },
+                pressed && styles.cardPressed,
               ]}
+              onPress={() => router.push(item.route as never)}
               accessibilityRole="button"
-              accessibilityLabel={t(action.titleKey, action.defaultTitle)}
+              accessibilityLabel={item.title}
             >
-              <View style={[styles.actionIconBadge, { backgroundColor: action.badgeBg }]}>
-                <Text style={styles.actionIcon}>{action.icon}</Text>
+              <View style={[styles.iconWrapper, { backgroundColor: item.accentColor }]}>
+                <Text style={styles.actionIcon}>{item.icon}</Text>
               </View>
-
-              <Text style={styles.actionTitle} numberOfLines={1}>
-                {t(action.titleKey, action.defaultTitle)}
+              <Text style={[styles.actionTitle, { color: '#0F172A' }]}>
+                {item.title}
               </Text>
-              <Text style={styles.actionDesc} numberOfLines={2}>
-                {t(action.descKey, action.defaultDesc)}
+              <Text style={[styles.actionSubtitle, { color: item.accentColor }]}>
+                {item.subtitle}
               </Text>
             </Pressable>
           ))}
         </View>
-
-        {/* Sign Out Button */}
-        <View style={styles.footerSection}>
-          <Button
-            label={t('nav.signOut', 'Sign Out')}
-            variant="ghost"
-            onPress={() => void signOut().then(() => router.replace('/sign-in'))}
-          />
-        </View>
       </ScrollView>
-
-      {/* Guided Tour Modal */}
-      <WorkerGuidedTour
-        visible={tourVisible}
-        onFinish={() => setTourVisible(false)}
-      />
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#F8FAFC', // Light grey background
+  },
   scrollContent: {
     padding: spacing.md,
     paddingBottom: spacing.xxl,
-    gap: spacing.md,
   },
-  offlineBanner: {
-    backgroundColor: '#FEF3C7',
-    padding: spacing.sm,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: '#FDE68A',
+  workerCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: palette.surface,
+    padding: spacing.md,
+    borderRadius: radius.xl,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    marginBottom: spacing.md,
+    ...shadow.card,
   },
-  offlineText: {
+  workerAvatar: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: '#F1F5F9',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: spacing.md,
+  },
+  greetingText: {
+    fontSize: fontSize.md,
+    fontWeight: fontWeight.bold as '700',
+    color: '#0F172A', // Dark navy
+  },
+  siteBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 2,
+  },
+  siteIcon: {
+    fontSize: 12,
+    marginRight: 4,
+  },
+  siteNameText: {
     fontSize: fontSize.xs,
+    fontWeight: '700',
+    color: '#0D9488', // Teal accent
+    flex: 1,
+  },
+  siteAreaText: {
+    fontSize: 11,
+    color: palette.textMuted,
+    marginTop: 1,
+  },
+  syncNotice: {
+    backgroundColor: '#FEF3C7',
+    borderColor: '#F59E0B',
+    borderWidth: 1,
+    borderRadius: radius.md,
+    padding: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  syncNoticeText: {
+    fontSize: 11,
     color: '#92400E',
     fontWeight: '600',
     textAlign: 'center',
   },
-  siteCard: {
-    backgroundColor: palette.surface,
-    borderRadius: radius.xl,
-    padding: spacing.md,
-    borderWidth: 1.5,
-    borderColor: '#E2E8F0',
-    borderLeftWidth: 5,
-    borderLeftColor: palette.primary,
-    ...shadow.card,
-  },
-  siteCardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-  },
-  siteCardLabel: {
+  sectionHeading: {
     fontSize: fontSize.xs,
-    color: palette.textMuted,
-    fontWeight: '600',
+    fontWeight: '800',
+    color: '#64748B',
     textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    letterSpacing: 0.8,
+    marginBottom: spacing.sm,
+    marginLeft: 2,
   },
-  siteName: {
-    fontSize: fontSize.lg,
-    fontWeight: fontWeight.bold as '700',
-    color: palette.text,
-    marginTop: 2,
-  },
-  siteLocation: {
-    fontSize: fontSize.xs,
-    color: palette.primaryDark,
-    marginTop: 2,
-    fontWeight: '500',
-  },
-  siteIdText: {
-    fontSize: 11,
-    color: palette.textMuted,
-    marginTop: 2,
-  },
-  siteActiveBadge: {
-    backgroundColor: '#DCFCE7',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 3,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: '#86EFAC',
-  },
-  siteActiveText: {
-    fontSize: 10,
-    color: '#15803D',
-    fontWeight: '700',
-  },
-  statusRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: spacing.md,
-    paddingTop: spacing.sm,
-    borderTopWidth: 1,
-    borderTopColor: '#F1F5F9',
-  },
-  statusItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-  },
-  statusLabel: {
-    fontSize: fontSize.xs,
-    color: palette.textMuted,
-    fontWeight: '600',
-  },
-  syncItem: {
-    alignSelf: 'flex-end',
-  },
-  clinicalAlertBox: {
-    backgroundColor: '#FEF2F2',
-    borderRadius: radius.lg,
-    padding: spacing.md,
-    borderWidth: 1.5,
-    borderColor: '#F87171',
-  },
-  clinicalAlertTitle: {
-    fontSize: fontSize.md,
-    fontWeight: '700',
-    color: '#B91C1C',
-  },
-  clinicalAlertDesc: {
-    fontSize: fontSize.xs,
-    color: '#991B1B',
-    marginTop: 4,
-    lineHeight: 18,
-  },
-  rxSubCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: radius.md,
-    padding: spacing.sm,
-    marginTop: spacing.sm,
-    borderWidth: 1,
-    borderColor: '#FECACA',
-  },
-  rxTitle: {
-    fontSize: fontSize.xs,
-    fontWeight: '700',
-    color: '#B91C1C',
-  },
-  rxDetails: {
-    fontSize: fontSize.xs,
-    color: palette.text,
-    marginTop: 2,
-  },
-  consentCard: {
-    backgroundColor: '#F0FDFA',
-    borderRadius: radius.lg,
-    padding: spacing.md,
-    borderWidth: 1.5,
-    borderColor: palette.primary,
-  },
-  consentTitle: {
-    fontSize: fontSize.md,
-    fontWeight: '700',
-    color: palette.primaryDark,
-    marginBottom: 4,
-  },
-  consentBody: {
-    fontSize: fontSize.xs,
-    color: palette.text,
-    lineHeight: 18,
-  },
-  tourButton: {
-    backgroundColor: '#F0FDFA',
-    borderRadius: radius.lg,
-    padding: spacing.md,
-    borderWidth: 1.5,
-    borderColor: '#99F6E4',
-    flexDirection: 'row',
-    alignItems: 'center',
-    ...shadow.card,
-  },
-  tourIconCircle: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: '#CCFBF1',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: spacing.sm,
-  },
-  tourTitle: {
-    fontSize: fontSize.sm,
-    fontWeight: '700',
-    color: '#0F766E',
-  },
-  tourSubtitle: {
-    fontSize: 11,
-    color: '#115E59',
-    marginTop: 1,
-  },
-  tourArrow: {
-    fontSize: fontSize.xs,
-    fontWeight: '700',
-    color: '#0D9488',
-    backgroundColor: '#CCFBF1',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: radius.sm,
-  },
-  gridHeadingRow: {
-    marginTop: spacing.xs,
-  },
-  gridHeading: {
-    fontSize: fontSize.md,
-    fontWeight: fontWeight.bold as '700',
-    color: palette.text,
-  },
-  gridSubheading: {
-    fontSize: 11,
-    color: palette.textMuted,
-    marginTop: 1,
-  },
-  actionGrid: {
+  actionsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'space-between',
-    gap: spacing.sm,
+    gap: spacing.md,
   },
   actionCard: {
-    width: '48.5%',
-    backgroundColor: palette.surface,
+    width: '47.5%',
+    minHeight: 135,
     borderRadius: radius.xl,
     padding: spacing.md,
     borderWidth: 1.5,
-    minHeight: 130,
-    justifyContent: 'space-between',
+    justifyContent: 'center',
+    alignItems: 'center',
     ...shadow.card,
   },
-  actionIconBadge: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    alignItems: 'center',
+  cardPressed: {
+    transform: [{ scale: 0.98 }],
+    opacity: 0.9,
+  },
+  iconWrapper: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     justifyContent: 'center',
-    marginBottom: spacing.xs,
+    alignItems: 'center',
+    marginBottom: spacing.sm,
   },
   actionIcon: {
     fontSize: 24,
@@ -635,16 +353,12 @@ const styles = StyleSheet.create({
   actionTitle: {
     fontSize: fontSize.sm,
     fontWeight: fontWeight.bold as '700',
-    color: palette.text,
-    marginTop: 4,
+    textAlign: 'center',
+    marginBottom: 2,
   },
-  actionDesc: {
+  actionSubtitle: {
     fontSize: 11,
-    color: palette.textMuted,
-    marginTop: 2,
-    lineHeight: 15,
-  },
-  footerSection: {
-    marginTop: spacing.md,
+    fontWeight: '600',
+    textAlign: 'center',
   },
 });
