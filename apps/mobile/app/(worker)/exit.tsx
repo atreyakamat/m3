@@ -1,17 +1,18 @@
 /**
- * ExitFromGoaScreen — Comprehensive Master Implementation.
+ * ExitFromGoaScreen — Master Implementation.
  *
- * Implements Travel Exit Surveillance with full ICMR–NIMR approved protocol:
- * 1. Destination state selection (all 36 Indian States and UTs modal picker)
- * 2. Destination town / city
- * 3. Reason for leaving (Work Completed, Vacation/Harvest, Health, Other)
- * 4. Expected date of return (calendar datepicker & return-plan toggle)
- * 5. Device GPS Location Capture (with coordinates and accuracy)
- * 6. Travel Health Pre-Screening:
- *    - Currently feeling unwell or feverish prior to departure
- *    - Preventive advice & medical guidance
- * 7. Automatic timestamping and departure date
- * 8. Blue accent theme (#2563EB) with offline outbox queuing
+ * Implements Section 7 requirements:
+ * 1. "Where are you going?" (Destination selection & input)
+ * 2. "Why are you leaving Goa?" (Work Completed or Other)
+ * 3. "Current Location" (Capture Device Location action & state)
+ * 4. "Submit" button (Standardised Submit label)
+ *
+ * Important rules:
+ * - No manual date fields (automatic timestamp)
+ * - No manual current-location fields
+ * - No unnecessary travel details
+ * - No unrequested contractor fields
+ * - Blue accent theme (#2563EB)
  */
 
 import React, { useState } from 'react';
@@ -29,7 +30,6 @@ import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { INDIAN_STATES, type IndianState } from '@m3/shared';
 import { Card, TextField, Button } from '@/components/ui';
-import { DatePickerField } from '@/components/DatePickerField';
 import { WorkerHeader } from '@/components/WorkerHeader';
 import { AudioGuidanceButton } from '@/components/AudioGuidanceButton';
 import { LocationCaptureCard } from '@/components/LocationCaptureCard';
@@ -42,41 +42,34 @@ import { palette, spacing, fontSize, fontWeight, radius, shadow } from '@/theme'
 
 const REASON_OPTIONS = [
   'Work Completed',
-  'Family / Vacation',
-  'Festival / Harvest Season',
-  'Medical / Health Visit',
   'Other',
 ];
 
 export default function ExitScreen() {
   const { t } = useTranslation();
   const router = useRouter();
-  const { token, user } = useSession();
+  const { token } = useSession();
 
-  // Travel Fields
-  const [departureDate, setDepartureDate] = useState(new Date().toISOString().slice(0, 10));
+  // 1. Where are you going?
   const [destinationState, setDestinationState] = useState<IndianState>('West Bengal');
   const [destinationTown, setDestinationTown] = useState('');
+
+  // 2. Why are you leaving Goa?
   const [selectedReason, setSelectedReason] = useState('Work Completed');
   const [otherReason, setOtherReason] = useState('');
 
-  // Expected Return
-  const [planningReturn, setPlanningReturn] = useState(true);
-  const [returnDate, setReturnDate] = useState(
-    new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10)
-  );
-
-  // Health Pre-Screening
-  const [hasFeverNow, setHasFeverNow] = useState<'yes' | 'no'>('no');
-  const [hasSupplies, setHasSupplies] = useState<'yes' | 'no'>('yes');
-
-  // Location Capture
+  // 3. Current Location
   const [location, setLocation] = useState<CapturedLocation | null>(null);
 
-  // UI State
+  // UI state
   const [stateModalVisible, setStateModalVisible] = useState(false);
+  const [stateSearch, setStateSearch] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submittedConfirmed, setSubmittedConfirmed] = useState(false);
+
+  const filteredStates = INDIAN_STATES.filter((st) =>
+    st.toLowerCase().includes(stateSearch.toLowerCase().trim())
+  );
 
   const finalReason = selectedReason === 'Other' ? otherReason.trim() || 'Other' : selectedReason;
 
@@ -89,17 +82,15 @@ export default function ExitScreen() {
     setSubmitting(true);
     const timestamp = new Date().toISOString();
     const payload = {
-      departureDate,
+      departureDate: timestamp.slice(0, 10),
       destinationState,
       destinationTown: destinationTown.trim(),
-      expectedReturnDate: planningReturn ? returnDate : undefined,
-      purpose: finalReason,
-      hasFeverNow: hasFeverNow === 'yes',
+      reason: finalReason,
       latitude: location?.latitude ?? null,
       longitude: location?.longitude ?? null,
       accuracy: location?.accuracy ?? null,
       locationText: location?.formattedText ?? null,
-      notes: `Destination: ${destinationTown.trim()}, ${destinationState}. Return: ${planningReturn ? returnDate : 'Not planned'}. Pre-travel fever: ${hasFeverNow}`,
+      timestamp,
       idempotencyKey: uuid(),
     };
 
@@ -109,7 +100,7 @@ export default function ExitScreen() {
           await travelApi.leave(token, {
             destinationState: payload.destinationState,
             departureDate: payload.departureDate,
-            reason: payload.purpose,
+            reason: payload.reason,
           });
         } catch (err) {
           if (isNetworkError(err)) {
@@ -124,15 +115,15 @@ export default function ExitScreen() {
         }
       }
 
-      // Save locally to maintain travel history
+      // Local storage for travel history
       travelLocalRepo.createRecord(
         {
           planningTravel: true,
-          departureDate,
-          returnDate: planningReturn ? returnDate : null,
-          destination: `${destinationTown.trim()}, ${destinationState}`,
+          departureDate: payload.departureDate,
+          returnDate: null,
+          destination: `Departing Goa for ${destinationTown.trim()}, ${destinationState}`,
           state: destinationState,
-          hadFeverOrMalaria: hasFeverNow === 'yes',
+          hadFeverOrMalaria: false,
           treatmentGiven: false,
           completedCourse: false,
           treatmentPlace: null,
@@ -164,7 +155,7 @@ export default function ExitScreen() {
             </View>
             <Text style={styles.successTitle}>Exit from Goa Recorded ✓</Text>
             <Text style={styles.successSubtitle}>
-              Your departure details have been submitted to the ICMR–NIMR Malaria Surveillance System.
+              Your departure to <Text style={{ fontWeight: '700' }}>{destinationTown}, {destinationState}</Text> has been successfully saved.
             </Text>
 
             <View style={styles.summaryBox}>
@@ -173,34 +164,22 @@ export default function ExitScreen() {
                 <Text style={styles.summaryVal}>{destinationTown}, {destinationState}</Text>
               </Text>
               <Text style={styles.summaryRow}>
-                <Text style={styles.summaryLabel}>Reason: </Text>
+                <Text style={styles.summaryLabel}>Reason for Leaving: </Text>
                 <Text style={styles.summaryVal}>{finalReason}</Text>
-              </Text>
-              <Text style={styles.summaryRow}>
-                <Text style={styles.summaryLabel}>Expected Return: </Text>
-                <Text style={styles.summaryVal}>{planningReturn ? returnDate : 'Open Return'}</Text>
               </Text>
               {location && (
                 <Text style={styles.summaryRow}>
-                  <Text style={styles.summaryLabel}>Device GPS: </Text>
+                  <Text style={styles.summaryLabel}>Captured Location: </Text>
                   <Text style={styles.summaryVal}>{location.formattedText}</Text>
                 </Text>
               )}
             </View>
 
-            {hasFeverNow === 'yes' && (
-              <View style={styles.alertNotice}>
-                <Text style={styles.alertNoticeText}>
-                  ⚠️ Pre-Travel Health Advisory: You reported feeling unwell or feverish. Please visit the nearest construction site clinic or NIMR desk before boarding interstate travel.
-                </Text>
-              </View>
-            )}
-
             <Button
               label="Back to Dashboard"
               onPress={() => router.replace('/(worker)/dashboard')}
               variant="primary"
-              style={{ minHeight: 50, width: '100%', backgroundColor: '#2563EB' }}
+              style={{ minHeight: 50, width: '100%', backgroundColor: '#2563EB', marginTop: spacing.md }}
             />
           </View>
         </View>
@@ -212,12 +191,12 @@ export default function ExitScreen() {
     <View style={{ flex: 1, backgroundColor: '#F8FAFC' }}>
       <WorkerHeader
         title="Exit from Goa"
-        subtitle="Travel Surveillance"
+        subtitle="Departure Report"
         showBack={true}
         fallbackRoute="/(worker)/dashboard"
         rightElement={
           <AudioGuidanceButton
-            text="Exit from Goa. Enter your destination state, town, reason for departure, expected return date, health status, and capture device location."
+            text="Exit from Goa. Enter your destination, select reason for leaving, capture your device location, and tap Submit."
             size="small"
           />
         }
@@ -228,55 +207,57 @@ export default function ExitScreen() {
         <View style={styles.banner}>
           <Text style={styles.bannerIcon}>🛫</Text>
           <View style={{ flex: 1 }}>
-            <Text style={styles.bannerTitle}>Reporting Departure from Goa</Text>
+            <Text style={styles.bannerTitle}>Departure from Goa</Text>
             <Text style={styles.bannerText}>
-              Keep our surveillance team informed when leaving Goa for continuous health protection.
+              Report where you are travelling to ensure continuity of your malaria surveillance records.
             </Text>
           </View>
         </View>
 
-        {/* Section 1: Destination Information */}
+        {/* Section 1: Where are you going? */}
         <Card style={styles.card}>
-          <Text style={styles.cardTitle}>1. Destination Location *</Text>
-          <Text style={styles.cardSubtitle}>Where are you travelling to?</Text>
+          <Text style={styles.cardTitle}>Where are you going? *</Text>
+          <Text style={styles.cardSubtitle}>
+            Select or enter your destination state and town
+          </Text>
 
           {/* State Picker Button */}
           <Text style={styles.fieldLabel}>Destination State *</Text>
           <Pressable onPress={() => setStateModalVisible(true)} style={styles.stateSelectButton}>
             <Text style={styles.stateSelectText}>🇮🇳 {destinationState}</Text>
-            <Text style={styles.changeBadge}>Tap to change ▼</Text>
+            <Text style={styles.changeBadge}>Change State ▼</Text>
           </Pressable>
 
           {/* Town / City Field */}
           <TextField
-            label="Destination City / Town *"
-            placeholder="e.g. Patna, Malda, Lucknow, Bhubaneswar..."
+            label="Destination Town / City *"
+            placeholder="e.g. Kolkata, Patna, Varanasi, Berhampur..."
             value={destinationTown}
             onChangeText={setDestinationTown}
           />
         </Card>
 
-        {/* Section 2: Reason & Expected Return */}
+        {/* Section 2: Why are you leaving Goa? */}
         <Card style={styles.card}>
-          <Text style={styles.cardTitle}>2. Travel Reason & Return Plan *</Text>
-          <Text style={styles.cardSubtitle}>Why are you leaving and when do you plan to return?</Text>
+          <Text style={styles.cardTitle}>Why are you leaving Goa? *</Text>
+          <Text style={styles.cardSubtitle}>
+            Select an appropriate reason
+          </Text>
 
-          {/* Reason Selection */}
-          <Text style={styles.fieldLabel}>Why are you leaving Goa? *</Text>
-          <View style={styles.optionsList}>
+          <View style={styles.reasonRow}>
             {REASON_OPTIONS.map((opt) => {
               const isSelected = selectedReason === opt;
               return (
                 <Pressable
                   key={opt}
                   onPress={() => setSelectedReason(opt)}
-                  style={[styles.radioRow, isSelected && styles.radioRowActive]}
+                  style={[
+                    styles.reasonBtn,
+                    isSelected && styles.reasonBtnActive,
+                  ]}
                 >
-                  <View style={[styles.radioCircle, isSelected && styles.radioCircleActive]}>
-                    {isSelected && <View style={styles.radioDot} />}
-                  </View>
-                  <Text style={[styles.radioLabel, isSelected && styles.radioLabelActive]}>
-                    {opt}
+                  <Text style={[styles.reasonBtnText, isSelected && styles.reasonBtnTextActive]}>
+                    {opt === 'Work Completed' ? '🏗️ Work Completed' : '📝 Other'}
                   </Text>
                 </Pressable>
               );
@@ -285,90 +266,31 @@ export default function ExitScreen() {
 
           {selectedReason === 'Other' && (
             <TextField
-              placeholder="Specify reason..."
+              label="Specify Reason"
+              placeholder="e.g. Vacation, Family function, Medical..."
               value={otherReason}
               onChangeText={setOtherReason}
               style={{ marginTop: spacing.sm }}
             />
           )}
-
-          {/* Expected Return Toggle */}
-          <View style={styles.returnToggleBox}>
-            <Text style={styles.fieldLabel}>Do you plan to return to Goa?</Text>
-            <View style={styles.yesNoRow}>
-              <Pressable
-                onPress={() => setPlanningReturn(true)}
-                style={[styles.yesNoBtn, planningReturn && styles.returnActiveBtn]}
-              >
-                <Text style={[styles.yesNoText, planningReturn && styles.returnActiveText]}>
-                  Yes, planning return
-                </Text>
-              </Pressable>
-              <Pressable
-                onPress={() => setPlanningReturn(false)}
-                style={[styles.yesNoBtn, !planningReturn && styles.returnActiveBtn]}
-              >
-                <Text style={[styles.yesNoText, !planningReturn && styles.returnActiveText]}>
-                  No / Uncertain
-                </Text>
-              </Pressable>
-            </View>
-
-            {planningReturn && (
-              <View style={{ marginTop: spacing.sm }}>
-                <DatePickerField
-                  label="Expected Date of Return"
-                  value={returnDate}
-                  onChange={setReturnDate}
-                  minimumDate={new Date()}
-                />
-              </View>
-            )}
-          </View>
         </Card>
 
-        {/* Section 3: Current Device Location */}
+        {/* Section 3: Current Location */}
         <Card style={styles.card}>
+          <Text style={styles.cardTitle}>Current Location</Text>
+          <Text style={styles.cardSubtitle}>
+            Capture your current device coordinates before departure
+          </Text>
           <LocationCaptureCard
             location={location}
             onLocationCaptured={setLocation}
             accentColor="#2563EB" // Blue
-            title="3. Current Location"
+            title="Current Location"
             buttonLabel="Capture Device Location"
           />
         </Card>
 
-        {/* Section 4: Travel Health Pre-Screening */}
-        <Card style={styles.card}>
-          <Text style={styles.cardTitle}>4. Pre-Travel Health Check *</Text>
-          <Text style={styles.cardSubtitle}>Approved ICMR–NIMR Malaria Surveillance Protocol</Text>
-
-          <View style={styles.healthQuestion}>
-            <Text style={styles.questionText}>
-              Are you currently experiencing any fever, chills, or headache before departing?
-            </Text>
-            <View style={styles.yesNoRow}>
-              <Pressable
-                onPress={() => setHasFeverNow('yes')}
-                style={[styles.yesNoBtn, hasFeverNow === 'yes' && styles.yesBtnActive]}
-              >
-                <Text style={[styles.yesNoText, hasFeverNow === 'yes' && styles.yesNoTextActive]}>
-                  Yes (हाँ)
-                </Text>
-              </Pressable>
-              <Pressable
-                onPress={() => setHasFeverNow('no')}
-                style={[styles.yesNoBtn, hasFeverNow === 'no' && styles.noBtnActive]}
-              >
-                <Text style={[styles.yesNoText, hasFeverNow === 'no' && styles.yesNoTextActive]}>
-                  No (नहीं)
-                </Text>
-              </Pressable>
-            </View>
-          </View>
-        </Card>
-
-        {/* Submit Button */}
+        {/* Submit Button — Standardised Submit label */}
         <View style={styles.submitSection}>
           <Pressable
             onPress={submitExit}
@@ -381,27 +303,37 @@ export default function ExitScreen() {
             {submitting ? (
               <ActivityIndicator color="#FFFFFF" size="small" />
             ) : (
-              <Text style={styles.submitButtonText}>Submit Exit from Goa ✓</Text>
+              <Text style={styles.submitButtonText}>Submit</Text>
             )}
           </Pressable>
-          <Text style={styles.autoTimestampText}>
-            ⏱️ Submission timestamp is captured automatically in the background
-          </Text>
         </View>
       </ScrollView>
 
-      {/* 36 States Modal */}
-      <Modal visible={stateModalVisible} animationType="slide" transparent={true}>
+      {/* State Picker Modal (All 36 Indian States & UTs) */}
+      <Modal
+        visible={stateModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setStateModalVisible(false)}
+      >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Select Destination State (36 States & UTs)</Text>
-              <Pressable onPress={() => setStateModalVisible(false)} style={styles.closeBtn}>
-                <Text style={styles.closeBtnText}>✕ Close</Text>
+              <Text style={styles.modalTitle}>Select Destination State</Text>
+              <Pressable onPress={() => setStateModalVisible(false)} hitSlop={10}>
+                <Text style={styles.closeBtn}>✕</Text>
               </Pressable>
             </View>
-            <ScrollView style={{ maxHeight: 400 }}>
-              {INDIAN_STATES.map((st) => (
+
+            <TextField
+              label="Search Indian States & UTs"
+              placeholder="Search state..."
+              value={stateSearch}
+              onChangeText={setStateSearch}
+            />
+
+            <ScrollView style={styles.statesList}>
+              {filteredStates.map((st) => (
                 <Pressable
                   key={st}
                   onPress={() => {
@@ -413,9 +345,15 @@ export default function ExitScreen() {
                     destinationState === st && styles.stateItemActive,
                   ]}
                 >
-                  <Text style={[styles.stateItemText, destinationState === st && styles.stateItemTextActive]}>
-                    {destinationState === st ? '✓ ' : ''}{st}
+                  <Text
+                    style={[
+                      styles.stateItemText,
+                      destinationState === st && styles.stateItemTextActive,
+                    ]}
+                  >
+                    {st}
                   </Text>
+                  {destinationState === st && <Text style={{ color: '#2563EB', fontWeight: 'bold' }}>✓</Text>}
                 </Pressable>
               ))}
             </ScrollView>
@@ -433,64 +371,66 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
   banner: {
-    backgroundColor: '#EFF6FF', // Light blue
-    borderColor: '#93C5FD',
-    borderWidth: 1.5,
-    borderRadius: radius.xl,
-    padding: spacing.md,
     flexDirection: 'row',
     alignItems: 'center',
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1.5,
+    borderColor: '#93C5FD',
+    borderRadius: radius.xl,
+    padding: spacing.md,
     gap: spacing.md,
+    ...shadow.card,
   },
   bannerIcon: {
     fontSize: 32,
   },
   bannerTitle: {
-    fontSize: fontSize.sm,
-    fontWeight: '800',
-    color: '#1E40AF',
+    fontSize: fontSize.md,
+    fontWeight: fontWeight.bold as '700',
+    color: '#0F172A',
   },
   bannerText: {
     fontSize: fontSize.xs,
-    color: '#3B82F6',
+    color: palette.textMuted,
     marginTop: 2,
-    lineHeight: 16,
   },
   card: {
     backgroundColor: palette.surface,
     borderRadius: radius.xl,
     padding: spacing.md,
-    borderWidth: 1.5,
+    borderWidth: 1,
     borderColor: '#E2E8F0',
     ...shadow.card,
   },
   cardTitle: {
-    fontSize: fontSize.sm,
+    fontSize: fontSize.md,
     fontWeight: fontWeight.bold as '700',
-    color: '#0F172A', // Dark navy
+    color: '#0F172A',
+    marginBottom: 2,
   },
   cardSubtitle: {
     fontSize: fontSize.xs,
     color: palette.textMuted,
-    marginTop: 2,
-    marginBottom: spacing.sm,
+    marginBottom: spacing.md,
   },
   fieldLabel: {
-    fontSize: 11,
+    fontSize: fontSize.xs,
     fontWeight: '700',
-    color: palette.textMuted,
-    marginBottom: 4,
+    color: '#334155',
+    marginBottom: 6,
+    marginTop: spacing.xs,
   },
   stateSelectButton: {
-    backgroundColor: '#F8FAFC',
-    borderColor: '#2563EB',
-    borderWidth: 1.5,
-    borderRadius: radius.md,
-    padding: spacing.md,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: spacing.sm,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1.5,
+    borderColor: '#CBD5E1',
+    borderRadius: radius.lg,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm + 4,
+    marginBottom: spacing.md,
   },
   stateSelectText: {
     fontSize: fontSize.sm,
@@ -499,185 +439,111 @@ const styles = StyleSheet.create({
   },
   changeBadge: {
     fontSize: 11,
+    fontWeight: '700',
     color: '#2563EB',
-    fontWeight: '700',
   },
-  optionsList: {
-    gap: 6,
-  },
-  radioRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: spacing.sm,
-    backgroundColor: '#F8FAFC',
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  radioRowActive: {
-    borderColor: '#2563EB',
-    backgroundColor: '#EFF6FF',
-  },
-  radioCircle: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    borderWidth: 2,
-    borderColor: '#94A3B8',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: spacing.sm,
-  },
-  radioCircleActive: {
-    borderColor: '#2563EB',
-  },
-  radioDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: '#2563EB',
-  },
-  radioLabel: {
-    fontSize: fontSize.sm,
-    color: palette.text,
-  },
-  radioLabelActive: {
-    color: '#1E40AF',
-    fontWeight: '700',
-  },
-  returnToggleBox: {
-    marginTop: spacing.md,
-    paddingTop: spacing.sm,
-    borderTopWidth: 1,
-    borderTopColor: '#F1F5F9',
-  },
-  healthQuestion: {
-    backgroundColor: '#F8FAFC',
-    padding: spacing.sm,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    marginTop: spacing.xs,
-  },
-  questionText: {
-    fontSize: fontSize.xs,
-    color: palette.text,
-    lineHeight: 18,
-    fontWeight: '600',
-    marginBottom: spacing.xs,
-  },
-  yesNoRow: {
+  reasonRow: {
     flexDirection: 'row',
     gap: spacing.sm,
+    marginTop: spacing.xs,
   },
-  yesNoBtn: {
+  reasonBtn: {
     flex: 1,
-    paddingVertical: 10,
-    borderRadius: radius.md,
-    borderWidth: 1,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.lg,
+    borderWidth: 1.5,
     borderColor: '#CBD5E1',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#F8FAFC',
     alignItems: 'center',
+    justifyContent: 'center',
   },
-  yesBtnActive: {
-    backgroundColor: '#FEF2F2',
-    borderColor: '#DC2626',
-  },
-  noBtnActive: {
-    backgroundColor: '#F0FDF4',
-    borderColor: '#16A34A',
-  },
-  returnActiveBtn: {
-    backgroundColor: '#EFF6FF',
+  reasonBtnActive: {
     borderColor: '#2563EB',
+    backgroundColor: '#EFF6FF',
   },
-  returnActiveText: {
-    color: '#1E40AF',
-    fontWeight: '800',
-  },
-  yesNoText: {
+  reasonBtnText: {
     fontSize: fontSize.xs,
-    fontWeight: '700',
-    color: palette.text,
+    fontWeight: '600',
+    color: '#334155',
   },
-  yesNoTextActive: {
-    fontWeight: '800',
+  reasonBtnTextActive: {
+    fontWeight: '700',
+    color: '#2563EB',
   },
   submitSection: {
     marginTop: spacing.sm,
   },
   submitButton: {
     backgroundColor: '#2563EB', // Blue
-    minHeight: 52,
-    borderRadius: radius.xl,
-    justifyContent: 'center',
+    paddingVertical: spacing.md,
+    borderRadius: radius.pill,
     alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 52,
+    ...shadow.card,
   },
   submitButtonText: {
     color: '#FFFFFF',
     fontSize: fontSize.md,
-    fontWeight: '700',
-  },
-  autoTimestampText: {
-    fontSize: 11,
-    color: palette.textMuted,
-    textAlign: 'center',
-    marginTop: spacing.xs,
+    fontWeight: fontWeight.bold as '700',
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    padding: spacing.md,
+    backgroundColor: 'rgba(15, 23, 42, 0.6)',
+    justifyContent: 'flex-end',
   },
   modalContent: {
     backgroundColor: '#FFFFFF',
-    borderRadius: radius.xl,
-    padding: spacing.md,
+    borderTopLeftRadius: radius.xl,
+    borderTopRightRadius: radius.xl,
+    padding: spacing.lg,
     maxHeight: '80%',
   },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: spacing.sm,
-    paddingBottom: spacing.xs,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
+    marginBottom: spacing.md,
   },
   modalTitle: {
-    fontSize: fontSize.sm,
-    fontWeight: '800',
+    fontSize: fontSize.lg,
+    fontWeight: fontWeight.bold as '700',
     color: '#0F172A',
   },
   closeBtn: {
-    padding: 6,
+    fontSize: 20,
+    color: palette.textMuted,
+    fontWeight: 'bold',
   },
-  closeBtnText: {
-    fontSize: 12,
-    color: palette.danger,
-    fontWeight: '700',
+  statesList: {
+    maxHeight: 400,
+    marginTop: spacing.sm,
   },
   stateItem: {
-    paddingVertical: 10,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: spacing.sm + 2,
     paddingHorizontal: spacing.sm,
     borderBottomWidth: 1,
     borderBottomColor: '#F1F5F9',
   },
   stateItemActive: {
-    backgroundColor: '#DBEAFE',
+    backgroundColor: '#EFF6FF',
+    borderRadius: radius.md,
   },
   stateItemText: {
-    fontSize: fontSize.xs,
-    color: palette.text,
+    fontSize: fontSize.sm,
+    color: '#334155',
   },
   stateItemTextActive: {
-    color: '#1E40AF',
-    fontWeight: '800',
+    fontWeight: '700',
+    color: '#2563EB',
   },
   successContainer: {
+    padding: spacing.md,
     flex: 1,
-    padding: spacing.lg,
     justifyContent: 'center',
   },
   successCard: {
@@ -686,65 +552,52 @@ const styles = StyleSheet.create({
     padding: spacing.xl,
     alignItems: 'center',
     borderWidth: 1.5,
-    borderColor: '#E2E8F0',
+    borderColor: '#93C5FD',
     ...shadow.card,
   },
   successIconCircle: {
-    width: 76,
-    height: 76,
-    borderRadius: 38,
-    borderWidth: 2,
+    width: 72,
+    height: 72,
+    borderRadius: 36,
     justifyContent: 'center',
     alignItems: 'center',
+    borderWidth: 2,
     marginBottom: spacing.md,
   },
   successTitle: {
     fontSize: fontSize.lg,
-    fontWeight: '800',
+    fontWeight: fontWeight.bold as '700',
     color: '#0F172A',
-    marginBottom: spacing.xs,
     textAlign: 'center',
+    marginBottom: spacing.xs,
   },
   successSubtitle: {
-    fontSize: fontSize.xs,
+    fontSize: fontSize.sm,
     color: palette.textMuted,
     textAlign: 'center',
-    lineHeight: 18,
-    marginBottom: spacing.lg,
+    lineHeight: 20,
+    marginBottom: spacing.md,
   },
   summaryBox: {
     width: '100%',
     backgroundColor: '#F8FAFC',
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     padding: spacing.md,
-    marginBottom: spacing.md,
     borderWidth: 1,
     borderColor: '#E2E8F0',
-    gap: 6,
-  },
-  summaryRow: {
-    fontSize: fontSize.xs,
-  },
-  summaryLabel: {
-    color: palette.textMuted,
-    fontWeight: '600',
-  },
-  summaryVal: {
-    color: '#0F172A',
-    fontWeight: '700',
-  },
-  alertNotice: {
-    backgroundColor: '#FEF2F2',
-    borderColor: '#FCA5A5',
-    borderWidth: 1,
-    borderRadius: radius.md,
-    padding: spacing.sm,
     marginBottom: spacing.md,
   },
-  alertNoticeText: {
-    fontSize: 11,
-    color: '#991B1B',
-    lineHeight: 16,
-    textAlign: 'center',
+  summaryRow: {
+    fontSize: 12,
+    color: '#334155',
+    marginBottom: 4,
+  },
+  summaryLabel: {
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  summaryVal: {
+    fontWeight: '700',
+    color: '#0F172A',
   },
 });

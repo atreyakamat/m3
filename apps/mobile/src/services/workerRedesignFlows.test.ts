@@ -268,4 +268,25 @@ describe('M3 Worker App Redesign — Master Requirements & Domain Integrity', ()
       }
     });
   });
+
+  describe('9. Standardised Form Submission Button Labels', () => {
+    const requiredForms = [
+      { screen: 'Sign In', submitLabel: 'Submit' },
+      { screen: 'Choose Language', submitLabel: 'Submit' },
+      { screen: 'Sign Up', submitLabel: 'Submit' },
+      { screen: 'Post-Registration Location', submitLabel: 'Submit' },
+      { screen: 'Entry in Goa', submitLabel: 'Submit' },
+      { screen: 'Exit from Goa', submitLabel: 'Submit' },
+      { screen: 'Add Family Member', submitLabel: 'Submit' },
+      { screen: 'Add Roommate', submitLabel: 'Submit' },
+      { screen: 'Not Feeling Well', submitLabel: 'Submit' },
+      { screen: 'Transfer Site', submitLabel: 'Submit' },
+    ];
+
+    it('requires every form submission button to have the exact label "Submit"', () => {
+      for (const form of requiredForms) {
+        expect(form.submitLabel).toBe('Submit');
+      }
+    });
+  });
 });

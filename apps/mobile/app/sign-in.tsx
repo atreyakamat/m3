@@ -137,9 +137,9 @@ export default function SignInScreen() {
             </Pressable>
           </View>
 
-          {/* Sign In Button */}
+          {/* Sign In Button — Standardised Submit label */}
           <Button
-            label={t('auth.signIn', 'Sign In')}
+            label="Submit"
             onPress={submit}
             loading={loading}
             style={styles.submitButton}

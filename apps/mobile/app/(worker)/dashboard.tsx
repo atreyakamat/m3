@@ -180,33 +180,16 @@ export default function Dashboard() {
         contentContainerStyle={styles.scrollContent}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[palette.primary]} />}
       >
-        {/* Worker Greeting & Assigned Site Card */}
-        <Pressable
-          style={({ pressed }) => [styles.workerCard, pressed && styles.cardPressed]}
-          onPress={() => router.push('/(worker)/profile')}
-          accessibilityRole="button"
-          accessibilityLabel="View Worker Profile"
-        >
+        {/* Worker Greeting Card */}
+        <View style={styles.workerCard}>
           <View style={styles.workerAvatar}>
             <Text style={{ fontSize: 24 }}>👷‍♂️</Text>
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.greetingText}>Namaste, {workerName}</Text>
-            <Pressable
-              style={styles.siteBadgeRow}
-              onPress={() => router.push('/(worker)/site')}
-              accessibilityRole="button"
-              accessibilityLabel="View Construction Site"
-            >
-              <Text style={styles.siteIcon}>🏗️</Text>
-              <Text style={styles.siteNameText} numberOfLines={1}>
-                {siteName}
-              </Text>
-            </Pressable>
-            <Text style={styles.siteAreaText}>📍 {siteArea}</Text>
+            <Text style={styles.workerIdSub}>Worker ID: {workerCode}</Text>
           </View>
-          <Text style={styles.chevronIcon}>›</Text>
-        </Pressable>
+        </View>
 
         {outboxPending > 0 && (
           <View style={styles.syncNotice}>
@@ -219,7 +202,7 @@ export default function Dashboard() {
         {/* Section Heading */}
         <Text style={styles.sectionHeading}>Worker Actions</Text>
 
-        {/* Primary 6 Actions in 2-Column Grid */}
+        {/* Exactly Six Primary Actions in 2-Column Grid */}
         <View style={styles.actionsGrid}>
           {DASHBOARD_ACTIONS.map((item) => (
             <Pressable
@@ -247,88 +230,6 @@ export default function Dashboard() {
               </Text>
             </Pressable>
           ))}
-        </View>
-
-        {/* Surveillance Records & Worksite Hub */}
-        <Text style={[styles.sectionHeading, { marginTop: spacing.xl }]}>
-          Surveillance Records & Worksite
-        </Text>
-        <View style={styles.hubContainer}>
-          {/* Construction Site */}
-          <Pressable
-            style={({ pressed }) => [styles.hubCard, pressed && styles.cardPressed]}
-            onPress={() => router.push('/(worker)/site')}
-            accessibilityRole="button"
-            accessibilityLabel="Construction Site"
-          >
-            <View style={[styles.hubIconWrapper, { backgroundColor: '#F0FDFA' }]}>
-              <Text style={styles.hubIcon}>🏗️</Text>
-            </View>
-            <View style={styles.hubTextCol}>
-              <Text style={styles.hubTitle}>Construction Site</Text>
-              <Text style={styles.hubSubtitle} numberOfLines={1}>
-                {siteName} • Details & Contacts
-              </Text>
-            </View>
-            <Text style={styles.hubChevron}>›</Text>
-          </Pressable>
-
-          {/* Worker Profile */}
-          <Pressable
-            style={({ pressed }) => [styles.hubCard, pressed && styles.cardPressed]}
-            onPress={() => router.push('/(worker)/profile')}
-            accessibilityRole="button"
-            accessibilityLabel="My Profile"
-          >
-            <View style={[styles.hubIconWrapper, { backgroundColor: '#EFF6FF' }]}>
-              <Text style={styles.hubIcon}>👤</Text>
-            </View>
-            <View style={styles.hubTextCol}>
-              <Text style={styles.hubTitle}>My Profile</Text>
-              <Text style={styles.hubSubtitle}>
-                ID: {workerCode} • Demographics & Identity
-              </Text>
-            </View>
-            <Text style={styles.hubChevron}>›</Text>
-          </Pressable>
-
-          {/* Initial Screening */}
-          <Pressable
-            style={({ pressed }) => [styles.hubCard, pressed && styles.cardPressed]}
-            onPress={() => router.push('/(worker)/screening')}
-            accessibilityRole="button"
-            accessibilityLabel="Initial Screening"
-          >
-            <View style={[styles.hubIconWrapper, { backgroundColor: '#F5F3FF' }]}>
-              <Text style={styles.hubIcon}>📋</Text>
-            </View>
-            <View style={styles.hubTextCol}>
-              <Text style={styles.hubTitle}>Initial Screening</Text>
-              <Text style={styles.hubSubtitle}>
-                Baseline survey & medical history
-              </Text>
-            </View>
-            <Text style={styles.hubChevron}>›</Text>
-          </Pressable>
-
-          {/* Household Management */}
-          <Pressable
-            style={({ pressed }) => [styles.hubCard, pressed && styles.cardPressed]}
-            onPress={() => router.push('/(worker)/household')}
-            accessibilityRole="button"
-            accessibilityLabel="Household Management"
-          >
-            <View style={[styles.hubIconWrapper, { backgroundColor: '#F0FDF4' }]}>
-              <Text style={styles.hubIcon}>👨‍👩‍👧‍👦</Text>
-            </View>
-            <View style={styles.hubTextCol}>
-              <Text style={styles.hubTitle}>Household Management</Text>
-              <Text style={styles.hubSubtitle}>
-                Active & inactive family & roommates overview
-              </Text>
-            </View>
-            <Text style={styles.hubChevron}>›</Text>
-          </Pressable>
         </View>
       </ScrollView>
     </View>
@@ -454,54 +355,10 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     textAlign: 'center',
   },
-  chevronIcon: {
-    fontSize: 22,
-    color: '#94A3B8',
-    fontWeight: 'bold',
-    marginLeft: spacing.sm,
-  },
-  hubContainer: {
-    gap: spacing.sm,
-    marginTop: spacing.xs,
-  },
-  hubCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: palette.surface,
-    padding: spacing.md,
-    borderRadius: radius.xl,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    ...shadow.card,
-  },
-  hubIconWrapper: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: spacing.md,
-  },
-  hubIcon: {
-    fontSize: 20,
-  },
-  hubTextCol: {
-    flex: 1,
-  },
-  hubTitle: {
-    fontSize: fontSize.sm,
-    fontWeight: fontWeight.bold as '700',
-    color: '#0F172A',
-    marginBottom: 2,
-  },
-  hubSubtitle: {
+  workerIdSub: {
     fontSize: 12,
-    color: palette.textMuted,
-  },
-  hubChevron: {
-    fontSize: 22,
-    color: '#94A3B8',
-    fontWeight: 'bold',
-    marginLeft: spacing.sm,
+    color: '#0D9488',
+    fontWeight: '600',
+    marginTop: 2,
   },
 });

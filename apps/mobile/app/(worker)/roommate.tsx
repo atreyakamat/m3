@@ -176,7 +176,7 @@ export default function RoommateScreen() {
               keyboardType="number-pad"
             />
 
-            {/* Save Roommate Button */}
+            {/* Submit Button — Standardised Submit label */}
             <Pressable
               onPress={handleSave}
               disabled={saving}
@@ -188,7 +188,7 @@ export default function RoommateScreen() {
               {saving ? (
                 <ActivityIndicator color="#FFFFFF" size="small" />
               ) : (
-                <Text style={styles.saveButtonText}>Save Roommate ✓</Text>
+                <Text style={styles.saveButtonText}>Submit</Text>
               )}
             </Pressable>
           </Card>

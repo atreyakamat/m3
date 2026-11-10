@@ -629,7 +629,7 @@ export default function UnwellScreen() {
             {submitting ? (
               <ActivityIndicator color="#FFFFFF" size="small" />
             ) : (
-              <Text style={styles.submitButtonText}>Send Symptoms ✓</Text>
+              <Text style={styles.submitButtonText}>Submit</Text>
             )}
           </Pressable>
 

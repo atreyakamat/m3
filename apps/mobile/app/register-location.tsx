@@ -139,12 +139,12 @@ export default function RegisterLocationScreen() {
           )}
         </Card>
 
-        {/* Bottom Actions */}
+        {/* Bottom Actions — Standardised Submit label */}
         <View style={styles.footer}>
           <Button
-            label={location ? 'Continue to Dashboard →' : 'Skip & Continue to Dashboard'}
+            label="Submit"
             onPress={handleContinue}
-            variant={location ? 'primary' : 'ghost'}
+            variant="primary"
             style={{ minHeight: 52 }}
           />
         </View>

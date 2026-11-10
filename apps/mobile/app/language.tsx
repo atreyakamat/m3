@@ -104,10 +104,10 @@ export default function LanguageScreen() {
           })}
         </View>
 
-        {/* Continue Button */}
+        {/* Continue Button — Standardised Submit label */}
         <View style={styles.footer}>
           <Button
-            label={t('language.continue', 'Continue / आगे बढ़ें')}
+            label="Submit"
             onPress={handleContinue}
             style={styles.continueButton}
           />

@@ -224,7 +224,7 @@ export default function FamilyScreen() {
               keyboardType="number-pad"
             />
 
-            {/* Save Family Member Button */}
+            {/* Submit Button — Standardised Submit label */}
             <Pressable
               onPress={handleSave}
               disabled={saving}
@@ -236,7 +236,7 @@ export default function FamilyScreen() {
               {saving ? (
                 <ActivityIndicator color="#FFFFFF" size="small" />
               ) : (
-                <Text style={styles.saveButtonText}>Save Family Member ✓</Text>
+                <Text style={styles.saveButtonText}>Submit</Text>
               )}
             </Pressable>
           </Card>

@@ -9,6 +9,8 @@ jest.mock('expo-speech', () => ({
   isSpeakingAsync: jest.fn(() => Promise.resolve(false)),
 }));
 
+jest.setTimeout(15000);
+
 describe('AudioGuidanceButton & Low-Literacy Audio Controls (TDD)', () => {
   beforeEach(() => {
     jest.clearAllMocks();

@@ -363,7 +363,7 @@ export default function SignUpScreen() {
             />
 
             <Button
-              label={loading ? 'Checking...' : 'Continue to Site Selection →'}
+              label={loading ? 'Checking...' : 'Submit'}
               onPress={validateStep1}
               loading={loading}
               style={{ marginTop: spacing.md }}
@@ -424,7 +424,7 @@ export default function SignUpScreen() {
               </View>
               <View style={{ flex: 2 }}>
                 <Button
-                  label={loading ? 'Registering...' : 'Complete Registration ✓'}
+                  label={loading ? 'Registering...' : 'Submit'}
                   onPress={submitRegistration}
                   loading={loading}
                 />

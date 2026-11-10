@@ -323,7 +323,7 @@ export default function TransferScreen() {
               {busy ? (
                 <ActivityIndicator color="#FFFFFF" size="small" />
               ) : (
-                <Text style={styles.submitBtnText}>Submit Transfer Request ✓</Text>
+                <Text style={styles.submitBtnText}>Submit</Text>
               )}
             </Pressable>
           </Card>
