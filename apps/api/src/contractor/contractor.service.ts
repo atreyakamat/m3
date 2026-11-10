@@ -213,12 +213,18 @@ export class ContractorService {
 
       rows.push({
         workerId: w.workerCode,
+        workerCode: w.workerCode,
         patientId: w.id,
         name: w.name,
         phone: w.phone,
         age: demo.age,
         gender: demo.gender,
-        malariaStatus: contractorMalariaStatus,
+        active: a.active,
+        assignmentStatus: a.status ?? (a.active ? 'ACTIVE' : 'ENDED'),
+        startedAt: a.startedAt.toISOString(),
+        siteCode: site.siteCode,
+        siteName: site.name,
+        malariaStatus: null, // Masked per Iteration 2 privacy requirement
       });
     }
 
@@ -233,57 +239,133 @@ export class ContractorService {
       where: { workerCode },
       include: {
         assignments: {
-          where: { active: true },
           include: { site: true },
-          take: 1,
+          orderBy: { startedAt: 'desc' },
         },
         screening: true,
       },
     });
     if (!worker) throw new NotFoundException(`Worker ${workerCode} not found`);
 
-    const activeAssignment = worker.assignments[0];
-    if (!activeAssignment) {
-      throw new ForbiddenException('Worker is not currently assigned to any construction site');
-    }
-    let isAssigned = activeAssignment.contractorId === contractorId;
-    if (!isAssigned && !activeAssignment.contractorId) {
-      if (activeAssignment.site.contractorId === contractorId) {
-        isAssigned = true;
-      } else {
-        const cs = await this.prisma.contractorSite.findUnique({
-          where: { contractorId_siteId: { contractorId, siteId: activeAssignment.siteId } },
-        });
-        if (cs && cs.active) {
-          isAssigned = true;
-        }
-      }
-    }
-    if (!isAssigned) {
+    const sites = await this.getContractorSites(contractorId);
+    const siteIds = sites.map((s) => s.id);
+
+    // Verify worker belongs to contractor's workforce
+    const assignment = worker.assignments.find(
+      (a) => a.contractorId === contractorId || siteIds.includes(a.siteId),
+    );
+    if (!assignment) {
       throw new ForbiddenException('Worker is not assigned to your workforce');
     }
 
-    const malaria = await this.admin.requireWorkerMalariaStatus(worker.id);
-    const contractorMalariaStatus: 'POSITIVE' | 'NEGATIVE' | null =
-      malaria === 'POSITIVE' || malaria === 'NEGATIVE' ? malaria : null;
+    const activeAssignment = worker.assignments.find((a) => a.active) ?? assignment;
     const demo = extractDemographics(worker.screening);
-    const dependantsCount = await this.prisma.householdMember.count({
-      where: { workerId: worker.id },
+
+    // Entry in Goa history (direction: ENTERING_GOA)
+    const entryTravels = await this.prisma.travelRecord.findMany({
+      where: {
+        workerId: worker.id,
+        direction: 'ENTERING_GOA',
+        status: { not: 'CANCELLED' },
+      },
+      select: {
+        id: true,
+        originTown: true,
+        originDistrict: true,
+        originState: true,
+        purpose: true,
+        arrivalConfirmedAt: true,
+        createdAt: true,
+        status: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    // Exit from Goa history (direction: LEAVING_GOA)
+    const exitTravels = await this.prisma.travelRecord.findMany({
+      where: {
+        workerId: worker.id,
+        direction: 'LEAVING_GOA',
+        status: { not: 'CANCELLED' },
+      },
+      select: {
+        id: true,
+        destination: true,
+        town: true,
+        state: true,
+        departureDate: true,
+        returnDate: true,
+        purpose: true,
+        departureStatus: true,
+        status: true,
+        createdAt: true,
+      },
+      orderBy: { departureDate: 'desc' },
+    });
+
+    // Relevant transfer status
+    const transfers = await this.prisma.siteTransferRequest.findMany({
+      where: {
+        workerId: worker.id,
+      },
+      select: {
+        id: true,
+        fromSite: { select: { siteCode: true, name: true } },
+        toSite: { select: { siteCode: true, name: true } },
+        initiatorType: true,
+        status: true,
+        createdAt: true,
+        effectiveAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
     });
 
     return {
       workerId: worker.workerCode,
+      workerCode: worker.workerCode,
       patientId: worker.id,
       name: worker.name,
       phone: worker.phone,
       age: demo.age,
       gender: demo.gender,
-      dependantsCount,
       currentSite: {
         siteId: activeAssignment.site.siteCode,
+        siteCode: activeAssignment.site.siteCode,
         name: activeAssignment.site.name,
+        startedAt: activeAssignment.startedAt ? activeAssignment.startedAt.toISOString() : null,
       },
-      malariaStatus: contractorMalariaStatus,
+      active: activeAssignment.active,
+      assignmentStatus: activeAssignment.status ?? (activeAssignment.active ? 'ACTIVE' : 'ENDED'),
+      startedAt: activeAssignment.startedAt ? activeAssignment.startedAt.toISOString() : null,
+      malariaStatus: null, // Strictly masked per Iteration 2 privacy requirement
+      entryHistory: entryTravels.map((t) => ({
+        id: t.id,
+        originTown: t.originTown,
+        originDistrict: t.originDistrict,
+        originState: t.originState,
+        purpose: t.purpose,
+        arrivalDate: t.arrivalConfirmedAt ? t.arrivalConfirmedAt.toISOString() : t.createdAt.toISOString(),
+        status: t.status,
+      })),
+      exitHistory: exitTravels.map((t) => ({
+        id: t.id,
+        destination: t.destination || t.town || 'Hometown',
+        town: t.town,
+        state: t.state,
+        departureDate: t.departureDate ? t.departureDate.toISOString() : t.createdAt.toISOString(),
+        returnDate: t.returnDate ? t.returnDate.toISOString() : null,
+        purpose: t.purpose,
+        status: t.departureStatus ?? t.status,
+      })),
+      transfers: transfers.map((tr) => ({
+        id: tr.id,
+        fromSite: tr.fromSite ? { siteCode: tr.fromSite.siteCode, name: tr.fromSite.name } : null,
+        toSite: { siteCode: tr.toSite.siteCode, name: tr.toSite.name },
+        initiator: tr.initiatorType,
+        status: tr.status,
+        createdAt: tr.createdAt.toISOString(),
+        effectiveAt: tr.effectiveAt ? tr.effectiveAt.toISOString() : null,
+      })),
     };
   }
 
@@ -897,6 +979,31 @@ export class ContractorService {
   }
 
   /**
+   * List construction sites assigned to contractor with optional search filter by name, area, or code.
+   */
+  async getContractorSitesList(contractorId: string, search?: string) {
+    const sites = await this.getContractorSites(contractorId);
+    let result = sites.map((s) => ({
+      siteId: s.siteCode,
+      siteCode: s.siteCode,
+      name: s.name,
+      area: s.area.name,
+      activeWorkers: s._count.assignments,
+      active: s.active,
+    }));
+    if (search && search.trim()) {
+      const q = search.trim().toLowerCase();
+      result = result.filter(
+        (s) =>
+          s.name.toLowerCase().includes(q) ||
+          s.area.toLowerCase().includes(q) ||
+          s.siteCode.toLowerCase().includes(q),
+      );
+    }
+    return result;
+  }
+
+  /**
    * Contractor Dashboard aggregate data (Iteration 1).
    * Calculates the 4 required summary cards:
    * - Total Assigned Workers
@@ -1087,11 +1194,10 @@ export class ContractorService {
 
     const workers = [];
     for (const row of activeWorkerRows) {
-      const malaria = await this.admin.requireWorkerMalariaStatus(row.worker.id);
-      const malariaStatus = malaria === 'POSITIVE' || malaria === 'NEGATIVE' ? malaria : null;
       const demo = extractDemographics(row.worker.screening);
       workers.push({
         workerCode: row.worker.workerCode,
+        workerId: row.worker.workerCode,
         patientId: row.worker.id,
         name: row.worker.name,
         phone: row.worker.phone,
@@ -1100,7 +1206,8 @@ export class ContractorService {
         siteCode: row.site.siteCode,
         siteName: row.site.name,
         active: true,
-        malariaStatus,
+        assignmentStatus: row.status ?? 'ACTIVE',
+        malariaStatus: null, // Strictly masked per Iteration 2 privacy policy
       });
     }
 
@@ -1158,23 +1265,38 @@ export class ContractorService {
   /** Search and list workers assigned to this contractor across all sites (with search, pagination). */
   async getContractorWorkers(
     contractorId: string,
-    query: { search?: string; siteCode?: string; malaria?: string; page?: string; pageSize?: string },
+    query: {
+      search?: string;
+      siteCode?: string;
+      assignmentStatus?: string;
+      status?: string;
+      malaria?: string;
+      page?: string;
+      pageSize?: string;
+    },
   ) {
     const sites = await this.getContractorSites(contractorId);
     let targetSiteIds = sites.map((s) => s.id);
 
-    if (query.siteCode) {
+    if (query.siteCode && query.siteCode !== 'ALL') {
       const match = sites.find((s) => s.siteCode === query.siteCode);
       if (!match) throw new ForbiddenException(`You are not assigned to construction site ${query.siteCode}`);
       targetSiteIds = [match.id];
     }
 
     const params = parsePage(query.page, query.pageSize);
+    const statusFilter = (query.assignmentStatus || query.status || 'ALL').toUpperCase();
 
     const assignments = await this.prisma.workerSiteAssignment.findMany({
       where: {
-        active: true,
         siteId: { in: targetSiteIds },
+        ...(statusFilter === 'ACTIVE'
+          ? { active: true }
+          : statusFilter === 'INACTIVE' || statusFilter === 'ENDED'
+          ? { active: false }
+          : statusFilter === 'TRANSFERRED'
+          ? { status: 'TRANSFERRED' }
+          : {}),
         OR: [
           { contractorId },
           { contractorId: null },
@@ -1206,23 +1328,11 @@ export class ContractorService {
         if (!matches) continue;
       }
 
-      const malaria = await this.admin.requireWorkerMalariaStatus(w.id);
-      const contractorMalariaStatus: 'POSITIVE' | 'NEGATIVE' | null =
-        malaria === 'POSITIVE' || malaria === 'NEGATIVE' ? malaria : null;
-
-      const rawFilter = query.malaria?.toUpperCase();
-      if (rawFilter && rawFilter !== 'ALL') {
-        if (rawFilter === 'POSITIVE' || rawFilter === 'NEGATIVE') {
-          if (contractorMalariaStatus !== rawFilter) continue;
-        } else {
-          continue;
-        }
-      }
-
       const demo = extractDemographics(w.screening);
 
       rows.push({
         workerCode: w.workerCode,
+        workerId: w.workerCode,
         patientId: w.id,
         name: w.name,
         phone: w.phone,
@@ -1231,7 +1341,9 @@ export class ContractorService {
         siteCode: a.site.siteCode,
         siteName: a.site.name,
         active: a.active,
-        malariaStatus: contractorMalariaStatus,
+        assignmentStatus: a.status ?? (a.active ? 'ACTIVE' : 'ENDED'),
+        startedAt: a.startedAt.toISOString(),
+        malariaStatus: null, // Strictly masked per Iteration 2 privacy policy
       });
     }
 

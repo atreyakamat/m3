@@ -4,7 +4,8 @@ import { api } from '../../lib/api';
 import { useAsync } from '../../lib/useAsync';
 import { Card, Spinner, Banner, Button, TextField } from '../../components/ui';
 import { palette, radius } from '../../lib/tokens';
-import { MalariaStatusChip, TransferStatusChip } from '../../components/StatusChip';
+import { TransferStatusChip } from '../../components/StatusChip';
+import { WorkerDetailModal, AssignmentStatusBadge } from './WorkerDetailModal';
 
 interface DashboardData {
   contractor: {
@@ -48,7 +49,8 @@ interface DashboardData {
     siteCode: string;
     siteName: string;
     active: boolean;
-    malariaStatus: 'POSITIVE' | 'NEGATIVE' | null;
+    assignmentStatus?: string;
+    malariaStatus: null;
   }>;
   pendingTransfers: Array<{
     id: string;
@@ -67,7 +69,7 @@ interface DashboardData {
 export function ContractorDashboard() {
   const nav = useNavigate();
   const [workerSearch, setWorkerSearch] = useState('');
-  const [selectedWorker, setSelectedWorker] = useState<DashboardData['workers'][0] | null>(null);
+  const [selectedWorkerCode, setSelectedWorkerCode] = useState<string | null>(null);
 
   const { data, loading, error, reload } = useAsync<DashboardData>(
     () => api.get('/contractor/dashboard'),
@@ -424,7 +426,7 @@ export function ContractorDashboard() {
                   <th style={{ padding: '10px 12px' }}>Worker ID</th>
                   <th style={{ padding: '10px 12px' }}>Phone</th>
                   <th style={{ padding: '10px 12px' }}>Assigned Site</th>
-                  <th style={{ padding: '10px 12px' }}>Malaria Status</th>
+                  <th style={{ padding: '10px 12px' }}>Assignment Status</th>
                   <th style={{ padding: '10px 12px', textAlign: 'right' }}>Action</th>
                 </tr>
               </thead>
@@ -449,11 +451,11 @@ export function ContractorDashboard() {
                       </Link>
                     </td>
                     <td style={{ padding: '12px' }}>
-                      <MalariaStatusChip status={w.malariaStatus ?? 'NO_RESULT'} />
+                      <AssignmentStatusBadge status={w.assignmentStatus ?? 'ACTIVE'} />
                     </td>
                     <td style={{ padding: '12px', textAlign: 'right' }}>
                       <button
-                        onClick={() => setSelectedWorker(w)}
+                        onClick={() => setSelectedWorkerCode(w.workerCode)}
                         style={{
                           background: 'none',
                           border: '1px solid #CBD5E1',
@@ -540,76 +542,12 @@ export function ContractorDashboard() {
         )}
       </Card>
 
-      {/* Worker Detail Modal */}
-      {selectedWorker && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.5)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            padding: 16,
-          }}
-          onClick={() => setSelectedWorker(null)}
-        >
-          <div
-            style={{
-              background: '#fff',
-              borderRadius: radius.lg,
-              maxWidth: 480,
-              width: '100%',
-              padding: 24,
-              boxShadow: '0 10px 25px rgba(0,0,0,0.2)',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="spread" style={{ marginBottom: 16 }}>
-              <h3 style={{ margin: 0, fontSize: 20, color: palette.text }}>Worker Information</h3>
-              <button
-                onClick={() => setSelectedWorker(null)}
-                style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#64748B' }}
-              >
-                ✕
-              </button>
-            </div>
-            <div className="stack" style={{ gap: 12 }}>
-              <div className="spread" style={{ padding: '8px 0', borderBottom: '1px solid #F1F5F9' }}>
-                <span className="muted">Full Name</span>
-                <strong>{selectedWorker.name}</strong>
-              </div>
-              <div className="spread" style={{ padding: '8px 0', borderBottom: '1px solid #F1F5F9' }}>
-                <span className="muted">Worker ID</span>
-                <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{selectedWorker.workerCode}</span>
-              </div>
-              <div className="spread" style={{ padding: '8px 0', borderBottom: '1px solid #F1F5F9' }}>
-                <span className="muted">Phone</span>
-                <span>{selectedWorker.phone ?? 'Not provided'}</span>
-              </div>
-              <div className="spread" style={{ padding: '8px 0', borderBottom: '1px solid #F1F5F9' }}>
-                <span className="muted">Assigned Site</span>
-                <strong>{selectedWorker.siteName}</strong>
-              </div>
-              <div className="spread" style={{ padding: '8px 0', borderBottom: '1px solid #F1F5F9' }}>
-                <span className="muted">Malaria Status</span>
-                <MalariaStatusChip status={selectedWorker.malariaStatus ?? 'NO_RESULT'} />
-              </div>
-              {selectedWorker.age && (
-                <div className="spread" style={{ padding: '8px 0', borderBottom: '1px solid #F1F5F9' }}>
-                  <span className="muted">Age / Gender</span>
-                  <span>{selectedWorker.age} years · {selectedWorker.gender ?? '—'}</span>
-                </div>
-              )}
-            </div>
-            <div style={{ marginTop: 20, textAlign: 'right' }}>
-              <Button onClick={() => setSelectedWorker(null)}>Close</Button>
-            </div>
-          </div>
-        </div>
+      {/* Reusable Comprehensive Worker Detail Modal */}
+      {selectedWorkerCode && (
+        <WorkerDetailModal
+          workerCode={selectedWorkerCode}
+          onClose={() => setSelectedWorkerCode(null)}
+        />
       )}
     </div>
   );

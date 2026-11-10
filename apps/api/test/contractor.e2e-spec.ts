@@ -177,7 +177,8 @@ describe('Contractor Mobile Module APIs (e2e)', () => {
       .set(...auth(token));
     expect(workerDetailRes.status).toBe(200);
     expect(workerDetailRes.body.name).toBe('Suresh Pos');
-    expect(workerDetailRes.body.malariaStatus).toBe('POSITIVE');
+    // Individual malaria status is strictly masked per Iteration 2 privacy policy
+    expect(workerDetailRes.body.malariaStatus).toBeNull();
     // Ensure Aadhaar number is NOT exposed
     expect(workerDetailRes.body.aadhaarNumber).toBeUndefined();
 
@@ -403,20 +404,20 @@ describe('Contractor Mobile Module APIs (e2e)', () => {
     const rWait = listRes.body.items.find((i: any) => i.workerId === wWait.workerId);
     const rNone = listRes.body.items.find((i: any) => i.workerId === wNone.workerId);
 
-    expect(rNeg.malariaStatus).toBe('NEGATIVE');
-    expect(rPos.malariaStatus).toBe('POSITIVE');
+    // Individual malaria status must be strictly masked (null) per Iteration 2 privacy policy
+    expect(rNeg.malariaStatus).toBeNull();
+    expect(rPos.malariaStatus).toBeNull();
     expect(rWait.malariaStatus).toBeNull();
     expect(rNone.malariaStatus).toBeNull();
 
     // Verify Individual Worker Detail API:
     const detNeg = await ctx.http().get(`/api/v1/contractor/workers/${wNeg.workerId}`).set(...auth(c.token));
     expect(detNeg.status).toBe(200);
-    expect(detNeg.body.malariaStatus).toBe('NEGATIVE');
+    expect(detNeg.body.malariaStatus).toBeNull(); // Masked
 
     const detPos = await ctx.http().get(`/api/v1/contractor/workers/${wPos.workerId}`).set(...auth(c.token));
     expect(detPos.status).toBe(200);
-    expect(detPos.body.malariaStatus).toBe('POSITIVE');
-    expect(detPos.body.dependantsCount).toBe(0);
+    expect(detPos.body.malariaStatus).toBeNull(); // Masked
 
     const detWait = await ctx.http().get(`/api/v1/contractor/workers/${wWait.workerId}`).set(...auth(c.token));
     expect(detWait.status).toBe(200);
@@ -432,30 +433,6 @@ describe('Contractor Mobile Module APIs (e2e)', () => {
     expect(detPos.body.medicalHistory).toBeUndefined();
     expect(detPos.body.screeningResponses).toBeUndefined();
     expect(detPos.body.aadhaarNumber).toBeUndefined();
-
-    // Verify Worker Filtering:
-    // Filtering by POSITIVE returns only positive workers
-    const posFilter = await ctx.http()
-      .get('/api/v1/contractor/sites/SITE-PRIV1/workers?malaria=POSITIVE')
-      .set(...auth(c.token));
-    expect(posFilter.status).toBe(200);
-    expect(posFilter.body.items).toHaveLength(1);
-    expect(posFilter.body.items[0].workerId).toBe(wPos.workerId);
-
-    // Filtering by NEGATIVE returns only negative workers
-    const negFilter = await ctx.http()
-      .get('/api/v1/contractor/sites/SITE-PRIV1/workers?malaria=NEGATIVE')
-      .set(...auth(c.token));
-    expect(negFilter.status).toBe(200);
-    expect(negFilter.body.items).toHaveLength(1);
-    expect(negFilter.body.items[0].workerId).toBe(wNeg.workerId);
-
-    // Filtering by AWAITING or NO_RESULT does not disclose individuals (returns empty)
-    const awaitFilter = await ctx.http()
-      .get('/api/v1/contractor/sites/SITE-PRIV1/workers?malaria=AWAITING')
-      .set(...auth(c.token));
-    expect(awaitFilter.status).toBe(200);
-    expect(awaitFilter.body.items).toHaveLength(0);
 
     // Verify Aggregate Site Statistics:
     // Aggregate counts MUST accurately reflect awaiting and no-result counts
@@ -849,5 +826,212 @@ describe('Contractor Mobile Module APIs (e2e)', () => {
       .get('/api/v1/contractor/sites/SITE-COAST-1/detail')
       .set(...auth(c1.token));
     expect(blockedSite.status).toBe(403);
+  });
+
+  it('Contractor Iteration 2: Worker Management, Site Operations, Travel Histories, and Strict Privacy Masking', async () => {
+    const areaId = await createArea(ctx, 'Iteration Two Surveillance Zone');
+    const cA = await provisionContractorHelper('Alpha Buildcorp', '9819000001', ['SITE-IT2-A'], areaId);
+    const cB = await provisionContractorHelper('Beta Infrastructures', '9819000002', ['SITE-IT2-B'], areaId);
+
+    // 1. Register 3 workers for Contractor A:
+    // Worker 1: Active, has Entry and Exit travels, and a transfer request
+    const w1 = await registerWorker(ctx, { name: 'Arjun Das', phone: '9819001001', pin: '1111' });
+    await ctx.http().post('/api/v1/workers/me/site').set(...auth(w1.token)).send({ siteId: 'SITE-IT2-A' });
+
+    // Record an Entry in Goa travel
+    const entryTravel = await ctx.prisma.travelRecord.create({
+      data: {
+        workerId: (await ctx.prisma.worker.findFirstOrThrow({ where: { workerCode: w1.workerId } })).id,
+        direction: 'ENTERING_GOA',
+        originTown: 'Patna',
+        originDistrict: 'Patna',
+        originState: 'Bihar',
+        purpose: 'Construction employment',
+        status: 'SUBMITTED',
+        arrivalConfirmedAt: new Date('2026-10-15T09:00:00Z'),
+      },
+    });
+
+    // Record an Exit from Goa travel
+    const exitTravel = await ctx.prisma.travelRecord.create({
+      data: {
+        workerId: (await ctx.prisma.worker.findFirstOrThrow({ where: { workerCode: w1.workerId } })).id,
+        direction: 'LEAVING_GOA',
+        destination: 'Patna',
+        town: 'Patna',
+        state: 'Bihar',
+        purpose: 'Festival vacation',
+        departureDate: new Date('2026-11-20T08:00:00Z'),
+        returnDate: new Date('2026-12-05T20:00:00Z'),
+        status: 'SUBMITTED',
+      },
+    });
+
+    // Record a site transfer request involving w1
+    const w1Record = await ctx.prisma.worker.findFirstOrThrow({ where: { workerCode: w1.workerId } });
+    const siteA = await ctx.prisma.constructionSite.findUniqueOrThrow({ where: { siteCode: 'SITE-IT2-A' } });
+    const siteB = await ctx.prisma.constructionSite.findUniqueOrThrow({ where: { siteCode: 'SITE-IT2-B' } });
+    await ctx.prisma.siteTransferRequest.create({
+      data: {
+        workerId: w1Record.id,
+        fromSiteId: siteA.id,
+        toSiteId: siteB.id,
+        fromContractorId: cA.contractorId,
+        toContractorId: cB.contractorId,
+        initiatorType: 'WORKER',
+        initiatorId: w1Record.id,
+        status: 'PENDING_DESTINATION_CONTRACTOR',
+      },
+    });
+
+    // Worker 2: Active, assigned to SITE-IT2-A
+    const w2 = await registerWorker(ctx, { name: 'Bikram Sen', phone: '9819001002', pin: '2222' });
+    await ctx.http().post('/api/v1/workers/me/site').set(...auth(w2.token)).send({ siteId: 'SITE-IT2-A' });
+
+    // Worker 3: Inactive assignment for Contractor A
+    const w3 = await registerWorker(ctx, { name: 'Chandan Roy', phone: '9819001003', pin: '3333' });
+    const w3Record = await ctx.prisma.worker.findFirstOrThrow({ where: { workerCode: w3.workerId } });
+    await ctx.prisma.workerSiteAssignment.create({
+      data: {
+        workerId: w3Record.id,
+        siteId: siteA.id,
+        contractorId: cA.contractorId,
+        active: false,
+        status: 'ENDED',
+        startedAt: new Date('2026-08-01T00:00:00Z'),
+        endedAt: new Date('2026-09-30T00:00:00Z'),
+      },
+    });
+
+    // Worker 4: Assigned to Contractor B (isolated)
+    const w4 = await registerWorker(ctx, { name: 'Deepak Rao', phone: '9819001004', pin: '4444' });
+    await ctx.http().post('/api/v1/workers/me/site').set(...auth(w4.token)).send({ siteId: 'SITE-IT2-B' });
+
+    // --- Verification 1: Worker list loads with pagination ---
+    const listRes = await ctx.http()
+      .get('/api/v1/contractor/workers?page=1&pageSize=2')
+      .set(...auth(cA.token));
+    expect(listRes.status).toBe(200);
+    expect(listRes.body.items).toHaveLength(2);
+    expect(listRes.body.page).toBe(1);
+    expect(listRes.body.pageSize).toBe(2);
+    expect(listRes.body.total).toBe(3); // Total workers across all statuses (w1, w2 active + w3 inactive)
+    expect(listRes.body.totalPages).toBe(2);
+
+    // --- Verification 2: Search works by worker name and ID ---
+    const searchByName = await ctx.http()
+      .get('/api/v1/contractor/workers?search=Arjun')
+      .set(...auth(cA.token));
+    expect(searchByName.status).toBe(200);
+    expect(searchByName.body.items).toHaveLength(1);
+    expect(searchByName.body.items[0].name).toBe('Arjun Das');
+
+    const searchById = await ctx.http()
+      .get(`/api/v1/contractor/workers?search=${w2.workerId}`)
+      .set(...auth(cA.token));
+    expect(searchById.status).toBe(200);
+    expect(searchById.body.items).toHaveLength(1);
+    expect(searchById.body.items[0].workerCode).toBe(w2.workerId);
+
+    // --- Verification 3: Site filters work ---
+    const siteFilter = await ctx.http()
+      .get('/api/v1/contractor/workers?siteCode=SITE-IT2-A')
+      .set(...auth(cA.token));
+    expect(siteFilter.status).toBe(200);
+    expect(siteFilter.body.items.length).toBeGreaterThanOrEqual(1);
+
+    // Contractor A cannot filter by Contractor B's site
+    const invalidSiteFilter = await ctx.http()
+      .get('/api/v1/contractor/workers?siteCode=SITE-IT2-B')
+      .set(...auth(cA.token));
+    expect(invalidSiteFilter.status).toBe(403);
+
+    // --- Verification 4: Assignment status filters work ---
+    const activeFilter = await ctx.http()
+      .get('/api/v1/contractor/workers?assignmentStatus=ACTIVE')
+      .set(...auth(cA.token));
+    expect(activeFilter.status).toBe(200);
+    expect(activeFilter.body.items.every((i: any) => i.active === true)).toBe(true);
+
+    const inactiveFilter = await ctx.http()
+      .get('/api/v1/contractor/workers?assignmentStatus=INACTIVE')
+      .set(...auth(cA.token));
+    expect(inactiveFilter.status).toBe(200);
+    expect(inactiveFilter.body.items.some((i: any) => i.workerCode === w3.workerId)).toBe(true);
+
+    const allFilter = await ctx.http()
+      .get('/api/v1/contractor/workers?assignmentStatus=ALL')
+      .set(...auth(cA.token));
+    expect(allFilter.status).toBe(200);
+    expect(allFilter.body.items.length).toBeGreaterThanOrEqual(3);
+
+    // --- Verification 5 & 6 & 12: Worker detail shows authorised info, travel histories, transfer status, masked malaria ---
+    const w1Detail = await ctx.http()
+      .get(`/api/v1/contractor/workers/${w1.workerId}`)
+      .set(...auth(cA.token));
+    expect(w1Detail.status).toBe(200);
+    expect(w1Detail.body.name).toBe('Arjun Das');
+    expect(w1Detail.body.workerCode).toBe(w1.workerId);
+    expect(w1Detail.body.currentSite.siteCode).toBe('SITE-IT2-A');
+    expect(w1Detail.body.assignmentStatus).toBe('ACTIVE');
+    expect(w1Detail.body.active).toBe(true);
+    // Privacy: malaria status is strictly masked
+    expect(w1Detail.body.malariaStatus).toBeNull();
+    // Entry in Goa history
+    expect(w1Detail.body.entryHistory).toHaveLength(1);
+    expect(w1Detail.body.entryHistory[0].originTown).toBe('Patna');
+    expect(w1Detail.body.entryHistory[0].originState).toBe('Bihar');
+    // Exit from Goa history
+    expect(w1Detail.body.exitHistory).toHaveLength(1);
+    expect(w1Detail.body.exitHistory[0].destination).toBe('Patna');
+    expect(w1Detail.body.exitHistory[0].state).toBe('Bihar');
+    // Transfer status
+    expect(w1Detail.body.transfers).toHaveLength(1);
+    expect(w1Detail.body.transfers[0].fromSite.siteCode).toBe('SITE-IT2-A');
+    expect(w1Detail.body.transfers[0].toSite.siteCode).toBe('SITE-IT2-B');
+    expect(w1Detail.body.transfers[0].status).toBe('PENDING_DESTINATION_CONTRACTOR');
+
+    // Clinical and household data remain inaccessible
+    expect(w1Detail.body.screeningResponses).toBeUndefined();
+    expect(w1Detail.body.symptoms).toBeUndefined();
+    expect(w1Detail.body.voiceRecordingUrl).toBeUndefined();
+    expect(w1Detail.body.householdMembers).toBeUndefined();
+    expect(w1Detail.body.aadhaarNumber).toBeUndefined();
+
+    // --- Verification 7: Site list displays only assigned sites & supports search ---
+    const sitesList = await ctx.http()
+      .get('/api/v1/contractor/sites')
+      .set(...auth(cA.token));
+    expect(sitesList.status).toBe(200);
+    expect(sitesList.body).toHaveLength(1);
+    expect(sitesList.body[0].siteCode).toBe('SITE-IT2-A');
+
+    const searchSite = await ctx.http()
+      .get('/api/v1/contractor/sites?search=IT2-A')
+      .set(...auth(cA.token));
+    expect(searchSite.status).toBe(200);
+    expect(searchSite.body).toHaveLength(1);
+
+    // --- Verification 8: Site detail displays only authorised workers ---
+    const siteADetail = await ctx.http()
+      .get('/api/v1/contractor/sites/SITE-IT2-A/detail')
+      .set(...auth(cA.token));
+    expect(siteADetail.status).toBe(200);
+    expect(siteADetail.body.site.siteCode).toBe('SITE-IT2-A');
+    expect(siteADetail.body.workers.some((w: any) => w.workerCode === w1.workerId)).toBe(true);
+    expect(siteADetail.body.workers.every((w: any) => w.malariaStatus === null)).toBe(true);
+
+    // --- Verification 9 & 10: Cross-contractor worker and site access return 403 ---
+    // Contractor A accessing Contractor B's worker (w4)
+    const crossWorker = await ctx.http()
+      .get(`/api/v1/contractor/workers/${w4.workerId}`)
+      .set(...auth(cA.token));
+    expect(crossWorker.status).toBe(403);
+
+    // Contractor A accessing Contractor B's site
+    const crossSite = await ctx.http()
+      .get('/api/v1/contractor/sites/SITE-IT2-B/detail')
+      .set(...auth(cA.token));
+    expect(crossSite.status).toBe(403);
   });
 });

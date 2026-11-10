@@ -3,8 +3,8 @@ import { useParams, Link } from 'react-router-dom';
 import { api } from '../../lib/api';
 import { useAsync } from '../../lib/useAsync';
 import { Card, Spinner, Banner, Button } from '../../components/ui';
-import { palette, radius } from '../../lib/tokens';
-import { MalariaStatusChip } from '../../components/StatusChip';
+import { palette } from '../../lib/tokens';
+import { WorkerDetailModal, AssignmentStatusBadge } from './WorkerDetailModal';
 
 interface SiteDetailData {
   site: {
@@ -26,12 +26,16 @@ interface SiteDetailData {
   };
   workers: Array<{
     workerId: string;
+    workerCode?: string;
     patientId: string;
     name: string;
     phone: string | null;
     age: number | null;
     gender: string | null;
-    malariaStatus: 'POSITIVE' | 'NEGATIVE' | null;
+    active?: boolean;
+    assignmentStatus?: string;
+    startedAt?: string;
+    malariaStatus: null;
   }>;
   totalWorkers: number;
   travels: Array<{
@@ -45,7 +49,6 @@ interface SiteDetailData {
     state: string | null;
     status: string;
     isUpcoming: boolean;
-    malariaStatus: 'POSITIVE' | 'NEGATIVE' | null;
     isSevenDayAlert: boolean;
   }>;
   transfers: Array<{
@@ -63,7 +66,7 @@ interface SiteDetailData {
 
 export function ContractorSiteDetail() {
   const { siteCode } = useParams<{ siteCode: string }>();
-  const [selectedWorker, setSelectedWorker] = useState<SiteDetailData['workers'][0] | null>(null);
+  const [selectedWorkerCode, setSelectedWorkerCode] = useState<string | null>(null);
 
   const { data, loading, error, reload } = useAsync<SiteDetailData>(
     () => api.get(`/contractor/sites/${siteCode}/detail`),
@@ -81,11 +84,11 @@ export function ContractorSiteDetail() {
 
   if (error || !data) {
     return (
-      <div className="stack">
+      <div className="stack" style={{ gap: 16 }}>
         <Banner kind="danger">
           {error || 'Failed to load site details.'}
         </Banner>
-        <div className="row">
+        <div className="row" style={{ gap: 12 }}>
           <Button onClick={reload}>Retry</Button>
           <Link to="/contractor/sites" style={{ textDecoration: 'none' }}>
             <Button variant="secondary">Back to Sites</Button>
@@ -95,7 +98,7 @@ export function ContractorSiteDetail() {
     );
   }
 
-  const { site, stats, workers, travels } = data;
+  const { site, stats, workers, travels, transfers } = data;
 
   return (
     <div className="stack" style={{ gap: 24 }}>
@@ -119,20 +122,25 @@ export function ContractorSiteDetail() {
           </Link>
           <h2 style={{ margin: 0, fontSize: 24, color: palette.text }}>{site.name}</h2>
           <div className="muted small" style={{ marginTop: 4 }}>
-            Site Code: <strong>{site.siteCode}</strong> · Area: <strong>{site.area}</strong> · Status: {site.active ? 'Active' : 'Inactive'}
+            Site Code: <strong style={{ fontFamily: 'monospace' }}>{site.siteCode}</strong> · Area: <strong>{site.area}</strong> · Status: {site.active ? 'Active' : 'Inactive'}
           </div>
         </div>
-        <Link to="/contractor" style={{ textDecoration: 'none' }}>
-          <Button variant="secondary">Dashboard</Button>
-        </Link>
+        <div className="row" style={{ gap: 12 }}>
+          <Link to={`/contractor/workers?siteCode=${site.siteCode}`} style={{ textDecoration: 'none' }}>
+            <Button variant="secondary">Manage Site Workforce</Button>
+          </Link>
+          <Link to="/contractor" style={{ textDecoration: 'none' }}>
+            <Button variant="secondary">Dashboard</Button>
+          </Link>
+        </div>
       </div>
 
       {/* Summary Cards */}
-      <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
+      <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16 }}>
         <Card accent={palette.primary}>
           <div className="muted small" style={{ textTransform: 'uppercase', letterSpacing: 0.5 }}>Active Workforce</div>
           <div style={{ fontSize: 28, fontWeight: 700, color: palette.primary, marginTop: 4 }}>{stats.totalWorkers}</div>
-          <div className="muted small" style={{ marginTop: 4 }}>Registered at this site</div>
+          <div className="muted small" style={{ marginTop: 4 }}>Workers deployed at this site</div>
         </Card>
         <Card accent="#2E7D32">
           <div className="muted small" style={{ textTransform: 'uppercase', letterSpacing: 0.5 }}>Tested Negative</div>
@@ -161,9 +169,15 @@ export function ContractorSiteDetail() {
           <div>
             <h3 style={{ margin: 0, fontSize: 18, color: palette.text }}>Assigned Workers</h3>
             <p className="muted small" style={{ margin: '4px 0 0' }}>
-              Workers deployed at {site.name} ({workers.length} of {data.totalWorkers})
+              Workforce registered at {site.name} ({workers.length} of {data.totalWorkers})
             </p>
           </div>
+          <Link
+            to={`/contractor/workers?siteCode=${site.siteCode}`}
+            style={{ color: '#3D5A80', textDecoration: 'none', fontWeight: 600, fontSize: 14 }}
+          >
+            Open Full Roster →
+          </Link>
         </div>
 
         {workers.length === 0 ? (
@@ -178,7 +192,8 @@ export function ContractorSiteDetail() {
                   <th style={{ padding: '10px 12px' }}>Worker Name</th>
                   <th style={{ padding: '10px 12px' }}>Worker ID</th>
                   <th style={{ padding: '10px 12px' }}>Phone</th>
-                  <th style={{ padding: '10px 12px' }}>Malaria Status</th>
+                  <th style={{ padding: '10px 12px' }}>Demographics</th>
+                  <th style={{ padding: '10px 12px' }}>Assignment Status</th>
                   <th style={{ padding: '10px 12px', textAlign: 'right' }}>Actions</th>
                 </tr>
               </thead>
@@ -194,12 +209,15 @@ export function ContractorSiteDetail() {
                     <td style={{ padding: '12px', color: '#64748B' }}>
                       {w.phone ?? '—'}
                     </td>
+                    <td style={{ padding: '12px', color: '#64748B', fontSize: 13 }}>
+                      {w.age ? `${w.age} yrs` : '—'} · {w.gender || '—'}
+                    </td>
                     <td style={{ padding: '12px' }}>
-                      <MalariaStatusChip status={w.malariaStatus ?? 'NO_RESULT'} />
+                      <AssignmentStatusBadge status={w.assignmentStatus ?? 'ACTIVE'} />
                     </td>
                     <td style={{ padding: '12px', textAlign: 'right' }}>
                       <button
-                        onClick={() => setSelectedWorker(w)}
+                        onClick={() => setSelectedWorkerCode(w.workerId)}
                         style={{
                           background: 'none',
                           border: '1px solid #CBD5E1',
@@ -211,7 +229,7 @@ export function ContractorSiteDetail() {
                           fontWeight: 600,
                         }}
                       >
-                        Details
+                        View Details
                       </button>
                     </td>
                   </tr>
@@ -249,20 +267,30 @@ export function ContractorSiteDetail() {
                 {travels.map((t) => (
                   <tr key={t.id} style={{ borderBottom: '1px solid #F1F5F9', background: t.isSevenDayAlert ? '#FEF2F2' : undefined }}>
                     <td style={{ padding: '12px' }}>
-                      <strong>{t.workerName}</strong>
-                      <span className="muted small" style={{ marginLeft: 6 }}>({t.workerId})</span>
-                      {t.isSevenDayAlert && (
-                        <span style={{ marginLeft: 8, padding: '2px 8px', borderRadius: 999, background: '#DC2626', color: '#fff', fontSize: 11, fontWeight: 700 }}>
-                          7-Day Alert
-                        </span>
-                      )}
+                      <strong style={{ color: palette.text }}>{t.workerName}</strong>
+                      <div className="muted small" style={{ fontFamily: 'monospace' }}>{t.workerId}</div>
                     </td>
-                    <td style={{ padding: '12px' }}>{t.destination ?? t.state ?? '—'}</td>
-                    <td style={{ padding: '12px' }}>{t.departureDate ? new Date(t.departureDate).toLocaleDateString() : '—'}</td>
-                    <td style={{ padding: '12px' }}>{t.returnDate ? new Date(t.returnDate).toLocaleDateString() : '—'}</td>
                     <td style={{ padding: '12px' }}>
-                      <span style={{ fontSize: 12, padding: '3px 8px', borderRadius: 4, background: '#E2E8F0', color: '#334155', fontWeight: 600 }}>
-                        {t.status}
+                      {t.destination ?? 'Hometown'}{t.state ? `, ${t.state}` : ''}
+                    </td>
+                    <td style={{ padding: '12px', color: '#64748B' }}>
+                      {t.departureDate ? new Date(t.departureDate).toLocaleDateString() : '—'}
+                    </td>
+                    <td style={{ padding: '12px', color: '#64748B' }}>
+                      {t.returnDate ? new Date(t.returnDate).toLocaleDateString() : '—'}
+                    </td>
+                    <td style={{ padding: '12px' }}>
+                      <span
+                        style={{
+                          fontSize: 12,
+                          fontWeight: 600,
+                          padding: '2px 8px',
+                          borderRadius: 12,
+                          background: t.isSevenDayAlert ? '#FEE2E2' : '#F1F5F9',
+                          color: t.isSevenDayAlert ? '#DC2626' : '#475569',
+                        }}
+                      >
+                        {t.isSevenDayAlert ? '7-Day Surveillance Alert' : t.status}
                       </span>
                     </td>
                   </tr>
@@ -273,76 +301,85 @@ export function ContractorSiteDetail() {
         )}
       </Card>
 
-      {/* Worker Detail Modal */}
-      {selectedWorker && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.5)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            padding: 16,
-          }}
-          onClick={() => setSelectedWorker(null)}
-        >
-          <div
-            style={{
-              background: '#fff',
-              borderRadius: radius.lg,
-              maxWidth: 480,
-              width: '100%',
-              padding: 24,
-              boxShadow: '0 10px 25px rgba(0,0,0,0.2)',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="spread" style={{ marginBottom: 16 }}>
-              <h3 style={{ margin: 0, fontSize: 20, color: palette.text }}>Worker Information</h3>
-              <button
-                onClick={() => setSelectedWorker(null)}
-                style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#64748B' }}
-              >
-                ✕
-              </button>
-            </div>
-            <div className="stack" style={{ gap: 12 }}>
-              <div className="spread" style={{ padding: '8px 0', borderBottom: '1px solid #F1F5F9' }}>
-                <span className="muted">Full Name</span>
-                <strong>{selectedWorker.name}</strong>
-              </div>
-              <div className="spread" style={{ padding: '8px 0', borderBottom: '1px solid #F1F5F9' }}>
-                <span className="muted">Worker ID</span>
-                <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{selectedWorker.workerId}</span>
-              </div>
-              <div className="spread" style={{ padding: '8px 0', borderBottom: '1px solid #F1F5F9' }}>
-                <span className="muted">Phone Number</span>
-                <span>{selectedWorker.phone ?? 'Not provided'}</span>
-              </div>
-              <div className="spread" style={{ padding: '8px 0', borderBottom: '1px solid #F1F5F9' }}>
-                <span className="muted">Assigned Site</span>
-                <span>{site.name}</span>
-              </div>
-              <div className="spread" style={{ padding: '8px 0', borderBottom: '1px solid #F1F5F9' }}>
-                <span className="muted">Malaria Status</span>
-                <MalariaStatusChip status={selectedWorker.malariaStatus ?? 'NO_RESULT'} />
-              </div>
-              {selectedWorker.age && (
-                <div className="spread" style={{ padding: '8px 0', borderBottom: '1px solid #F1F5F9' }}>
-                  <span className="muted">Age / Gender</span>
-                  <span>{selectedWorker.age} yrs · {selectedWorker.gender ?? '—'}</span>
-                </div>
-              )}
-            </div>
-            <div style={{ marginTop: 20, textAlign: 'right' }}>
-              <Button onClick={() => setSelectedWorker(null)}>Close</Button>
-            </div>
+      {/* Section: Site Transfers */}
+      <Card>
+        <h3 style={{ margin: '0 0 4px', fontSize: 18, color: palette.text }}>Site Transfer Requests</h3>
+        <p className="muted small" style={{ margin: '0 0 16px' }}>
+          Transfer requests into or out of {site.name}
+        </p>
+
+        {transfers.length === 0 ? (
+          <p className="muted" style={{ padding: '16px 0', textAlign: 'center' }}>
+            No transfer requests on record for this site.
+          </p>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid #E2E8F0', color: '#64748B', fontSize: 13 }}>
+                  <th style={{ padding: '10px 12px' }}>Worker</th>
+                  <th style={{ padding: '10px 12px' }}>Current Site</th>
+                  <th style={{ padding: '10px 12px' }}>Destination Site</th>
+                  <th style={{ padding: '10px 12px' }}>Initiator</th>
+                  <th style={{ padding: '10px 12px' }}>Status</th>
+                  <th style={{ padding: '10px 12px', textAlign: 'right' }}>Date</th>
+                </tr>
+              </thead>
+              <tbody>
+                {transfers.map((tr) => (
+                  <tr key={tr.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
+                    <td style={{ padding: '12px' }}>
+                      <strong style={{ color: palette.text }}>{tr.workerName}</strong>
+                      <div className="muted small" style={{ fontFamily: 'monospace' }}>{tr.workerId}</div>
+                    </td>
+                    <td style={{ padding: '12px', color: '#64748B' }}>
+                      {tr.currentSite?.name ?? '—'}
+                    </td>
+                    <td style={{ padding: '12px', fontWeight: 600, color: palette.text }}>
+                      {tr.destinationSite.name}
+                    </td>
+                    <td style={{ padding: '12px', color: '#64748B' }}>
+                      {tr.initiator}
+                    </td>
+                    <td style={{ padding: '12px' }}>
+                      <span
+                        style={{
+                          fontSize: 12,
+                          fontWeight: 600,
+                          padding: '2px 8px',
+                          borderRadius: 12,
+                          background: tr.status.includes('REJECTED')
+                            ? '#FEE2E2'
+                            : tr.status.includes('ACCEPTED')
+                            ? '#ECFDF5'
+                            : '#FEF3C7',
+                          color: tr.status.includes('REJECTED')
+                            ? '#DC2626'
+                            : tr.status.includes('ACCEPTED')
+                            ? '#065F46'
+                            : '#D97706',
+                        }}
+                      >
+                        {tr.status.replace(/_/g, ' ')}
+                      </span>
+                    </td>
+                    <td style={{ padding: '12px', textAlign: 'right', color: '#64748B' }}>
+                      {new Date(tr.createdAt).toLocaleDateString()}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-        </div>
+        )}
+      </Card>
+
+      {/* Reusable Worker Detail Modal */}
+      {selectedWorkerCode && (
+        <WorkerDetailModal
+          workerCode={selectedWorkerCode}
+          onClose={() => setSelectedWorkerCode(null)}
+        />
       )}
     </div>
   );
