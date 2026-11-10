@@ -33,6 +33,13 @@ import { SuspectedCaseFormPage } from './pages/health-worker/SuspectedCaseForm';
 import { FollowUpsPage } from './pages/health-worker/FollowUps';
 import { TravelArrivalsPage } from './pages/health-worker/TravelArrivals';
 import { FacilityInboxPage } from './pages/health-worker/FacilityInbox';
+import { ContractorLayout } from './pages/contractor/ContractorLayout';
+import { ContractorDashboard } from './pages/contractor/Dashboard';
+import { MySites } from './pages/contractor/MySites';
+import { ContractorSiteDetail } from './pages/contractor/SiteDetail';
+import { ContractorWorkers } from './pages/contractor/Workers';
+import { Approvals } from './pages/contractor/Approvals';
+import { InitiateTransfer } from './pages/contractor/InitiateTransfer';
 
 export function App() {
   const { user } = useAuth();
@@ -42,7 +49,7 @@ export function App() {
       <Route
         path="/login"
         element={
-          user && user.role !== 'WORKER' && user.role !== 'CONTRACTOR' ? (
+          user && user.role !== 'WORKER' ? (
             <Navigate to={homeFor(user.role)} replace />
           ) : (
             <Login />
@@ -54,7 +61,7 @@ export function App() {
       <Route
         path="/first-login"
         element={
-          user && user.role !== 'WORKER' && user.role !== 'CONTRACTOR' ? (
+          user && user.role !== 'WORKER' ? (
             <FirstLogin />
           ) : (
             <Navigate to="/login" replace />
@@ -84,27 +91,22 @@ export function App() {
         }
       />
 
-      {/* Contractor routes are blocked on the web portal — contractors must use the mobile app */}
+      {/* Contractor portal */}
       <Route
         path="/contractor"
         element={
-          <Navigate
-            to="/login"
-            state={{ error: 'Contractor accounts can only access the M3 mobile app.' }}
-            replace
-          />
+          <ProtectedRoute roles={['CONTRACTOR']}>
+            <ContractorLayout />
+          </ProtectedRoute>
         }
-      />
-      <Route
-        path="/contractor/*"
-        element={
-          <Navigate
-            to="/login"
-            state={{ error: 'Contractor accounts can only access the M3 mobile app.' }}
-            replace
-          />
-        }
-      />
+      >
+        <Route index element={<ContractorDashboard />} />
+        <Route path="sites" element={<MySites />} />
+        <Route path="sites/:siteCode" element={<ContractorSiteDetail />} />
+        <Route path="workers" element={<ContractorWorkers />} />
+        <Route path="approvals" element={<Approvals />} />
+        <Route path="initiate" element={<InitiateTransfer />} />
+      </Route>
 
       {/* Admin dashboard — standard login, ADMIN role enforced by the backend as well. */}
       <Route
@@ -151,29 +153,6 @@ export function App() {
         <Route path="inbox" element={<FacilityInboxPage />} />
       </Route>
 
-      {/* Admin dashboard — standard login, ADMIN role enforced by the backend as well. */}
-      <Route
-        path="/admin"
-        element={<ProtectedRoute roles={['ADMIN']}><AdminLayout /></ProtectedRoute>}
-      >
-        <Route index element={<AdminOverview />} />
-        <Route path="sites" element={<SitesList />} />
-        <Route path="sites/new" element={<SiteForm />} />
-        <Route path="sites/:siteCode" element={<SiteDetailPage />} />
-        <Route path="sites/:siteCode/edit" element={<SiteForm />} />
-        <Route path="users" element={<UsersList />} />
-        <Route path="users/new" element={<UserForm />} />
-        <Route path="users/:id" element={<UserDetailPage />} />
-        <Route path="workers" element={<WorkersList />} />
-        <Route path="workers/:workerCode" element={<WorkerDetailPage />} />
-        <Route path="requests" element={<RequestsPage />} />
-        <Route path="transfers" element={<TransfersPage />} />
-        <Route path="travel-reports" element={<TravelReportsPage />} />
-        <Route path="travel-reports/:id" element={<TravelReportDetailPage />} />
-        <Route path="notifications" element={<NotificationsPage />} />
-        <Route path="demo-data" element={<DemoDataPage />} />
-      </Route>
-
       <Route
         path="/portal"
         element={
@@ -188,7 +167,7 @@ export function App() {
         element={
           <Navigate
             to={
-              user && user.role !== 'WORKER' && user.role !== 'CONTRACTOR'
+              user && user.role !== 'WORKER'
                 ? homeFor(user.role)
                 : '/login'
             }

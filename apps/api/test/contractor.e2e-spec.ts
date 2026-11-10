@@ -765,4 +765,89 @@ describe('Contractor Mobile Module APIs (e2e)', () => {
     expect(s2Stats.status).toBe(200);
     expect(s2Stats.body.siteCode).toBe('SITE-SEC-2');
   });
+
+  it('Contractor Iteration 1: Web sign-in, Dashboard metrics, isolation, and RBAC protection', async () => {
+    const areaId = await createArea(ctx, 'Goa Panaji Area');
+
+    const c1 = await provisionContractorHelper('Metro Infra Projects', '9822998877', ['SITE-METRO-1'], areaId);
+    const c2 = await provisionContractorHelper('Coastal Builders', '9822998866', ['SITE-COAST-1'], areaId);
+
+    // 1. Web sign-in via /auth/staff/login succeeds for contractor
+    const loginRes = await ctx.http()
+      .post('/api/v1/auth/staff/login')
+      .send({ username: '9822998877', password: '1234' });
+    expect(loginRes.status).toBe(201);
+    expect(loginRes.body.role).toBe('CONTRACTOR');
+    expect(loginRes.body.user.role).toBe('CONTRACTOR');
+    expect(loginRes.body.token).toBeDefined();
+
+    // 2. Worker accounts are blocked from /auth/staff/login
+    const w1 = await registerWorker(ctx, { name: 'Metro Worker One', phone: '9815000001', pin: '1111' });
+    const blockedStaffLogin = await ctx.http()
+      .post('/api/v1/auth/staff/login')
+      .send({ username: '9815000001', password: '1111' });
+    expect(blockedStaffLogin.status).toBe(403);
+    expect(blockedStaffLogin.body.message).toContain('Worker accounts can only access the M3 mobile app');
+
+    // 3. Worker accounts cannot access contractor dashboard
+    const blockedDash = await ctx.http()
+      .get('/api/v1/contractor/dashboard')
+      .set(...auth(w1.token));
+    expect(blockedDash.status).toBe(403);
+
+    // 4. Assign worker 1 to Contractor 1 site
+    await ctx.http().post('/api/v1/workers/me/site').set(...auth(w1.token)).send({ siteId: 'SITE-METRO-1' });
+
+    // Assign worker 2 to Contractor 2 site
+    const w2 = await registerWorker(ctx, { name: 'Coastal Worker One', phone: '9815000002', pin: '2222' });
+    await ctx.http().post('/api/v1/workers/me/site').set(...auth(w2.token)).send({ siteId: 'SITE-COAST-1' });
+
+    // 5. Contractor 1 dashboard returns real metrics strictly for Contractor 1
+    const dash1 = await ctx.http()
+      .get('/api/v1/contractor/dashboard')
+      .set(...auth(c1.token));
+    expect(dash1.status).toBe(200);
+    expect(dash1.body.contractor.name).toBe('Metro Infra Projects');
+    expect(dash1.body.metrics.totalAssignedWorkers).toBe(1);
+    expect(dash1.body.metrics.activeWorkers).toBe(1);
+    expect(dash1.body.metrics.workersCurrentlyAtSite).toBe(1);
+    expect(dash1.body.metrics.pendingTransferRequests).toBe(0);
+    expect(dash1.body.sites).toHaveLength(1);
+    expect(dash1.body.sites[0].siteCode).toBe('SITE-METRO-1');
+    expect(dash1.body.workers).toHaveLength(1);
+    expect(dash1.body.workers[0].workerCode).toBe(w1.workerId);
+
+    // 6. Data isolation: Contractor 1 does NOT see Coastal Worker One (from Contractor 2)
+    const workerCodes = dash1.body.workers.map((w: any) => w.workerCode);
+    expect(workerCodes).not.toContain(w2.workerId);
+
+    // 7. Recent worker activity includes real timestamped record
+    expect(dash1.body.recentActivity.length).toBeGreaterThanOrEqual(1);
+    const topAct = dash1.body.recentActivity[0];
+    expect(topAct.type).toBe('ASSIGNMENT');
+    expect(topAct.timestamp).toBeDefined();
+    expect(topAct.workerCode).toBe(w1.workerId);
+
+    // 8. Contractor workers search endpoint
+    const workersList = await ctx.http()
+      .get('/api/v1/contractor/workers?search=Metro')
+      .set(...auth(c1.token));
+    expect(workersList.status).toBe(200);
+    expect(workersList.body.items).toHaveLength(1);
+    expect(workersList.body.items[0].workerCode).toBe(w1.workerId);
+
+    // 9. Site detail endpoint
+    const siteDetail = await ctx.http()
+      .get('/api/v1/contractor/sites/SITE-METRO-1/detail')
+      .set(...auth(c1.token));
+    expect(siteDetail.status).toBe(200);
+    expect(siteDetail.body.site.siteCode).toBe('SITE-METRO-1');
+    expect(siteDetail.body.workers).toHaveLength(1);
+
+    // Contractor 1 cannot access Contractor 2 site detail
+    const blockedSite = await ctx.http()
+      .get('/api/v1/contractor/sites/SITE-COAST-1/detail')
+      .set(...auth(c1.token));
+    expect(blockedSite.status).toBe(403);
+  });
 });

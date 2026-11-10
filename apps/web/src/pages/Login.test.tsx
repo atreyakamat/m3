@@ -20,16 +20,15 @@ describe('Login', () => {
     localStorage.clear();
   });
 
-  it('renders staff login fields and no worker or contractor tabs or registration options', () => {
+  it('renders staff & contractor login fields and no worker tabs or registration options', () => {
     renderLogin();
-    expect(screen.getByText('Staff Sign In')).toBeInTheDocument();
+    expect(screen.getByText(/Staff & Contractor Sign In/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Username/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Password/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument();
 
-    // Verify worker and contractor tabs and registration links are NOT present
+    // Verify worker tabs and registration links are NOT present
     expect(screen.queryByRole('button', { name: 'Worker' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Contractor' })).toBeNull();
     expect(screen.queryByText(/Register/i)).toBeNull();
     expect(screen.queryByText(/New worker/i)).toBeNull();
   });
@@ -77,7 +76,7 @@ describe('Login', () => {
     expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
   });
 
-  it('purges existing contractor session on load', () => {
+  it('preserves existing contractor session on load', () => {
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
@@ -86,7 +85,8 @@ describe('Login', () => {
       }),
     );
     const result = load();
-    expect(result).toBeNull();
-    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+    expect(result).not.toBeNull();
+    expect(result?.user?.role).toBe('CONTRACTOR');
+    expect(localStorage.getItem(STORAGE_KEY)).not.toBeNull();
   });
 });

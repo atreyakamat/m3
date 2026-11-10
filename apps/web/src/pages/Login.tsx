@@ -45,12 +45,12 @@ export function Login() {
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       <div style={{ background: roleGradient('ADMIN'), color: '#fff', padding: '48px 16px 36px', textAlign: 'center' }}>
         <h1 style={{ fontSize: 28, margin: 0 }}>M3 Malaria Surveillance</h1>
-        <p style={{ opacity: 0.9, margin: '6px 0 0' }}>Restricted-distribution staff portal</p>
+        <p style={{ opacity: 0.9, margin: '6px 0 0' }}>Restricted-distribution surveillance and management portal</p>
       </div>
       <div className="container" style={{ marginTop: -24, maxWidth: 440 }}>
         <Card>
           <h2 style={{ fontSize: 20, margin: '0 0 16px', textAlign: 'center', color: palette.text }}>
-            Staff Sign In
+            Staff & Contractor Sign In
           </h2>
 
           {error && (
@@ -80,7 +80,7 @@ export function Login() {
           </div>
         </Card>
         <p className="muted small" style={{ textAlign: 'center', marginTop: 16 }}>
-          Staff portal only (Admin, Health Worker, Clinician, Lab Tech, Research Lab). Worker and Contractor accounts must use the M3 mobile app.
+          Staff & Contractor portal. Worker accounts must use the M3 mobile app.
         </p>
       </div>
     </div>

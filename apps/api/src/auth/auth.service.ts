@@ -207,9 +207,6 @@ export class AuthService {
     if (user && user.role === 'WORKER') {
       throw new ForbiddenException('Worker accounts can only access the M3 mobile app.');
     }
-    if (user && user.role === 'CONTRACTOR') {
-      throw new ForbiddenException('Contractor accounts can only access the M3 mobile app.');
-    }
     if (!user || !user.passwordHash) {
       throw new UnauthorizedException('Invalid username or password');
     }

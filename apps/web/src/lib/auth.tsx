@@ -25,13 +25,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         save(null);
         throw new Error('Worker accounts can only access the M3 mobile app.');
       }
-      if (res.user.role === 'CONTRACTOR') {
-        setToken(null);
-        setUser(null);
-        setAuthToken(null);
-        save(null);
-        throw new Error('Contractor accounts can only access the M3 mobile app.');
-      }
       setToken(res.token);
       setUser(res.user);
       setAuthToken(res.token);

@@ -9,24 +9,13 @@ export function ProtectedRoute({ roles, children }: { roles: Role[]; children: R
 
   if (!user) return <Navigate to="/login" replace />;
 
-  // Central Role Guard: Worker and Contractor accounts are strictly prohibited from all web portal routes
+  // Central Role Guard: Worker accounts are strictly prohibited from all web portal routes
   if (user.role === 'WORKER') {
     logout();
     return (
       <Navigate
         to="/login"
         state={{ error: 'Worker accounts can only access the M3 mobile app.' }}
-        replace
-      />
-    );
-  }
-
-  if (user.role === 'CONTRACTOR') {
-    logout();
-    return (
-      <Navigate
-        to="/login"
-        state={{ error: 'Contractor accounts can only access the M3 mobile app.' }}
         replace
       />
     );

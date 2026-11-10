@@ -34,10 +34,22 @@ export class ContractorController {
     return this.contractor.getProfile(user.userId);
   }
 
+  @Get('dashboard')
+  @ApiOperation({ summary: 'Contractor dashboard aggregate data, summary cards, and activity feed' })
+  dashboard(@CurrentUser() user: RequestUser) {
+    return this.contractor.getDashboard(this.contractorIdOf(user), user.userId);
+  }
+
   @Get('sites/:siteCode/stats')
   @ApiOperation({ summary: 'Aggregate malaria stats for the selected site' })
   stats(@CurrentUser() user: RequestUser, @Param('siteCode') siteCode: string) {
     return this.contractor.getSiteStats(this.contractorIdOf(user), siteCode);
+  }
+
+  @Get('sites/:siteCode/detail')
+  @ApiOperation({ summary: 'Detailed view of a construction site assigned to the contractor' })
+  siteDetail(@CurrentUser() user: RequestUser, @Param('siteCode') siteCode: string) {
+    return this.contractor.getContractorSiteDetail(this.contractorIdOf(user), siteCode);
   }
 
   @Get('sites/:siteCode/workers')
@@ -54,6 +66,27 @@ export class ContractorController {
   ) {
     return this.contractor.getSiteWorkers(this.contractorIdOf(user), siteCode, {
       search: search ?? q,
+      malaria: malaria ?? status,
+      page,
+      pageSize,
+    });
+  }
+
+  @Get('workers')
+  @ApiOperation({ summary: 'Search and list all workers assigned to this contractor across all sites' })
+  contractorWorkers(
+    @CurrentUser() user: RequestUser,
+    @Query('search') search?: string,
+    @Query('q') q?: string,
+    @Query('siteCode') siteCode?: string,
+    @Query('malaria') malaria?: string,
+    @Query('status') status?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    return this.contractor.getContractorWorkers(this.contractorIdOf(user), {
+      search: search ?? q,
+      siteCode,
       malaria: malaria ?? status,
       page,
       pageSize,

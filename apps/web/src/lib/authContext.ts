@@ -29,7 +29,7 @@ export function load(): { token: string; user: AuthUser } | null {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
     const data = JSON.parse(raw);
-    if (data?.user?.role === 'WORKER' || data?.user?.role === 'CONTRACTOR') {
+    if (data?.user?.role === 'WORKER') {
       localStorage.removeItem(STORAGE_KEY);
       return null;
     }
@@ -41,7 +41,7 @@ export function load(): { token: string; user: AuthUser } | null {
 
 export function save(data: { token: string; user: AuthUser } | null): void {
   try {
-    if (data && data.user.role !== 'WORKER' && data.user.role !== 'CONTRACTOR') {
+    if (data && data.user.role !== 'WORKER') {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
     } else {
       localStorage.removeItem(STORAGE_KEY);

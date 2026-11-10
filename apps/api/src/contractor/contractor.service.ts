@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import * as crypto from 'crypto';
-import { computeTransferStatus, type Decision } from '@m3/shared';
+import { computeTransferStatus, type Decision, TRANSFER_TERMINAL_STATUSES } from '@m3/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { AdminService } from '../admin/admin.service';
 import { NotificationService } from '../common/notification.service';
@@ -857,6 +857,410 @@ export class ContractorService {
         ? { siteId: activeAssignment.site.siteCode, name: activeAssignment.site.name }
         : null,
       currentContractor: activeAssignment?.contractor?.name ?? null,
+    };
+  }
+
+  /** Retrieves all ConstructionSite entities managed by or associated with this contractor. */
+  async getContractorSites(contractorId: string) {
+    const directSites = await this.prisma.constructionSite.findMany({
+      where: { contractorId, active: true },
+      include: {
+        area: true,
+        _count: { select: { assignments: { where: { active: true } } } },
+      },
+      orderBy: { name: 'asc' },
+    });
+
+    const multiSites = await this.prisma.contractorSite.findMany({
+      where: { contractorId, active: true, site: { active: true } },
+      include: {
+        site: {
+          include: {
+            area: true,
+            _count: { select: { assignments: { where: { active: true } } } },
+          },
+        },
+      },
+      orderBy: { site: { name: 'asc' } },
+    });
+
+    const sitesMap = new Map<string, typeof directSites[0]>();
+    for (const s of directSites) {
+      sitesMap.set(s.id, s);
+    }
+    for (const ms of multiSites) {
+      if (!sitesMap.has(ms.site.id)) {
+        sitesMap.set(ms.site.id, ms.site);
+      }
+    }
+    return Array.from(sitesMap.values());
+  }
+
+  /**
+   * Contractor Dashboard aggregate data (Iteration 1).
+   * Calculates the 4 required summary cards:
+   * - Total Assigned Workers
+   * - Active Workers
+   * - Workers Currently at Site
+   * - Pending Transfer Requests
+   * Plus 4 dashboard sections: Recent Worker Activity, Site Overview, Worker Management, Transfer Requests.
+   * Strictly enforces data isolation to the authenticated contractor's workforce.
+   */
+  async getDashboard(contractorId: string, userId: string) {
+    const contractor = await this.prisma.contractor.findUnique({
+      where: { id: contractorId },
+    });
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { phone: true, displayName: true, stakeholderCode: true },
+    });
+
+    const sites = await this.getContractorSites(contractorId);
+    const siteIds = sites.map((s) => s.id);
+
+    // 1. Total assigned & active workers
+    const allAssignments = await this.prisma.workerSiteAssignment.findMany({
+      where: {
+        OR: [
+          { contractorId },
+          { siteId: { in: siteIds } },
+        ],
+      },
+      select: { workerId: true, active: true },
+    });
+    const distinctTotalWorkerIds = Array.from(new Set(allAssignments.map((a) => a.workerId)));
+    const totalAssignedWorkers = distinctTotalWorkerIds.length;
+
+    const activeAssignments = allAssignments.filter((a) => a.active);
+    const distinctActiveWorkerIds = Array.from(new Set(activeAssignments.map((a) => a.workerId)));
+    const activeWorkers = distinctActiveWorkerIds.length;
+
+    // 2. Workers Currently at Site (active workers not currently departed on open travel away from Goa)
+    const now = new Date();
+    const activeTravels = await this.prisma.travelRecord.findMany({
+      where: {
+        workerId: { in: distinctActiveWorkerIds },
+        status: { not: 'CANCELLED' },
+        direction: 'LEAVING_GOA',
+        departureDate: { lte: now },
+        arrivalConfirmedAt: null,
+        departureStatus: { not: 'REJECTED' },
+      },
+      select: { workerId: true },
+    });
+    const awayWorkerIds = new Set(activeTravels.map((t) => t.workerId));
+    const workersCurrentlyAtSite = Math.max(0, activeWorkers - awayWorkerIds.size);
+
+    // 3. Pending Transfer Requests involving this contractor or sites
+    const pendingTransfers = await this.prisma.siteTransferRequest.findMany({
+      where: {
+        status: { notIn: TRANSFER_TERMINAL_STATUSES as any },
+        OR: [
+          { fromContractorId: contractorId },
+          { toContractorId: contractorId },
+          { fromSiteId: { in: siteIds } },
+          { toSiteId: { in: siteIds } },
+        ],
+      },
+      include: {
+        worker: { select: { workerCode: true, name: true } },
+        fromSite: { select: { siteCode: true, name: true } },
+        toSite: { select: { siteCode: true, name: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    const pendingTransferRequests = pendingTransfers.length;
+
+    // 4. Recent Worker Activity (authorized workforce events with timestamps)
+    const recentAssignments = await this.prisma.workerSiteAssignment.findMany({
+      where: {
+        OR: [
+          { contractorId },
+          { siteId: { in: siteIds } },
+        ],
+      },
+      include: {
+        worker: { select: { workerCode: true, name: true } },
+        site: { select: { siteCode: true, name: true } },
+      },
+      orderBy: { startedAt: 'desc' },
+      take: 6,
+    });
+
+    const recentTravels = await this.prisma.travelRecord.findMany({
+      where: {
+        workerId: { in: distinctTotalWorkerIds },
+        status: { not: 'CANCELLED' },
+      },
+      include: {
+        worker: { select: { workerCode: true, name: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 6,
+    });
+
+    const recentTransfers = await this.prisma.siteTransferRequest.findMany({
+      where: {
+        OR: [
+          { fromContractorId: contractorId },
+          { toContractorId: contractorId },
+          { fromSiteId: { in: siteIds } },
+          { toSiteId: { in: siteIds } },
+        ],
+      },
+      include: {
+        worker: { select: { workerCode: true, name: true } },
+        fromSite: { select: { siteCode: true, name: true } },
+        toSite: { select: { siteCode: true, name: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 6,
+    });
+
+    const activities = [
+      ...recentAssignments.map((a) => ({
+        id: `assign-${a.id}`,
+        type: 'ASSIGNMENT' as const,
+        title: 'Worker Assigned',
+        description: `${a.worker.name} (${a.worker.workerCode}) assigned to ${a.site.name}`,
+        timestamp: a.startedAt.toISOString(),
+        workerCode: a.worker.workerCode,
+        workerName: a.worker.name,
+        siteCode: a.site.siteCode,
+        siteName: a.site.name,
+      })),
+      ...recentTravels.map((t) => ({
+        id: `travel-${t.id}`,
+        type: 'TRAVEL' as const,
+        title: t.direction === 'LEAVING_GOA' ? 'Travel Departure' : 'Travel Arrival',
+        description: `${t.worker.name} (${t.worker.workerCode}) ${
+          t.direction === 'LEAVING_GOA'
+            ? `departed for ${t.destination || t.state || 'hometown'}`
+            : `returned to Goa from ${t.originTown || t.originState || 'travel'}`
+        }`,
+        timestamp: (t.departureDate ?? t.createdAt).toISOString(),
+        workerCode: t.worker.workerCode,
+        workerName: t.worker.name,
+        siteCode: null,
+        siteName: null,
+      })),
+      ...recentTransfers.map((t) => ({
+        id: `transfer-${t.id}`,
+        type: 'TRANSFER' as const,
+        title: `Site Transfer (${t.status.replace(/_/g, ' ')})`,
+        description: `Transfer for ${t.worker.name} from ${t.fromSite?.name ?? 'Site'} to ${t.toSite.name}`,
+        timestamp: t.createdAt.toISOString(),
+        workerCode: t.worker.workerCode,
+        workerName: t.worker.name,
+        siteCode: t.toSite.siteCode,
+        siteName: t.toSite.name,
+      })),
+    ];
+
+    activities.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    const recentActivity = activities.slice(0, 10);
+
+    // 5. Worker Management section preview
+    const activeWorkerRows = await this.prisma.workerSiteAssignment.findMany({
+      where: {
+        active: true,
+        OR: [
+          { contractorId },
+          { siteId: { in: siteIds } },
+        ],
+      },
+      include: {
+        worker: {
+          select: {
+            id: true,
+            workerCode: true,
+            name: true,
+            phone: true,
+            screening: { select: { answers: true } },
+          },
+        },
+        site: { select: { siteCode: true, name: true } },
+      },
+      orderBy: { startedAt: 'desc' },
+      take: 10,
+    });
+
+    const workers = [];
+    for (const row of activeWorkerRows) {
+      const malaria = await this.admin.requireWorkerMalariaStatus(row.worker.id);
+      const malariaStatus = malaria === 'POSITIVE' || malaria === 'NEGATIVE' ? malaria : null;
+      const demo = extractDemographics(row.worker.screening);
+      workers.push({
+        workerCode: row.worker.workerCode,
+        patientId: row.worker.id,
+        name: row.worker.name,
+        phone: row.worker.phone,
+        age: demo.age,
+        gender: demo.gender,
+        siteCode: row.site.siteCode,
+        siteName: row.site.name,
+        active: true,
+        malariaStatus,
+      });
+    }
+
+    // 6. Sites overview
+    const siteOverview = sites.map((s) => ({
+      id: s.id,
+      siteId: s.siteCode,
+      siteCode: s.siteCode,
+      name: s.name,
+      area: s.area.name,
+      activeWorkers: s._count.assignments,
+    }));
+
+    // 7. Formatted pending transfers
+    const formattedPendingTransfers = pendingTransfers.slice(0, 5).map((t) => {
+      const isCurrent = t.fromContractorId === contractorId || siteIds.includes(t.fromSiteId ?? '');
+      const isDestination = t.toContractorId === contractorId || siteIds.includes(t.toSiteId);
+      const isAwaitingMyApproval =
+        (isCurrent && t.fromContractorDecision === 'PENDING') ||
+        (isDestination && t.toContractorDecision === 'PENDING');
+      return {
+        id: t.id,
+        transferId: t.id,
+        workerCode: t.worker.workerCode,
+        workerName: t.worker.name,
+        currentSite: t.fromSite ? { siteId: t.fromSite.siteCode, name: t.fromSite.name } : null,
+        destinationSite: { siteId: t.toSite.siteCode, name: t.toSite.name },
+        initiator: t.initiatorType,
+        status: t.status,
+        createdAt: t.createdAt.toISOString(),
+        isAwaitingMyApproval,
+      };
+    });
+
+    return {
+      contractor: {
+        id: contractorId,
+        contractorCode: user?.stakeholderCode ?? contractorId,
+        name: contractor?.name ?? user?.displayName ?? 'Contractor',
+        phone: user?.phone ?? '',
+      },
+      metrics: {
+        totalAssignedWorkers,
+        activeWorkers,
+        workersCurrentlyAtSite,
+        pendingTransferRequests,
+      },
+      sites: siteOverview,
+      recentActivity,
+      workers,
+      pendingTransfers: formattedPendingTransfers,
+    };
+  }
+
+  /** Search and list workers assigned to this contractor across all sites (with search, pagination). */
+  async getContractorWorkers(
+    contractorId: string,
+    query: { search?: string; siteCode?: string; malaria?: string; page?: string; pageSize?: string },
+  ) {
+    const sites = await this.getContractorSites(contractorId);
+    let targetSiteIds = sites.map((s) => s.id);
+
+    if (query.siteCode) {
+      const match = sites.find((s) => s.siteCode === query.siteCode);
+      if (!match) throw new ForbiddenException(`You are not assigned to construction site ${query.siteCode}`);
+      targetSiteIds = [match.id];
+    }
+
+    const params = parsePage(query.page, query.pageSize);
+
+    const assignments = await this.prisma.workerSiteAssignment.findMany({
+      where: {
+        active: true,
+        siteId: { in: targetSiteIds },
+        OR: [
+          { contractorId },
+          { contractorId: null },
+        ],
+      },
+      include: {
+        worker: {
+          include: {
+            screening: true,
+          },
+        },
+        site: {
+          select: { siteCode: true, name: true },
+        },
+      },
+      orderBy: { startedAt: 'desc' },
+    });
+
+    const searchLower = query.search?.trim().toLowerCase();
+    const rows = [];
+
+    for (const a of assignments) {
+      const w = a.worker;
+      if (searchLower) {
+        const matches =
+          w.name.toLowerCase().includes(searchLower) ||
+          w.workerCode.toLowerCase().includes(searchLower) ||
+          (w.phone && w.phone.includes(searchLower));
+        if (!matches) continue;
+      }
+
+      const malaria = await this.admin.requireWorkerMalariaStatus(w.id);
+      const contractorMalariaStatus: 'POSITIVE' | 'NEGATIVE' | null =
+        malaria === 'POSITIVE' || malaria === 'NEGATIVE' ? malaria : null;
+
+      const rawFilter = query.malaria?.toUpperCase();
+      if (rawFilter && rawFilter !== 'ALL') {
+        if (rawFilter === 'POSITIVE' || rawFilter === 'NEGATIVE') {
+          if (contractorMalariaStatus !== rawFilter) continue;
+        } else {
+          continue;
+        }
+      }
+
+      const demo = extractDemographics(w.screening);
+
+      rows.push({
+        workerCode: w.workerCode,
+        patientId: w.id,
+        name: w.name,
+        phone: w.phone,
+        age: demo.age,
+        gender: demo.gender,
+        siteCode: a.site.siteCode,
+        siteName: a.site.name,
+        active: a.active,
+        malariaStatus: contractorMalariaStatus,
+      });
+    }
+
+    const total = rows.length;
+    const items = rows.slice(params.skip, params.skip + params.take);
+    return paginated(items, total, params);
+  }
+
+  /** Detailed view of a specific site assigned to the contractor. */
+  async getContractorSiteDetail(contractorId: string, siteCode: string) {
+    const site = await this.validateContractorSite(contractorId, siteCode);
+    const stats = await this.getSiteStats(contractorId, siteCode);
+    const workersRes = await this.getSiteWorkers(contractorId, siteCode, { pageSize: '25' });
+    const travelsRes = await this.getSiteTravels(contractorId, siteCode);
+    const transfersRes = await this.getSiteTransfers(contractorId, siteCode);
+
+    return {
+      site: {
+        id: site.id,
+        siteCode: site.siteCode,
+        name: site.name,
+        area: site.area.name,
+        active: site.active,
+      },
+      stats,
+      workers: workersRes.items,
+      totalWorkers: workersRes.total,
+      travels: travelsRes.items,
+      transfers: transfersRes.items,
     };
   }
 }
