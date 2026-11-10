@@ -5,7 +5,7 @@ const nav: NavItem[] = [
   { to: '/contractor', label: 'Dashboard' },
   { to: '/contractor/sites', label: 'My Sites' },
   { to: '/contractor/workers', label: 'Worker Management' },
-  { to: '/contractor/approvals', label: 'Transfer Approvals' },
+  { to: '/contractor/transfers', label: 'Transfer Requests' },
   { to: '/contractor/initiate', label: 'Initiate Transfer' },
 ];
 

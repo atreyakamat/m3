@@ -19,15 +19,15 @@ describe('transfer required approvers', () => {
 
 describe('worker-initiated flow', () => {
   const init = initialDecisions('WORKER');
-  it('starts pending current contractor', () => {
+  it('starts pending destination contractor', () => {
     expect(init.worker).toBe('APPROVED');
-    expect(computeTransferStatus('WORKER', init)).toBe('PENDING_CURRENT_CONTRACTOR');
+    expect(computeTransferStatus('WORKER', init)).toBe('PENDING_DESTINATION_CONTRACTOR');
   });
-  it('moves to destination contractor after current approves', () => {
-    const d: TransferDecisions = { ...init, fromContractor: 'APPROVED' };
-    expect(computeTransferStatus('WORKER', d)).toBe('PENDING_DESTINATION_CONTRACTOR');
+  it('moves to current contractor release request after destination approves', () => {
+    const d: TransferDecisions = { ...init, toContractor: 'APPROVED' };
+    expect(computeTransferStatus('WORKER', d)).toBe('PENDING_CURRENT_CONTRACTOR');
   });
-  it('completes only after BOTH contractors approve', () => {
+  it('completes only after BOTH contractors approve (destination then release)', () => {
     const d: TransferDecisions = { worker: 'APPROVED', fromContractor: 'APPROVED', toContractor: 'APPROVED' };
     expect(computeTransferStatus('WORKER', d)).toBe('ACCEPTED');
   });
@@ -67,6 +67,13 @@ describe('canActorDecide sequencing & authorization', () => {
   it('rejects an actor that is not a required approver', () => {
     // worker is not a required approver on a worker-initiated transfer
     expect(canActorDecide('WORKER', initialDecisions('WORKER'), 'worker')).toBe(false);
+  });
+  it('current contractor cannot release before destination contractor approves (worker-initiated)', () => {
+    const init = initialDecisions('WORKER');
+    expect(canActorDecide('WORKER', init, 'fromContractor')).toBe(false);
+    expect(canActorDecide('WORKER', init, 'toContractor')).toBe(true);
+    const afterDest: TransferDecisions = { ...init, toContractor: 'APPROVED' };
+    expect(canActorDecide('WORKER', afterDest, 'fromContractor')).toBe(true);
   });
   it('current contractor cannot act before worker accepts (contractor-initiated)', () => {
     const init = initialDecisions('CONTRACTOR');

@@ -55,8 +55,9 @@ export function computeTransferStatus(
 
   // Otherwise report the next pending slot in sequence.
   if (initiator === 'WORKER') {
-    if (decisions.fromContractor === 'PENDING') return 'PENDING_CURRENT_CONTRACTOR';
-    return 'PENDING_DESTINATION_CONTRACTOR';
+    // Destination contractor reviews first; once approved, current contractor releases.
+    if (decisions.toContractor === 'PENDING') return 'PENDING_DESTINATION_CONTRACTOR';
+    return 'PENDING_CURRENT_CONTRACTOR';
   }
   // Contractor-initiated: worker first, then current contractor.
   if (decisions.worker === 'PENDING') return 'PENDING_WORKER_RESPONSE';
@@ -65,10 +66,10 @@ export function computeTransferStatus(
 
 /**
  * Whether `actor` is allowed to record a decision right now. Enforces both the
- * "only a required approver may act" rule and the sequencing rule (the current
- * contractor acts only after the worker has accepted a contractor-initiated
- * request). The API additionally verifies the actor's identity against the
- * authoritative site→contractor mapping.
+ * "only a required approver may act" rule and the sequencing rules:
+ * - Worker-initiated: Current contractor acts ONLY after the destination contractor approves.
+ * - Contractor-initiated: Current contractor acts ONLY after the worker has accepted.
+ * The API additionally verifies the actor's identity against the authoritative site→contractor mapping.
  */
 export function canActorDecide(
   initiator: TransferInitiator,
@@ -77,6 +78,11 @@ export function canActorDecide(
 ): boolean {
   if (!requiredApprovers(initiator).includes(actor)) return false;
   if (decisions[actor] !== 'PENDING') return false; // already decided
+
+  if (initiator === 'WORKER' && actor === 'fromContractor') {
+    // current contractor can only release once the destination contractor has approved
+    return decisions.toContractor === 'APPROVED';
+  }
 
   if (initiator === 'CONTRACTOR' && actor === 'fromContractor') {
     // current contractor can only approve once the worker has accepted

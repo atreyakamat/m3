@@ -189,12 +189,18 @@ export class TransfersService {
 
   /** Resolve which decision slot a contractor occupies for this transfer. */
   private contractorSlot(t: TransferRow, contractorId: string): TransferActor | null {
-    if (t.fromContractorId ? t.fromContractorId === contractorId : t.fromSite?.contractorId === contractorId) {
-      return 'fromContractor';
-    }
-    if (t.toContractorId ? t.toContractorId === contractorId : t.toSite.contractorId === contractorId) {
+    const isFrom = t.fromContractorId ? t.fromContractorId === contractorId : t.fromSite?.contractorId === contractorId;
+    const isTo = t.toContractorId ? t.toContractorId === contractorId : t.toSite.contractorId === contractorId;
+
+    if (isFrom && isTo) {
+      const decisions = this.decisionsOf(t);
+      const initiator = t.initiatorType as TransferInitiator;
+      if (canActorDecide(initiator, decisions, 'toContractor')) return 'toContractor';
+      if (canActorDecide(initiator, decisions, 'fromContractor')) return 'fromContractor';
       return 'toContractor';
     }
+    if (isTo) return 'toContractor';
+    if (isFrom) return 'fromContractor';
     return null;
   }
 

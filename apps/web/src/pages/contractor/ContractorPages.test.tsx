@@ -7,6 +7,7 @@ import { ContractorDashboard } from './Dashboard';
 import { ContractorWorkers } from './Workers';
 import { MySites } from './MySites';
 import { ContractorSiteDetail } from './SiteDetail';
+import { Approvals } from './Approvals';
 
 vi.mock('../../lib/api', () => ({
   api: {
@@ -368,6 +369,252 @@ describe('Contractor Application — Iteration 1 & 2', () => {
       expect(screen.getByText('Positive Cases')).toBeInTheDocument();
       expect(screen.getByText('Ramesh Kumar')).toBeInTheDocument();
       expect(screen.getByText('Active')).toBeInTheDocument();
+    });
+  });
+
+  it('renders Transfer Requests page with all columns, filters, and actions', async () => {
+    vi.mocked(api.get).mockResolvedValueOnce({
+      items: [
+        {
+          id: 'trans-001-xyz',
+          transferId: 'trans-001-xyz',
+          workerId: 'M3-W001',
+          workerName: 'Ramesh Kumar',
+          fromSite: { id: 's-old', siteCode: 'SITE-OLD', name: 'Old Candolim Site' },
+          toSite: { id: 's-new', siteCode: 'SITE-TEST01', name: 'Miramar Heights' },
+          currentSite: { siteId: 'SITE-OLD', name: 'Old Candolim Site' },
+          destinationSite: { siteId: 'SITE-TEST01', name: 'Miramar Heights' },
+          fromContractor: { id: 'c-prev', name: 'Previous Builder' },
+          toContractor: { id: 'c-record-1', name: 'Goa Coastal Builders' },
+          initiator: 'WORKER',
+          initiatorType: 'WORKER',
+          status: 'PENDING_DESTINATION_CONTRACTOR',
+          workerDecision: 'APPROVED',
+          toContractorDecision: 'PENDING',
+          fromContractorDecision: 'PENDING',
+          createdAt: '2026-11-09T10:00:00.000Z',
+          effectiveAt: null,
+          cancelledAt: null,
+          requiredNextAction: 'Awaiting your destination approval',
+          canApproveDestination: true,
+          canReleaseWorker: false,
+          canCancel: false,
+          isActionableByMe: true,
+        },
+        {
+          id: 'trans-002-abc',
+          transferId: 'trans-002-abc',
+          workerId: 'M3-W002',
+          workerName: 'Suresh Patel',
+          fromSite: { id: 's-curr', siteCode: 'SITE-TEST01', name: 'Miramar Heights' },
+          toSite: { id: 's-dest', siteCode: 'SITE-SOUTH', name: 'South Infra' },
+          currentSite: { siteId: 'SITE-TEST01', name: 'Miramar Heights' },
+          destinationSite: { siteId: 'SITE-SOUTH', name: 'South Infra' },
+          fromContractor: { id: 'c-record-1', name: 'Goa Coastal Builders' },
+          toContractor: { id: 'c-next', name: 'South Infra Corp' },
+          initiator: 'WORKER',
+          initiatorType: 'WORKER',
+          status: 'PENDING_CURRENT_CONTRACTOR',
+          workerDecision: 'APPROVED',
+          toContractorDecision: 'APPROVED',
+          fromContractorDecision: 'PENDING',
+          createdAt: '2026-11-08T09:00:00.000Z',
+          effectiveAt: null,
+          cancelledAt: null,
+          requiredNextAction: 'Awaiting your release approval',
+          canApproveDestination: false,
+          canReleaseWorker: true,
+          canCancel: false,
+          isActionableByMe: true,
+        },
+      ],
+      page: 1,
+      pageSize: 10,
+      total: 2,
+      totalPages: 1,
+    });
+
+    renderWithAuth(
+      <Routes>
+        <Route path="/contractor/transfers" element={<Approvals />} />
+      </Routes>,
+      ['/contractor/transfers'],
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Transfer Requests')).toBeInTheDocument();
+      expect(screen.getByText('+ Initiate Transfer')).toBeInTheDocument();
+
+      // Check column headers
+      expect(screen.getByText('Transfer ID')).toBeInTheDocument();
+      expect(screen.getByText('Worker Name')).toBeInTheDocument();
+      expect(screen.getByText('Worker ID')).toBeInTheDocument();
+      expect(screen.getByText('Current Site')).toBeInTheDocument();
+      expect(screen.getByText('Destination Site')).toBeInTheDocument();
+      expect(screen.getByText('Initiator')).toBeInTheDocument();
+      expect(screen.getByText('Request Date')).toBeInTheDocument();
+      expect(screen.getByText('Current Status')).toBeInTheDocument();
+      expect(screen.getByText('Required Next Action')).toBeInTheDocument();
+      expect(screen.getByText('Actions')).toBeInTheDocument();
+
+      // Check rows & actions
+      expect(screen.getByText('Ramesh Kumar')).toBeInTheDocument();
+      expect(screen.getByText('M3-W001')).toBeInTheDocument();
+      expect(screen.getByText('Awaiting your destination approval')).toBeInTheDocument();
+      expect(screen.getByText('Approve')).toBeInTheDocument();
+
+      expect(screen.getByText('Suresh Patel')).toBeInTheDocument();
+      expect(screen.getByText('M3-W002')).toBeInTheDocument();
+      expect(screen.getByText('Awaiting your release approval')).toBeInTheDocument();
+      expect(screen.getByText('Release')).toBeInTheDocument();
+
+      expect(screen.getAllByText('View Details')).toHaveLength(2);
+    });
+  });
+
+  it('opens TransferDetailModal with timeline, route, authorized worker info, and records decision', async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url.includes('/contractor/transfers?')) {
+        return Promise.resolve({
+          items: [
+            {
+              id: 'trans-001',
+              transferId: 'trans-001',
+              workerId: 'M3-W001',
+              workerName: 'Ramesh Kumar',
+              fromSite: { id: 's-old', siteCode: 'SITE-OLD', name: 'Old Candolim Site' },
+              toSite: { id: 's-new', siteCode: 'SITE-TEST01', name: 'Miramar Heights' },
+              currentSite: { siteId: 'SITE-OLD', name: 'Old Candolim Site' },
+              destinationSite: { siteId: 'SITE-TEST01', name: 'Miramar Heights' },
+              fromContractor: { id: 'c-prev', name: 'Previous Builder' },
+              toContractor: { id: 'c-record-1', name: 'Goa Coastal Builders' },
+              initiator: 'WORKER',
+              initiatorType: 'WORKER',
+              status: 'PENDING_DESTINATION_CONTRACTOR',
+              workerDecision: 'APPROVED',
+              toContractorDecision: 'PENDING',
+              fromContractorDecision: 'PENDING',
+              createdAt: '2026-11-09T10:00:00.000Z',
+              effectiveAt: null,
+              cancelledAt: null,
+              requiredNextAction: 'Awaiting your destination approval',
+              canApproveDestination: true,
+              canReleaseWorker: false,
+              canCancel: false,
+              isActionableByMe: true,
+            },
+          ],
+          page: 1,
+          pageSize: 10,
+          total: 1,
+          totalPages: 1,
+        });
+      }
+      if (url.includes('/contractor/transfers/trans-001')) {
+        return Promise.resolve({
+          id: 'trans-001',
+          transferId: 'trans-001',
+          workerId: 'M3-W001',
+          workerName: 'Ramesh Kumar',
+          worker: {
+            id: 'w-001',
+            workerCode: 'M3-W001',
+            name: 'Ramesh Kumar',
+            phone: '9876543210',
+            age: 28,
+            gender: 'male',
+            malariaStatus: null,
+          },
+          fromSite: { id: 's-old', siteCode: 'SITE-OLD', name: 'Old Candolim Site', area: 'Candolim' },
+          toSite: { id: 's-new', siteCode: 'SITE-TEST01', name: 'Miramar Heights', area: 'Panaji North' },
+          currentSite: { siteId: 'SITE-OLD', name: 'Old Candolim Site' },
+          destinationSite: { siteId: 'SITE-TEST01', name: 'Miramar Heights' },
+          fromContractor: { id: 'c-prev', name: 'Previous Builder' },
+          toContractor: { id: 'c-record-1', name: 'Goa Coastal Builders' },
+          initiator: 'WORKER',
+          initiatorType: 'WORKER',
+          status: 'PENDING_DESTINATION_CONTRACTOR',
+          workerDecision: 'APPROVED',
+          workerDecisionAt: '2026-11-09T10:00:00.000Z',
+          toContractorDecision: 'PENDING',
+          toContractorDecisionAt: null,
+          fromContractorDecision: 'PENDING',
+          fromContractorDecisionAt: null,
+          note: 'Relocating to Panaji site.',
+          createdAt: '2026-11-09T10:00:00.000Z',
+          effectiveAt: null,
+          cancelledAt: null,
+          myRole: 'DESTINATION_CONTRACTOR',
+          isDestinationContractor: true,
+          isCurrentContractor: false,
+          canApproveDestination: true,
+          canReleaseWorker: false,
+          canCancel: false,
+          isActionableByMe: true,
+          requiredNextAction: 'Awaiting your destination approval',
+          timeline: [
+            {
+              id: 'step-1',
+              step: 'INITIATED',
+              status: 'DONE',
+              title: 'Transfer requested by worker',
+              description: 'Transfer request submitted.',
+              timestamp: '2026-11-09T10:00:00.000Z',
+            },
+            {
+              id: 'step-2',
+              step: 'DESTINATION_APPROVAL',
+              status: 'PENDING',
+              title: 'Destination contractor review pending',
+              description: 'Action required: Review and approve or reject this destination request.',
+              timestamp: '2026-11-09T10:00:00.000Z',
+            },
+          ],
+        });
+      }
+      return Promise.reject(new Error(`Unhandled GET url: ${url}`));
+    });
+
+    vi.mocked(api.post).mockResolvedValueOnce({
+      id: 'trans-001',
+      status: 'PENDING_CURRENT_CONTRACTOR',
+    });
+
+    renderWithAuth(
+      <Routes>
+        <Route path="/contractor/transfers" element={<Approvals />} />
+      </Routes>,
+      ['/contractor/transfers'],
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Ramesh Kumar')).toBeInTheDocument();
+    });
+
+    // Click "View Details"
+    fireEvent.click(screen.getByText('View Details'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Transfer Request Details')).toBeInTheDocument();
+      expect(screen.getByText('Site Transfer Route')).toBeInTheDocument();
+      expect(screen.getAllByText('Old Candolim Site').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByText('Worker Demographics')).toBeInTheDocument();
+      expect(screen.getByText('28 yrs · male')).toBeInTheDocument();
+      expect(screen.getByText(/diagnostic results and clinical surveys are strictly confidential/i)).toBeInTheDocument();
+      expect(screen.getByText('Transfer Milestones & Timeline')).toBeInTheDocument();
+      expect(screen.getByText('Transfer requested by worker')).toBeInTheDocument();
+      expect(screen.getByText('✓ Approve Destination Request')).toBeInTheDocument();
+      expect(screen.getByText('✕ Reject Request')).toBeInTheDocument();
+    });
+
+    // Approve destination request
+    fireEvent.click(screen.getByText('✓ Approve Destination Request'));
+
+    await waitFor(() => {
+      expect(api.post).toHaveBeenCalledWith(
+        '/contractor/transfers/trans-001/approve',
+        expect.anything(),
+      );
     });
   });
 });

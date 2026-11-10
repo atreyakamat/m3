@@ -105,6 +105,7 @@ export function App() {
         <Route path="sites/:siteCode" element={<ContractorSiteDetail />} />
         <Route path="workers" element={<ContractorWorkers />} />
         <Route path="approvals" element={<Approvals />} />
+        <Route path="transfers" element={<Approvals />} />
         <Route path="initiate" element={<InitiateTransfer />} />
       </Route>
 

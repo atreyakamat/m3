@@ -31,23 +31,27 @@ describe('Site transfer workflow (e2e)', () => {
     return me.body.currentSite?.siteId ?? null;
   }
 
-  it('worker-initiated transfer needs BOTH contractors, then completes & moves site', async () => {
+  it('worker-initiated transfer needs destination approval then current contractor release', async () => {
     const create = await ctx.http().post('/api/v1/transfers/worker').set(...auth(worker.token)).send({ toSiteId: 'SITE-B' });
     expect(create.status).toBe(201);
-    expect(create.body.status).toBe('PENDING_CURRENT_CONTRACTOR');
+    expect(create.body.status).toBe('PENDING_DESTINATION_CONTRACTOR');
     const id = create.body.id;
 
     // one-pending rule
     const dup = await ctx.http().post('/api/v1/transfers/worker').set(...auth(worker.token)).send({ toSiteId: 'SITE-B' });
     expect(dup.status).toBe(409);
 
-    // current (north) approves
-    const a1 = await ctx.http().post(`/api/v1/transfers/${id}/contractor/approve`).set(...auth(north.token)).send({});
-    expect(a1.body.status).toBe('PENDING_DESTINATION_CONTRACTOR');
+    // current (north) cannot release before destination approval
+    const early = await ctx.http().post(`/api/v1/transfers/${id}/contractor/approve`).set(...auth(north.token)).send({});
+    expect(early.status).toBe(403);
+
+    // destination (south) approves -> moves to current contractor release
+    const a1 = await ctx.http().post(`/api/v1/transfers/${id}/contractor/approve`).set(...auth(south.token)).send({});
+    expect(a1.body.status).toBe('PENDING_CURRENT_CONTRACTOR');
     expect(await currentSite()).toBe('SITE-A'); // not moved yet
 
-    // destination (south) approves -> complete
-    const a2 = await ctx.http().post(`/api/v1/transfers/${id}/contractor/approve`).set(...auth(south.token)).send({});
+    // current contractor (north) releases worker -> complete
+    const a2 = await ctx.http().post(`/api/v1/transfers/${id}/contractor/approve`).set(...auth(north.token)).send({});
     expect(a2.body.status).toBe('ACCEPTED');
     expect(await currentSite()).toBe('SITE-B');
 
@@ -60,7 +64,6 @@ describe('Site transfer workflow (e2e)', () => {
   it('worker-initiated: destination rejection leaves site unchanged', async () => {
     const create = await ctx.http().post('/api/v1/transfers/worker').set(...auth(worker.token)).send({ toSiteId: 'SITE-B' });
     const id = create.body.id;
-    await ctx.http().post(`/api/v1/transfers/${id}/contractor/approve`).set(...auth(north.token)).send({});
     const rej = await ctx.http().post(`/api/v1/transfers/${id}/contractor/reject`).set(...auth(south.token)).send({});
     expect(rej.body.status).toBe('REJECTED');
     expect(await currentSite()).toBe('SITE-A');
@@ -115,19 +118,28 @@ describe('Site transfer workflow (e2e)', () => {
     expect(res.status).toBe(403);
   });
 
-  it('concurrent approvals complete exactly once with a single active assignment', async () => {
+  it('duplicate approval attempts are rejected and approval sequence is strictly enforced', async () => {
     const create = await ctx.http().post('/api/v1/transfers/worker').set(...auth(worker.token)).send({ toSiteId: 'SITE-B' });
     const id = create.body.id;
 
-    // Fire both contractor approvals simultaneously.
+    // Fire duplicate destination approvals simultaneously
     const [r1, r2] = await Promise.all([
-      ctx.http().post(`/api/v1/transfers/${id}/contractor/approve`).set(...auth(north.token)).send({}),
+      ctx.http().post(`/api/v1/transfers/${id}/contractor/approve`).set(...auth(south.token)).send({}),
       ctx.http().post(`/api/v1/transfers/${id}/contractor/approve`).set(...auth(south.token)).send({}),
     ]);
-    expect([r1.status, r2.status].every((s) => s === 201)).toBe(true);
+    const statuses = [r1.status, r2.status].sort();
+    // One succeeds (201), the duplicate is rejected (403 or 409)
+    expect(statuses[0]).toBe(201);
+    expect([403, 409]).toContain(statuses[1]);
 
-    const finalReq = await ctx.prisma.siteTransferRequest.findUnique({ where: { id } });
-    expect(finalReq?.status).toBe('ACCEPTED');
+    // Current contractor releases
+    const rRelease = await ctx.http().post(`/api/v1/transfers/${id}/contractor/approve`).set(...auth(north.token)).send({});
+    expect(rRelease.status).toBe(201);
+    expect(rRelease.body.status).toBe('ACCEPTED');
+
+    // Duplicate release attempt is rejected (request is closed)
+    const rDupRelease = await ctx.http().post(`/api/v1/transfers/${id}/contractor/approve`).set(...auth(north.token)).send({});
+    expect(rDupRelease.status).toBe(409);
 
     const active = await ctx.prisma.workerSiteAssignment.findMany({ where: { workerId: await workerInternalId(), active: true } });
     expect(active.length).toBe(1);

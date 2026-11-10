@@ -173,4 +173,81 @@ export class ContractorController {
   ) {
     return this.contractor.requestWorkerAssignment(this.contractorIdOf(user), user.userId, body);
   }
+
+  // ---- Iteration 3: Transfer Management Endpoints -----------------------------
+
+  @Get('transfers')
+  @ApiOperation({ summary: 'List transfer requests relevant to the authenticated contractor' })
+  contractorTransfers(
+    @CurrentUser() user: RequestUser,
+    @Query('status') status?: string,
+    @Query('search') search?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    return this.contractor.getContractorTransfers(this.contractorIdOf(user), {
+      status,
+      search,
+      page,
+      pageSize,
+    });
+  }
+
+  @Get('transfers/:id')
+  @ApiOperation({ summary: 'Get details and complete timeline history for a specific transfer' })
+  contractorTransferDetail(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+  ) {
+    return this.contractor.getContractorTransferDetail(this.contractorIdOf(user), id);
+  }
+
+  @Post('transfers/:id/approve')
+  @ApiOperation({ summary: 'Approve destination transfer request' })
+  approveTransfer(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Body() body?: { reason?: string },
+  ) {
+    return this.contractor.approveContractorTransfer(this.contractorIdOf(user), id, body?.reason);
+  }
+
+  @Post('transfers/:id/reject')
+  @ApiOperation({ summary: 'Reject destination transfer request or release' })
+  rejectTransfer(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Body() body?: { reason?: string },
+  ) {
+    return this.contractor.rejectContractorTransfer(this.contractorIdOf(user), id, body?.reason);
+  }
+
+  @Post('transfers/:id/release')
+  @ApiOperation({ summary: 'Current contractor releases worker to destination site' })
+  releaseWorker(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Body() body?: { reason?: string },
+  ) {
+    return this.contractor.releaseContractorWorker(this.contractorIdOf(user), id, body?.reason);
+  }
+
+  @Post('transfers/:id/cancel')
+  @ApiOperation({ summary: 'Initiator cancels a pending transfer request' })
+  cancelTransfer(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Body() body?: { reason?: string },
+  ) {
+    return this.contractor.cancelContractorTransfer(this.contractorIdOf(user), id, body?.reason);
+  }
+
+  @Post('transfers/initiate')
+  @ApiOperation({ summary: 'Contractor initiates a transfer by Worker ID into one of their sites' })
+  initiateTransfer(
+    @CurrentUser() user: RequestUser,
+    @Body() body: { workerId: string; toSiteId: string; note?: string },
+  ) {
+    return this.contractor.initiateContractorTransfer(this.contractorIdOf(user), body);
+  }
 }

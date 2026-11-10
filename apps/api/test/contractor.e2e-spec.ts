@@ -2,6 +2,8 @@ import { createTestApp, type TestContext } from './setup/test-app';
 import {
   auth,
   createArea,
+  createContractor,
+  createSite,
   createStaff,
   registerWorker,
 } from './setup/fixtures';
@@ -1033,5 +1035,232 @@ describe('Contractor Mobile Module APIs (e2e)', () => {
       .get('/api/v1/contractor/sites/SITE-IT2-B/detail')
       .set(...auth(cA.token));
     expect(crossSite.status).toBe(403);
+  });
+
+  it('Contractor Iteration 3: Complete Transfer Management (Worker & Contractor workflows, timeline, RBAC, strict privacy)', async () => {
+    const areaId = await createArea(ctx, 'South Goa');
+    const cNorth = await createContractor(ctx, { name: 'North Builders Pvt Ltd', username: 'c.north.it3' });
+    const cSouth = await createContractor(ctx, { name: 'South Infra Projects', username: 'c.south.it3' });
+    const cOther = await createContractor(ctx, { name: 'Unrelated Contractor', username: 'c.other.it3' });
+
+    const siteNorth = await createSite(ctx, { siteCode: 'SITE-T3-N', name: 'North Vista', areaId, contractorId: cNorth.contractorId });
+    const siteSouth = await createSite(ctx, { siteCode: 'SITE-T3-S', name: 'South Marina', areaId, contractorId: cSouth.contractorId });
+
+    // Worker 1: Assigned to North
+    const w1 = await registerWorker(ctx, { name: 'Manoj Tiwari', phone: '9819003001', pin: '1111' });
+    await ctx.http().post('/api/v1/workers/me/site').set(...auth(w1.token)).send({ siteId: 'SITE-T3-N' });
+
+    // Worker 2: Assigned to North
+    const w2 = await registerWorker(ctx, { name: 'Sanjay Kumar', phone: '9819003002', pin: '2222' });
+    await ctx.http().post('/api/v1/workers/me/site').set(...auth(w2.token)).send({ siteId: 'SITE-T3-N' });
+
+    // =========================================================================
+    // 1. WORKER-INITIATED TRANSFER WORKFLOW
+    // Sequence: Worker requests -> Dest approves -> Current releases -> Complete
+    // =========================================================================
+    const w1Req = await ctx.http()
+      .post('/api/v1/transfers/worker')
+      .set(...auth(w1.token))
+      .send({ toSiteId: 'SITE-T3-S', note: 'Relocating to South Goa' });
+    expect(w1Req.status).toBe(201);
+    expect(w1Req.body.status).toBe('PENDING_DESTINATION_CONTRACTOR');
+    const t1Id = w1Req.body.id;
+
+    // Check Destination Contractor (South Infra) transfer list
+    const southTransfers1 = await ctx.http()
+      .get('/api/v1/contractor/transfers?status=PENDING_APPROVAL')
+      .set(...auth(cSouth.token));
+    expect(southTransfers1.status).toBe(200);
+    const t1South = southTransfers1.body.items.find((x: any) => x.id === t1Id);
+    expect(t1South).toBeDefined();
+    expect(t1South.workerName).toBe('Manoj Tiwari');
+    expect(t1South.status).toBe('PENDING_DESTINATION_CONTRACTOR');
+    expect(t1South.canApproveDestination).toBe(true);
+    expect(t1South.canReleaseWorker).toBe(false);
+    expect(t1South.requiredNextAction).toBe('Awaiting your destination approval');
+    expect(t1South.worker.malariaStatus).toBeNull(); // Strict privacy
+
+    // Check Current Contractor (North Builders) transfer list
+    const northTransfers1 = await ctx.http()
+      .get('/api/v1/contractor/transfers')
+      .set(...auth(cNorth.token));
+    expect(northTransfers1.status).toBe(200);
+    const t1North = northTransfers1.body.items.find((x: any) => x.id === t1Id);
+    expect(t1North).toBeDefined();
+    expect(t1North.status).toBe('PENDING_DESTINATION_CONTRACTOR');
+    expect(t1North.canApproveDestination).toBe(false);
+    expect(t1North.canReleaseWorker).toBe(false);
+    expect(t1North.requiredNextAction).toBe('Awaiting destination contractor approval');
+
+    // Rule: Current contractor CANNOT release before destination approval
+    const prematureRelease = await ctx.http()
+      .post(`/api/v1/contractor/transfers/${t1Id}/release`)
+      .set(...auth(cNorth.token))
+      .send({ reason: 'Releasing early' });
+    expect(prematureRelease.status).toBe(403);
+
+    // Step 2: Destination contractor (South) approves
+    const destApprove = await ctx.http()
+      .post(`/api/v1/contractor/transfers/${t1Id}/approve`)
+      .set(...auth(cSouth.token))
+      .send({ reason: 'Welcome to South Marina' });
+    expect(destApprove.status).toBe(201);
+    expect(destApprove.body.status).toBe('PENDING_CURRENT_CONTRACTOR');
+
+    // Step 3: Current contractor (North) now receives release request
+    const northTransfers2 = await ctx.http()
+      .get('/api/v1/contractor/transfers?status=PENDING_CURRENT_RELEASE')
+      .set(...auth(cNorth.token));
+    expect(northTransfers2.status).toBe(200);
+    const t1NorthRelease = northTransfers2.body.items.find((x: any) => x.id === t1Id);
+    expect(t1NorthRelease).toBeDefined();
+    expect(t1NorthRelease.canReleaseWorker).toBe(true);
+    expect(t1NorthRelease.requiredNextAction).toBe('Awaiting your release approval');
+
+    // Duplicate destination approval is rejected
+    const dupDestApprove = await ctx.http()
+      .post(`/api/v1/contractor/transfers/${t1Id}/approve`)
+      .set(...auth(cSouth.token))
+      .send({});
+    expect(dupDestApprove.status).toBe(403);
+
+    // Step 4: Current contractor (North) releases the worker
+    const currentRelease = await ctx.http()
+      .post(`/api/v1/contractor/transfers/${t1Id}/release`)
+      .set(...auth(cNorth.token))
+      .send({ reason: 'Worker released smoothly' });
+    expect(currentRelease.status).toBe(201);
+    expect(currentRelease.body.status).toBe('ACCEPTED');
+
+    // Verify transfer completion & worker site move
+    const w1Me = await ctx.http().get('/api/v1/workers/me').set(...auth(w1.token));
+    expect(w1Me.body.currentSite.siteId).toBe('SITE-T3-S');
+
+    // Duplicate release attempt on completed request is rejected (409 Conflict)
+    const dupRelease = await ctx.http()
+      .post(`/api/v1/contractor/transfers/${t1Id}/release`)
+      .set(...auth(cNorth.token))
+      .send({});
+    expect(dupRelease.status).toBe(409);
+
+    // Check detail & timeline for completed transfer
+    const t1Detail = await ctx.http()
+      .get(`/api/v1/contractor/transfers/${t1Id}`)
+      .set(...auth(cSouth.token));
+    expect(t1Detail.status).toBe(200);
+    expect(t1Detail.body.status).toBe('ACCEPTED');
+    expect(t1Detail.body.timeline.length).toBeGreaterThanOrEqual(4);
+    expect(t1Detail.body.timeline.map((x: any) => x.step)).toEqual(
+      expect.arrayContaining(['INITIATED', 'DESTINATION_APPROVAL', 'CURRENT_RELEASE', 'COMPLETED']),
+    );
+    expect(t1Detail.body.worker.malariaStatus).toBeNull();
+
+    // =========================================================================
+    // 2. CONTRACTOR-INITIATED TRANSFER WORKFLOW
+    // Sequence: Contractor initiates -> Worker accepts -> Current releases -> Complete
+    // Destination approval is NOT required.
+    // =========================================================================
+    const cInitiate = await ctx.http()
+      .post('/api/v1/contractor/transfers/initiate')
+      .set(...auth(cSouth.token))
+      .send({
+        workerId: w2.workerId,
+        toSiteId: 'SITE-T3-S',
+        note: 'Pulling worker for masonry work',
+      });
+    expect(cInitiate.status).toBe(201);
+    expect(cInitiate.body.status).toBe('PENDING_WORKER_RESPONSE');
+    const t2Id = cInitiate.body.id;
+
+    // Check status in contractor transfer list
+    const southTransfersInit = await ctx.http()
+      .get('/api/v1/contractor/transfers?status=PENDING_WORKER_RESPONSE')
+      .set(...auth(cSouth.token));
+    expect(southTransfersInit.status).toBe(200);
+    const t2South = southTransfersInit.body.items.find((x: any) => x.id === t2Id);
+    expect(t2South).toBeDefined();
+    expect(t2South.requiredNextAction).toBe('Awaiting worker response');
+
+    // Current contractor cannot release before worker acceptance
+    const prematureReleaseContractor = await ctx.http()
+      .post(`/api/v1/contractor/transfers/${t2Id}/release`)
+      .set(...auth(cNorth.token))
+      .send({});
+    expect(prematureReleaseContractor.status).toBe(403);
+
+    // Worker accepts transfer in worker application
+    const workerAccept = await ctx.http()
+      .post(`/api/v1/transfers/${t2Id}/worker/accept`)
+      .set(...auth(w2.token))
+      .send({});
+    expect(workerAccept.status).toBe(201);
+    expect(workerAccept.body.status).toBe('PENDING_CURRENT_CONTRACTOR');
+
+    // Current contractor releases worker
+    const currentRelease2 = await ctx.http()
+      .post(`/api/v1/contractor/transfers/${t2Id}/release`)
+      .set(...auth(cNorth.token))
+      .send({ reason: 'All dues cleared, worker released' });
+    expect(currentRelease2.status).toBe(201);
+    expect(currentRelease2.body.status).toBe('ACCEPTED');
+
+    // Verify worker 2 site updated
+    const w2Me = await ctx.http().get('/api/v1/workers/me').set(...auth(w2.token));
+    expect(w2Me.body.currentSite.siteId).toBe('SITE-T3-S');
+
+    // =========================================================================
+    // 3. REJECTION, CANCELLATION, RBAC, AND ISOLATION CHECKS
+    // =========================================================================
+    // Worker 3: Rejection test
+    const w3 = await registerWorker(ctx, { name: 'Kavita Devi', phone: '9819003003', pin: '3333' });
+    await ctx.http().post('/api/v1/workers/me/site').set(...auth(w3.token)).send({ siteId: 'SITE-T3-N' });
+
+    const w3Req = await ctx.http()
+      .post('/api/v1/transfers/worker')
+      .set(...auth(w3.token))
+      .send({ toSiteId: 'SITE-T3-S' });
+    const t3Id = w3Req.body.id;
+
+    // Destination contractor rejects
+    const rejectRes = await ctx.http()
+      .post(`/api/v1/contractor/transfers/${t3Id}/reject`)
+      .set(...auth(cSouth.token))
+      .send({ reason: 'Site at full capacity' });
+    expect(rejectRes.status).toBe(201);
+    expect(rejectRes.body.status).toBe('REJECTED');
+
+    // Worker 3 site remains at North
+    const w3Me = await ctx.http().get('/api/v1/workers/me').set(...auth(w3.token));
+    expect(w3Me.body.currentSite.siteId).toBe('SITE-T3-N');
+
+    // Cancellation test: Contractor initiates then cancels
+    const w4 = await registerWorker(ctx, { name: 'Rahul Bose', phone: '9819003004', pin: '4444' });
+    await ctx.http().post('/api/v1/workers/me/site').set(...auth(w4.token)).send({ siteId: 'SITE-T3-N' });
+
+    const cInit4 = await ctx.http()
+      .post('/api/v1/contractor/transfers/initiate')
+      .set(...auth(cSouth.token))
+      .send({ workerId: w4.workerId, toSiteId: 'SITE-T3-S' });
+    const t4Id = cInit4.body.id;
+
+    // Unrelated contractor C cannot view or cancel
+    const crossView = await ctx.http()
+      .get(`/api/v1/contractor/transfers/${t4Id}`)
+      .set(...auth(cOther.token));
+    expect(crossView.status).toBe(403);
+
+    const crossCancel = await ctx.http()
+      .post(`/api/v1/contractor/transfers/${t4Id}/cancel`)
+      .set(...auth(cOther.token))
+      .send({ reason: 'Malicious cancel' });
+    expect(crossCancel.status).toBe(403);
+
+    // Initiator cancels
+    const cancelRes = await ctx.http()
+      .post(`/api/v1/contractor/transfers/${t4Id}/cancel`)
+      .set(...auth(cSouth.token))
+      .send({ reason: 'Requirement changed' });
+    expect(cancelRes.status).toBe(201);
+    expect(cancelRes.body.status).toBe('CANCELLED');
   });
 });

@@ -6,12 +6,22 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import * as crypto from 'crypto';
-import { computeTransferStatus, type Decision, TRANSFER_TERMINAL_STATUSES } from '@m3/shared';
+import {
+  canActorDecide,
+  computeTransferStatus,
+  isTerminal,
+  type Decision,
+  type TransferInitiator,
+  type TransferStatus,
+  TRANSFER_TERMINAL_STATUSES,
+} from '@m3/shared';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AdminService } from '../admin/admin.service';
 import { NotificationService } from '../common/notification.service';
 import { AuditService } from '../common/audit.service';
 import { paginated, parsePage } from '../common/pagination';
+import { TransfersService } from '../transfers/transfers.service';
 
 function extractDemographics(screening: { answers?: any } | null | undefined): { age: number | null; gender: string | null } {
   if (!screening || !screening.answers || typeof screening.answers !== 'object') {
@@ -30,6 +40,7 @@ export class ContractorService {
     private readonly admin: AdminService,
     private readonly notify: NotificationService,
     private readonly audit: AuditService,
+    private readonly transfersService: TransfersService,
   ) {}
 
   /** Verifies that the contractor is assigned to the requested site code (primary or multi-contractor). */
@@ -1378,5 +1389,525 @@ export class ContractorService {
       travels: travelsRes.items,
       transfers: transfersRes.items,
     };
+  }
+
+  /**
+   * List transfer requests relevant to the authenticated contractor.
+   * Filters:
+   * - status: 'ALL' | 'PENDING_APPROVAL' | 'PENDING_WORKER_RESPONSE' | 'PENDING_CURRENT_RELEASE' | 'APPROVED' | 'REJECTED' | 'CANCELLED' | 'COMPLETED' | 'ACTIONABLE'
+   * - search: worker name, workerCode, siteCode, site name
+   */
+  async getContractorTransfers(
+    contractorId: string,
+    query: { status?: string; search?: string; page?: string; pageSize?: string },
+  ) {
+    const params = parsePage(query.page, query.pageSize);
+    const sites = await this.getContractorSites(contractorId);
+    const siteIds = sites.map((s) => s.id);
+
+    // Contractor scope: requests where contractor is from/to contractor or manages from/to site
+    const contractorWhere: Prisma.SiteTransferRequestWhereInput = {
+      OR: [
+        { fromContractorId: contractorId },
+        { toContractorId: contractorId },
+        { fromSiteId: { in: siteIds } },
+        { toSiteId: { in: siteIds } },
+      ],
+    };
+
+    let statusWhere: Prisma.SiteTransferRequestWhereInput = {};
+    const st = query.status?.toUpperCase() || 'ALL';
+    if (st === 'PENDING_APPROVAL') {
+      statusWhere = { status: 'PENDING_DESTINATION_CONTRACTOR' };
+    } else if (st === 'PENDING_WORKER_RESPONSE') {
+      statusWhere = { status: 'PENDING_WORKER_RESPONSE' };
+    } else if (st === 'PENDING_CURRENT_RELEASE') {
+      statusWhere = { status: 'PENDING_CURRENT_CONTRACTOR' };
+    } else if (st === 'APPROVED' || st === 'COMPLETED') {
+      statusWhere = { status: 'ACCEPTED' };
+    } else if (st === 'REJECTED') {
+      statusWhere = { status: 'REJECTED' };
+    } else if (st === 'CANCELLED') {
+      statusWhere = { status: 'CANCELLED' };
+    } else if (st !== 'ALL' && st !== 'ACTIONABLE') {
+      statusWhere = { status: st as any };
+    }
+
+    let searchWhere: Prisma.SiteTransferRequestWhereInput = {};
+    if (query.search?.trim()) {
+      const q = query.search.trim();
+      searchWhere = {
+        OR: [
+          { worker: { name: { contains: q, mode: 'insensitive' } } },
+          { worker: { workerCode: { contains: q, mode: 'insensitive' } } },
+          { fromSite: { name: { contains: q, mode: 'insensitive' } } },
+          { fromSite: { siteCode: { contains: q, mode: 'insensitive' } } },
+          { toSite: { name: { contains: q, mode: 'insensitive' } } },
+          { toSite: { siteCode: { contains: q, mode: 'insensitive' } } },
+        ],
+      };
+    }
+
+    const where: Prisma.SiteTransferRequestWhereInput = {
+      AND: [contractorWhere, statusWhere, searchWhere].filter((w) => Object.keys(w).length > 0),
+    };
+
+    const rows = await this.prisma.siteTransferRequest.findMany({
+      where,
+      include: {
+        worker: {
+          select: {
+            id: true,
+            workerCode: true,
+            name: true,
+            phone: true,
+            screening: {
+              select: { answers: true },
+            },
+          },
+        },
+        fromSite: { select: { id: true, siteCode: true, name: true, contractorId: true } },
+        toSite: { select: { id: true, siteCode: true, name: true, contractorId: true } },
+        fromContractor: { select: { id: true, name: true } },
+        toContractor: { select: { id: true, name: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const mapped = rows.map((t) => {
+      const isFrom =
+        t.fromContractorId === contractorId ||
+        (t.fromSiteId && siteIds.includes(t.fromSiteId)) ||
+        t.fromSite?.contractorId === contractorId;
+      const isTo =
+        t.toContractorId === contractorId ||
+        siteIds.includes(t.toSiteId) ||
+        t.toSite.contractorId === contractorId;
+
+      const decisions = {
+        worker: t.workerDecision as Decision,
+        fromContractor: t.fromContractorDecision as Decision,
+        toContractor: t.toContractorDecision as Decision,
+      };
+      const initiator = t.initiatorType as TransferInitiator;
+
+      const canApproveDestination = isTo && canActorDecide(initiator, decisions, 'toContractor');
+      const canReleaseWorker = isFrom && canActorDecide(initiator, decisions, 'fromContractor');
+      const canCancel = t.initiatorId === contractorId && !isTerminal(t.status);
+
+      let requiredNextAction = 'None';
+      if (t.status === 'PENDING_DESTINATION_CONTRACTOR') {
+        requiredNextAction = isTo
+          ? 'Awaiting your destination approval'
+          : 'Awaiting destination contractor approval';
+      } else if (t.status === 'PENDING_WORKER_RESPONSE') {
+        requiredNextAction = 'Awaiting worker response';
+      } else if (t.status === 'PENDING_CURRENT_CONTRACTOR') {
+        requiredNextAction = isFrom
+          ? 'Awaiting your release approval'
+          : 'Awaiting current contractor release';
+      } else if (t.status === 'ACCEPTED') {
+        requiredNextAction = 'Transfer completed';
+      } else if (t.status === 'REJECTED') {
+        requiredNextAction = 'Transfer rejected';
+      } else if (t.status === 'CANCELLED') {
+        requiredNextAction = 'Transfer cancelled';
+      }
+
+      const isActionableByMe = canApproveDestination || canReleaseWorker;
+      const demographics = extractDemographics(t.worker.screening);
+
+      return {
+        id: t.id,
+        transferId: t.id,
+        worker: {
+          id: t.worker.id,
+          workerCode: t.worker.workerCode,
+          name: t.worker.name,
+          phone: t.worker.phone,
+          age: demographics.age,
+          gender: demographics.gender,
+          malariaStatus: null, // Strictly masked
+        },
+        workerId: t.worker.workerCode,
+        workerName: t.worker.name,
+        fromSite: t.fromSite
+          ? { id: t.fromSite.id, siteCode: t.fromSite.siteCode, name: t.fromSite.name }
+          : null,
+        toSite: { id: t.toSite.id, siteCode: t.toSite.siteCode, name: t.toSite.name },
+        currentSite: t.fromSite ? { siteId: t.fromSite.siteCode, name: t.fromSite.name } : null,
+        destinationSite: { siteId: t.toSite.siteCode, name: t.toSite.name },
+        fromContractor: t.fromContractor ? { id: t.fromContractor.id, name: t.fromContractor.name } : null,
+        toContractor: t.toContractor ? { id: t.toContractor.id, name: t.toContractor.name } : null,
+        initiator: t.initiatorType,
+        initiatorType: t.initiatorType,
+        status: t.status,
+        workerDecision: t.workerDecision,
+        workerDecisionAt: t.workerDecisionAt ? t.workerDecisionAt.toISOString() : null,
+        toContractorDecision: t.toContractorDecision,
+        toContractorDecisionAt: t.toContractorDecisionAt ? t.toContractorDecisionAt.toISOString() : null,
+        fromContractorDecision: t.fromContractorDecision,
+        fromContractorDecisionAt: t.fromContractorDecisionAt
+          ? t.fromContractorDecisionAt.toISOString()
+          : null,
+        note: t.note,
+        createdAt: t.createdAt.toISOString(),
+        effectiveAt: t.effectiveAt ? t.effectiveAt.toISOString() : null,
+        cancelledAt: t.cancelledAt ? t.cancelledAt.toISOString() : null,
+        myRole:
+          isFrom && isTo
+            ? ('BOTH' as const)
+            : isFrom
+              ? ('CURRENT_CONTRACTOR' as const)
+              : ('DESTINATION_CONTRACTOR' as const),
+        isDestinationContractor: isTo,
+        isCurrentContractor: isFrom,
+        canApproveDestination,
+        canReleaseWorker,
+        canCancel,
+        isActionableByMe,
+        requiredNextAction,
+      };
+    });
+
+    const filtered = st === 'ACTIONABLE' ? mapped.filter((x) => x.isActionableByMe) : mapped;
+    const total = filtered.length;
+    const items = filtered.slice(params.skip, params.skip + params.take);
+    return paginated(items, total, params);
+  }
+
+  /**
+   * View details of a specific transfer request.
+   * Enforces that the authenticated contractor is either fromContractor, toContractor,
+   * or manages the fromSite or toSite.
+   */
+  async getContractorTransferDetail(contractorId: string, transferId: string) {
+    const sites = await this.getContractorSites(contractorId);
+    const siteIds = sites.map((s) => s.id);
+
+    const t = await this.prisma.siteTransferRequest.findUnique({
+      where: { id: transferId },
+      include: {
+        worker: {
+          select: {
+            id: true,
+            workerCode: true,
+            name: true,
+            phone: true,
+            screening: {
+              select: { answers: true },
+            },
+          },
+        },
+        fromSite: {
+          select: {
+            id: true,
+            siteCode: true,
+            name: true,
+            area: { select: { name: true } },
+            contractorId: true,
+          },
+        },
+        toSite: {
+          select: {
+            id: true,
+            siteCode: true,
+            name: true,
+            area: { select: { name: true } },
+            contractorId: true,
+          },
+        },
+        fromContractor: { select: { id: true, name: true } },
+        toContractor: { select: { id: true, name: true } },
+      },
+    });
+
+    if (!t) throw new NotFoundException('Transfer request not found');
+
+    const isFrom =
+      t.fromContractorId === contractorId ||
+      (t.fromSiteId && siteIds.includes(t.fromSiteId)) ||
+      t.fromSite?.contractorId === contractorId;
+    const isTo =
+      t.toContractorId === contractorId ||
+      siteIds.includes(t.toSiteId) ||
+      t.toSite.contractorId === contractorId;
+
+    if (!isFrom && !isTo) {
+      throw new ForbiddenException('You are not authorized to view this transfer request');
+    }
+
+    // Fetch audit trail for timeline
+    const auditLogs = await this.prisma.auditLog.findMany({
+      where: { entityType: 'SiteTransferRequest', entityId: transferId },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    const decisions = {
+      worker: t.workerDecision as Decision,
+      fromContractor: t.fromContractorDecision as Decision,
+      toContractor: t.toContractorDecision as Decision,
+    };
+    const initiator = t.initiatorType as TransferInitiator;
+
+    const canApproveDestination = isTo && canActorDecide(initiator, decisions, 'toContractor');
+    const canReleaseWorker = isFrom && canActorDecide(initiator, decisions, 'fromContractor');
+    const canCancel = t.initiatorId === contractorId && !isTerminal(t.status);
+
+    let requiredNextAction = 'None';
+    if (t.status === 'PENDING_DESTINATION_CONTRACTOR') {
+      requiredNextAction = isTo
+        ? 'Awaiting your destination approval'
+        : 'Awaiting destination contractor approval';
+    } else if (t.status === 'PENDING_WORKER_RESPONSE') {
+      requiredNextAction = 'Awaiting worker response';
+    } else if (t.status === 'PENDING_CURRENT_CONTRACTOR') {
+      requiredNextAction = isFrom
+        ? 'Awaiting your release approval'
+        : 'Awaiting current contractor release';
+    } else if (t.status === 'ACCEPTED') {
+      requiredNextAction = 'Transfer completed';
+    } else if (t.status === 'REJECTED') {
+      requiredNextAction = 'Transfer rejected';
+    } else if (t.status === 'CANCELLED') {
+      requiredNextAction = 'Transfer cancelled';
+    }
+
+    // Timeline construction
+    const timeline: Array<{
+      id: string;
+      step: string;
+      status: string;
+      title: string;
+      description: string;
+      timestamp: string;
+    }> = [];
+
+    // Step 1: Initiated
+    timeline.push({
+      id: `step-init-${t.id}`,
+      step: 'INITIATED',
+      status: 'DONE',
+      title:
+        t.initiatorType === 'WORKER'
+          ? 'Transfer requested by worker'
+          : 'Transfer initiated by contractor',
+      description: t.note ? `Note: ${t.note}` : 'Transfer request submitted.',
+      timestamp: t.createdAt.toISOString(),
+    });
+
+    // Step 2: Destination Contractor Approval (if worker-initiated)
+    if (t.initiatorType === 'WORKER') {
+      if (t.toContractorDecision === 'APPROVED') {
+        timeline.push({
+          id: `step-dest-${t.id}`,
+          step: 'DESTINATION_APPROVAL',
+          status: 'DONE',
+          title: 'Destination contractor approved request',
+          description: `Approved by destination contractor (${t.toContractor?.name ?? 'Destination Site'}).`,
+          timestamp: t.toContractorDecisionAt?.toISOString() ?? t.updatedAt.toISOString(),
+        });
+      } else if (t.toContractorDecision === 'REJECTED') {
+        timeline.push({
+          id: `step-dest-${t.id}`,
+          step: 'DESTINATION_APPROVAL',
+          status: 'REJECTED',
+          title: 'Destination contractor rejected request',
+          description: 'Request was declined by destination contractor.',
+          timestamp: t.toContractorDecisionAt?.toISOString() ?? t.updatedAt.toISOString(),
+        });
+      } else {
+        timeline.push({
+          id: `step-dest-${t.id}`,
+          step: 'DESTINATION_APPROVAL',
+          status: 'PENDING',
+          title: 'Destination contractor review pending',
+          description: isTo
+            ? 'Action required: Review and approve or reject this destination request.'
+            : 'Waiting for destination contractor review.',
+          timestamp: t.createdAt.toISOString(),
+        });
+      }
+    } else {
+      // Contractor-initiated: Worker response first
+      if (t.workerDecision === 'APPROVED') {
+        timeline.push({
+          id: `step-worker-${t.id}`,
+          step: 'WORKER_RESPONSE',
+          status: 'DONE',
+          title: 'Worker accepted transfer',
+          description: `${t.worker.name} accepted the transfer request in the Worker application.`,
+          timestamp: t.workerDecisionAt?.toISOString() ?? t.updatedAt.toISOString(),
+        });
+      } else if (t.workerDecision === 'REJECTED') {
+        timeline.push({
+          id: `step-worker-${t.id}`,
+          step: 'WORKER_RESPONSE',
+          status: 'REJECTED',
+          title: 'Worker rejected transfer',
+          description: `${t.worker.name} declined the transfer request.`,
+          timestamp: t.workerDecisionAt?.toISOString() ?? t.updatedAt.toISOString(),
+        });
+      } else {
+        timeline.push({
+          id: `step-worker-${t.id}`,
+          step: 'WORKER_RESPONSE',
+          status: 'PENDING',
+          title: 'Worker response pending',
+          description: `Waiting for ${t.worker.name} to accept or decline the transfer in the Worker application.`,
+          timestamp: t.createdAt.toISOString(),
+        });
+      }
+    }
+
+    // Step 3: Current Contractor Release
+    if (t.fromContractorDecision === 'APPROVED') {
+      timeline.push({
+        id: `step-release-${t.id}`,
+        step: 'CURRENT_RELEASE',
+        status: 'DONE',
+        title: 'Current contractor released worker',
+        description: `Released by current contractor (${t.fromContractor?.name ?? 'Current Site'}).`,
+        timestamp: t.fromContractorDecisionAt?.toISOString() ?? t.updatedAt.toISOString(),
+      });
+    } else if (t.fromContractorDecision === 'REJECTED') {
+      timeline.push({
+        id: `step-release-${t.id}`,
+        step: 'CURRENT_RELEASE',
+        status: 'REJECTED',
+        title: 'Current contractor declined release',
+        description: 'Release was declined by the current contractor.',
+        timestamp: t.fromContractorDecisionAt?.toISOString() ?? t.updatedAt.toISOString(),
+      });
+    } else if (t.status === 'PENDING_CURRENT_CONTRACTOR') {
+      timeline.push({
+        id: `step-release-${t.id}`,
+        step: 'CURRENT_RELEASE',
+        status: 'PENDING',
+        title: 'Current contractor release pending',
+        description: isFrom
+          ? 'Action required: Release the worker to finalize site transfer.'
+          : 'Waiting for current contractor to release worker.',
+        timestamp:
+          (t.initiatorType === 'WORKER' ? t.toContractorDecisionAt : t.workerDecisionAt)?.toISOString() ??
+          t.createdAt.toISOString(),
+      });
+    }
+
+    // Step 4: Completion or Cancellation
+    if (t.status === 'ACCEPTED') {
+      timeline.push({
+        id: `step-complete-${t.id}`,
+        step: 'COMPLETED',
+        status: 'DONE',
+        title: 'Transfer completed',
+        description: `Worker successfully transferred to ${t.toSite.name}. Site assignment active.`,
+        timestamp: t.effectiveAt?.toISOString() ?? t.updatedAt.toISOString(),
+      });
+    } else if (t.status === 'CANCELLED') {
+      timeline.push({
+        id: `step-cancel-${t.id}`,
+        step: 'CANCELLED',
+        status: 'CANCELLED',
+        title: 'Transfer cancelled',
+        description: 'The transfer request was cancelled by the initiator.',
+        timestamp: t.cancelledAt?.toISOString() ?? t.updatedAt.toISOString(),
+      });
+    }
+
+    const demographics = extractDemographics(t.worker.screening);
+
+    return {
+      id: t.id,
+      transferId: t.id,
+      worker: {
+        id: t.worker.id,
+        workerCode: t.worker.workerCode,
+        name: t.worker.name,
+        phone: t.worker.phone,
+        age: demographics.age,
+        gender: demographics.gender,
+        malariaStatus: null, // Strictly masked
+      },
+      workerId: t.worker.workerCode,
+      workerName: t.worker.name,
+      fromSite: t.fromSite
+        ? {
+            id: t.fromSite.id,
+            siteCode: t.fromSite.siteCode,
+            name: t.fromSite.name,
+            area: t.fromSite.area.name,
+          }
+        : null,
+      toSite: {
+        id: t.toSite.id,
+        siteCode: t.toSite.siteCode,
+        name: t.toSite.name,
+        area: t.toSite.area.name,
+      },
+      currentSite: t.fromSite ? { siteId: t.fromSite.siteCode, name: t.fromSite.name } : null,
+      destinationSite: { siteId: t.toSite.siteCode, name: t.toSite.name },
+      fromContractor: t.fromContractor ? { id: t.fromContractor.id, name: t.fromContractor.name } : null,
+      toContractor: t.toContractor ? { id: t.toContractor.id, name: t.toContractor.name } : null,
+      initiator: t.initiatorType,
+      initiatorType: t.initiatorType,
+      status: t.status,
+      workerDecision: t.workerDecision,
+      workerDecisionAt: t.workerDecisionAt ? t.workerDecisionAt.toISOString() : null,
+      toContractorDecision: t.toContractorDecision,
+      toContractorDecisionAt: t.toContractorDecisionAt ? t.toContractorDecisionAt.toISOString() : null,
+      fromContractorDecision: t.fromContractorDecision,
+      fromContractorDecisionAt: t.fromContractorDecisionAt
+        ? t.fromContractorDecisionAt.toISOString()
+        : null,
+      note: t.note,
+      createdAt: t.createdAt.toISOString(),
+      effectiveAt: t.effectiveAt ? t.effectiveAt.toISOString() : null,
+      cancelledAt: t.cancelledAt ? t.cancelledAt.toISOString() : null,
+      myRole:
+        isFrom && isTo
+          ? ('BOTH' as const)
+          : isFrom
+            ? ('CURRENT_CONTRACTOR' as const)
+            : ('DESTINATION_CONTRACTOR' as const),
+      isDestinationContractor: isTo,
+      isCurrentContractor: isFrom,
+      canApproveDestination,
+      canReleaseWorker,
+      canCancel,
+      isActionableByMe: canApproveDestination || canReleaseWorker,
+      requiredNextAction,
+      timeline,
+      auditLogs: auditLogs.map((log) => ({
+        id: log.id,
+        action: log.action,
+        actorId: log.actorId,
+        metadata: log.metadata,
+        createdAt: log.createdAt.toISOString(),
+      })),
+    };
+  }
+
+  approveContractorTransfer(contractorId: string, transferId: string, reason?: string) {
+    return this.transfersService.contractorDecision(contractorId, transferId, true, reason);
+  }
+
+  rejectContractorTransfer(contractorId: string, transferId: string, reason?: string) {
+    return this.transfersService.contractorDecision(contractorId, transferId, false, reason);
+  }
+
+  releaseContractorWorker(contractorId: string, transferId: string, reason?: string) {
+    return this.transfersService.contractorDecision(contractorId, transferId, true, reason);
+  }
+
+  cancelContractorTransfer(contractorId: string, transferId: string, reason?: string) {
+    return this.transfersService.cancel(contractorId, transferId, reason);
+  }
+
+  initiateContractorTransfer(
+    contractorId: string,
+    input: { workerId: string; toSiteId: string; note?: string },
+  ) {
+    return this.transfersService.createContractorTransfer(contractorId, input);
   }
 }
