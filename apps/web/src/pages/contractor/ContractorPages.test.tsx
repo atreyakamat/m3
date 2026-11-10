@@ -286,6 +286,14 @@ describe('Contractor Application — Iteration 1 & 2', () => {
     const activeBadges = screen.getAllByText('Active');
     expect(activeBadges.length).toBeGreaterThanOrEqual(2);
 
+    // Verify column headers
+    expect(screen.getByText('Worker Name')).toBeInTheDocument();
+    expect(screen.getByText('Worker ID')).toBeInTheDocument();
+    expect(screen.getByText('Age')).toBeInTheDocument();
+    expect(screen.getByText('Gender')).toBeInTheDocument();
+    expect(screen.getByText('Current Assigned Site')).toBeInTheDocument();
+    expect(screen.getByText('Assignment Status')).toBeInTheDocument();
+
     // Verify filter elements exist
     expect(screen.getByPlaceholderText(/Search by worker name/i)).toBeInTheDocument();
     expect(screen.getByText('All Construction Sites')).toBeInTheDocument();
@@ -355,7 +363,7 @@ describe('Contractor Application — Iteration 1 & 2', () => {
 
     await waitFor(() => {
       expect(screen.getAllByText('Miramar Heights').length).toBeGreaterThanOrEqual(1);
-      expect(screen.getByText('SITE-TEST01')).toBeInTheDocument();
+      expect(screen.getAllByText('SITE-TEST01').length).toBeGreaterThanOrEqual(1);
       expect(screen.getByText('Tested Negative')).toBeInTheDocument();
       expect(screen.getByText('Positive Cases')).toBeInTheDocument();
       expect(screen.getByText('Ramesh Kumar')).toBeInTheDocument();

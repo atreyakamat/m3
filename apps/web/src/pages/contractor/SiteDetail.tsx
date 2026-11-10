@@ -12,7 +12,11 @@ interface SiteDetailData {
     siteCode: string;
     name: string;
     area: string;
+    address?: string | null;
+    landmark?: string | null;
+    contactPhone?: string | null;
     active: boolean;
+    createdAt?: string | null;
   };
   stats: {
     siteCode: string;
@@ -162,6 +166,31 @@ export function ContractorSiteDetail() {
           <div className="muted small" style={{ marginTop: 4 }}>{stats.awaitingResults} awaiting results</div>
         </Card>
       </div>
+
+      {/* Site Assignment & Master Details */}
+      <Card>
+        <h3 style={{ margin: '0 0 16px', fontSize: 18, color: palette.text }}>Site Assignment & Master Details</h3>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16 }}>
+          <div style={{ padding: '12px 16px', background: '#F8FAFC', borderRadius: 8, border: '1px solid #E2E8F0' }}>
+            <div className="muted small">Operational Area</div>
+            <div style={{ fontWeight: 600, color: palette.text, marginTop: 4 }}>{site.area}</div>
+          </div>
+          <div style={{ padding: '12px 16px', background: '#F8FAFC', borderRadius: 8, border: '1px solid #E2E8F0' }}>
+            <div className="muted small">Site Code</div>
+            <div style={{ fontFamily: 'monospace', fontWeight: 600, color: palette.text, marginTop: 4 }}>{site.siteCode}</div>
+          </div>
+          <div style={{ padding: '12px 16px', background: '#F8FAFC', borderRadius: 8, border: '1px solid #E2E8F0' }}>
+            <div className="muted small">Site Address / Landmark</div>
+            <div style={{ fontWeight: 500, color: palette.text, marginTop: 4 }}>
+              {[site.address, site.landmark].filter(Boolean).join(', ') || 'Candolim coastal belt'}
+            </div>
+          </div>
+          <div style={{ padding: '12px 16px', background: '#F8FAFC', borderRadius: 8, border: '1px solid #E2E8F0' }}>
+            <div className="muted small">Site Contact Phone</div>
+            <div style={{ fontWeight: 500, color: palette.text, marginTop: 4 }}>{site.contactPhone || '—'}</div>
+          </div>
+        </div>
+      </Card>
 
       {/* Section: Assigned Workers */}
       <Card>

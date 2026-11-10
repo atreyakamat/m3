@@ -185,8 +185,9 @@ export function ContractorWorkers() {
                     <tr style={{ borderBottom: '1px solid #E2E8F0', color: '#64748B', fontSize: 13 }}>
                       <th style={{ padding: '10px 12px' }}>Worker Name</th>
                       <th style={{ padding: '10px 12px' }}>Worker ID</th>
-                      <th style={{ padding: '10px 12px' }}>Demographics</th>
-                      <th style={{ padding: '10px 12px' }}>Assigned Site</th>
+                      <th style={{ padding: '10px 12px' }}>Age</th>
+                      <th style={{ padding: '10px 12px' }}>Gender</th>
+                      <th style={{ padding: '10px 12px' }}>Current Assigned Site</th>
                       <th style={{ padding: '10px 12px' }}>Assignment Status</th>
                       <th style={{ padding: '10px 12px', textAlign: 'right' }}>Actions</th>
                     </tr>
@@ -206,7 +207,10 @@ export function ContractorWorkers() {
                           {w.workerCode}
                         </td>
                         <td style={{ padding: '12px', color: '#64748B', fontSize: 13 }}>
-                          {w.age ? `${w.age} yrs` : '—'} · {w.gender || '—'}
+                          {w.age ? `${w.age} yrs` : '—'}
+                        </td>
+                        <td style={{ padding: '12px', color: '#64748B', fontSize: 13, textTransform: 'capitalize' }}>
+                          {w.gender || '—'}
                         </td>
                         <td style={{ padding: '12px' }}>
                           <Link
