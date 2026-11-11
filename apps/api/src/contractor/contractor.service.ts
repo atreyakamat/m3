@@ -2296,7 +2296,7 @@ export class ContractorService {
     const transferIds = rows.filter((r) => r.entityType === 'SiteTransferRequest' && r.entityId).map((r) => r.entityId as string);
     const assignmentIds = rows.filter((r) => r.entityType === 'WorkerSiteAssignment' && r.entityId).map((r) => r.entityId as string);
 
-    const [symptomReports, transfersList, assignmentsList, defaultFacility] = await Promise.all([
+    const [symptomReports, transfersList, assignmentsList, activeFacilities] = await Promise.all([
       symptomReportIds.length > 0
         ? this.prisma.symptomReport.findMany({
             where: { id: { in: symptomReportIds } },
@@ -2308,7 +2308,17 @@ export class ContractorService {
                   name: true,
                   assignments: {
                     where: { active: true },
-                    include: { site: true },
+                    include: {
+                      site: {
+                        include: {
+                          area: {
+                            include: {
+                              parent: true,
+                            },
+                          },
+                        },
+                      },
+                    },
                   },
                 },
               },
@@ -2336,8 +2346,9 @@ export class ContractorService {
             },
           })
         : [],
-      this.prisma.facility.findFirst({
+      this.prisma.facility.findMany({
         where: { active: true },
+        orderBy: { type: 'asc' }, // Prioritize PHC / UHC
       }),
     ]);
 
@@ -2395,6 +2406,7 @@ export class ContractorService {
 
       if (n.entityType === 'SymptomReport' && n.entityId) {
         const sr = symptomReportMap.get(n.entityId);
+        let matchedFacility = null;
         if (sr) {
           workerId = sr.worker.workerCode;
           workerName = sr.worker.name;
@@ -2402,14 +2414,28 @@ export class ContractorService {
           if (activeAss) {
             siteCode = activeAss.site.siteCode;
             siteName = activeAss.site.name;
+
+            const talukaName = activeAss.site.area?.parent?.name?.toLowerCase();
+            const areaName = activeAss.site.area?.name?.toLowerCase();
+
+            matchedFacility = activeFacilities.find((f) =>
+              (talukaName && f.taluka.toLowerCase().includes(talukaName)) ||
+              (areaName && f.name.toLowerCase().includes(areaName)) ||
+              (areaName && f.address && f.address.toLowerCase().includes(areaName)),
+            );
           }
         }
+
+        if (!matchedFacility) {
+          matchedFacility = activeFacilities.find((f) => f.type === 'PHC') || activeFacilities[0];
+        }
+
         actionUrl = siteCode ? `/contractor/sites/${siteCode}` : '/contractor/workers';
         healthCoordination = {
-          facilityName: defaultFacility?.name ?? 'Candolim Primary Health Centre (PHC)',
-          facilityCode: defaultFacility?.facilityCode ?? 'PHC-CAN-01',
-          contactPhone: defaultFacility?.contactPhone ?? '0832-2489022',
-          taluka: defaultFacility?.taluka ?? 'Bardez',
+          facilityName: matchedFacility?.name ?? 'Candolim Primary Health Centre (PHC)',
+          facilityCode: matchedFacility?.facilityCode ?? 'PHC-CAN-01',
+          contactPhone: matchedFacility?.contactPhone ?? '0832-2489022',
+          taluka: matchedFacility?.taluka ?? 'Bardez',
           actionNotice: 'Coordinate clinical triage and malaria testing with the local health surveillance team. Operational notice only (not a diagnosis).',
         };
       } else if (n.entityType === 'SiteTransferRequest' && n.entityId) {
