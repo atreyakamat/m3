@@ -1,0 +1,66 @@
+services:
+  staging-db:
+    image: postgres:16-alpine
+    container_name: m3-staging-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-m3_staging}
+      POSTGRES_USER: ${POSTGRES_USER:-m3_staging}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-staging-secure-pass-m3-2026!}
+    ports:
+      - "${POSTGRES_PORT:-5545}:5432"
+    volumes:
+      - m3_staging_pgdata:/var/lib/postgresql/data
+    networks:
+      - m3_staging_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-m3_staging} -d ${POSTGRES_DB:-m3_staging}"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  staging-api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: m3-staging-api
+    restart: unless-stopped
+    depends_on:
+      staging-db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-m3_staging}:${POSTGRES_PASSWORD:-staging-secure-pass-m3-2026!}@staging-db:5432/${POSTGRES_DB:-m3_staging}?schema=public
+      JWT_SECRET: ${JWT_SECRET:-staging-jwt-secret-m3-surveillance-2026-auth-token-key-32chars}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-8h}
+      BOOTSTRAP_SECRET: ${BOOTSTRAP_SECRET:-staging-bootstrap-secret-m3-auth-2026}
+      PORT: 8003
+      API_CORS_ORIGINS: ${API_CORS_ORIGINS:-*}
+      SEED_ON_START: ${SEED_ON_START:-true}
+      NODE_ENV: staging
+    ports:
+      - "${PORT:-8013}:8003"
+    networks:
+      - m3_staging_net
+
+  staging-web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://192.168.1.120:8013/api/v1}
+    container_name: m3-staging-web
+    restart: unless-stopped
+    depends_on:
+      - staging-api
+    ports:
+      - "${WEB_PORT:-5183}:80"
+    networks:
+      - m3_staging_net
+
+volumes:
+  m3_staging_pgdata:
+
+networks:
+  m3_staging_net:
+    name: m3_staging_network
+    driver: bridge
