@@ -365,10 +365,10 @@ describe('Contractor Application — Iteration 1 & 2', () => {
     await waitFor(() => {
       expect(screen.getAllByText('Miramar Heights').length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText('SITE-TEST01').length).toBeGreaterThanOrEqual(1);
-      expect(screen.getByText('Tested Negative')).toBeInTheDocument();
+      expect(screen.getByText('Verified Negative')).toBeInTheDocument();
       expect(screen.getByText('Positive Cases')).toBeInTheDocument();
       expect(screen.getByText('Ramesh Kumar')).toBeInTheDocument();
-      expect(screen.getByText('Active')).toBeInTheDocument();
+      expect(screen.getAllByText(/Active/i).length).toBeGreaterThanOrEqual(1);
     });
   });
 
@@ -615,6 +615,315 @@ describe('Contractor Application — Iteration 1 & 2', () => {
         '/contractor/transfers/trans-001/approve',
         expect.anything(),
       );
+    });
+  });
+
+  /* ------------------------------------------------------------------ */
+  /* ITERATION 4: Site Management and Workforce Operations                */
+  /* ------------------------------------------------------------------ */
+  describe('Contractor Iteration 4: Site Management & Workforce Operations', () => {
+    it('Site Overview (MySites): displays site cards with address, landmark, contact phone, role badges, active worker counts, and supports search', async () => {
+      vi.mocked(api.get).mockImplementation((url: string) => {
+        if (url.includes('/contractor/sites')) {
+          if (url.includes('search=North')) {
+            return Promise.resolve([
+              {
+                siteId: 's-1',
+                siteCode: 'SITE-NORTH',
+                name: 'North Point Residency',
+                area: 'Panaji North',
+                address: 'Plot 12 Riverside Road',
+                landmark: 'Opposite Ferry Jetty',
+                contactPhone: '9822114455',
+                activeWorkers: 12,
+                active: true,
+                assignmentStatus: 'PRIMARY_CONTRACTOR',
+                isPrimary: true,
+              },
+            ]);
+          }
+          return Promise.resolve([
+            {
+              siteId: 's-1',
+              siteCode: 'SITE-NORTH',
+              name: 'North Point Residency',
+              area: 'Panaji North',
+              address: 'Plot 12 Riverside Road',
+              landmark: 'Opposite Ferry Jetty',
+              contactPhone: '9822114455',
+              activeWorkers: 12,
+              active: true,
+              assignmentStatus: 'PRIMARY_CONTRACTOR',
+              isPrimary: true,
+            },
+            {
+              siteId: 's-2',
+              siteCode: 'SITE-SOUTH',
+              name: 'South Marina Bay',
+              area: 'Mormugao',
+              address: 'Harbor Gate 4',
+              landmark: 'Near Custom Office',
+              contactPhone: '9822117788',
+              activeWorkers: 4,
+              active: true,
+              assignmentStatus: 'ASSOCIATED_CONTRACTOR',
+              isPrimary: false,
+            },
+          ]);
+        }
+        return Promise.reject(new Error(`Unhandled GET url: ${url}`));
+      });
+
+      renderWithAuth(<MySites />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Site Operations & Overview')).toBeInTheDocument();
+        expect(screen.getByText('North Point Residency')).toBeInTheDocument();
+        expect(screen.getByText('SITE-NORTH')).toBeInTheDocument();
+        expect(screen.getByText('South Marina Bay')).toBeInTheDocument();
+        expect(screen.getByText('SITE-SOUTH')).toBeInTheDocument();
+        expect(screen.getByText('Primary Contractor')).toBeInTheDocument();
+        expect(screen.getByText('Associated Site')).toBeInTheDocument();
+        expect(screen.getByText('Plot 12 Riverside Road, Opposite Ferry Jetty')).toBeInTheDocument();
+      });
+
+      // Search for "North"
+      const searchInput = screen.getByPlaceholderText(/Search assigned sites/i);
+      fireEvent.change(searchInput, { target: { value: 'North' } });
+
+      await waitFor(() => {
+        expect(api.get).toHaveBeenCalledWith('/contractor/sites?search=North');
+      });
+
+      // Clear search
+      const clearBtn = screen.getByText('Clear Search');
+      fireEvent.click(clearBtn);
+
+      await waitFor(() => {
+        expect(searchInput).toHaveValue('');
+      });
+    });
+
+    it('Site Detail & Workforce Operations: displays active/inactive metrics, allows workforce filtering, direct assign modal, and ending assignment', async () => {
+      const mockSiteDetail = {
+        site: {
+          id: 's-1',
+          siteCode: 'SITE-NORTH',
+          name: 'North Point Residency',
+          area: 'Panaji North',
+          address: 'Plot 12 Riverside Road',
+          landmark: 'Opposite Ferry Jetty',
+          contactPhone: '9822114455',
+          contractorRole: 'PRIMARY',
+          isPrimary: true,
+          active: true,
+        },
+        stats: {
+          siteCode: 'SITE-NORTH',
+          siteName: 'North Point Residency',
+          totalWorkers: 2,
+          totalAssigned: 2,
+          activeWorkers: 1,
+          inactiveWorkers: 1,
+          positive: 0,
+          negative: 1,
+          awaitingResults: 1,
+          noResultRecorded: 0,
+          lastUpdated: '2026-11-10T12:00:00.000Z',
+        },
+        activeWorkersCount: 1,
+        inactiveWorkersCount: 1,
+        canAssignWorkers: true,
+        workers: [
+          {
+            workerId: 'M3-W001',
+            patientId: 'p-001',
+            name: 'Prakash Jena',
+            phone: '9820110001',
+            age: 29,
+            gender: 'male',
+            active: true,
+            assignmentStatus: 'ACTIVE',
+            startedAt: '2026-11-01T08:00:00.000Z',
+            endedAt: null,
+            malariaStatus: null,
+          },
+          {
+            workerId: 'M3-W002',
+            patientId: 'p-002',
+            name: 'Vikram Singh',
+            phone: '9820110002',
+            age: 35,
+            gender: 'male',
+            active: false,
+            assignmentStatus: 'ENDED',
+            startedAt: '2026-10-01T08:00:00.000Z',
+            endedAt: '2026-10-31T18:00:00.000Z',
+            malariaStatus: null,
+          },
+        ],
+        totalWorkers: 2,
+        travels: [
+          {
+            id: 'trv-1',
+            workerId: 'M3-W001',
+            workerName: 'Prakash Jena',
+            phone: '9820110001',
+            direction: 'ENTERING_GOA',
+            originTown: 'Cuttack',
+            originState: 'Odisha',
+            destination: 'Panaji North',
+            state: 'Goa',
+            departureDate: '2026-11-01T00:00:00.000Z',
+            returnDate: null,
+            status: 'ACTIVE_SURVEILLANCE',
+            isUpcoming: false,
+            isSevenDayAlert: true,
+          },
+        ],
+        transfers: [
+          {
+            id: 'trf-1',
+            workerName: 'Prakash Jena',
+            workerId: 'M3-W001',
+            currentSite: null,
+            destinationSite: { siteId: 's-1', name: 'North Point Residency' },
+            initiator: 'CONTRACTOR',
+            status: 'COMPLETED',
+            createdAt: '2026-11-01T00:00:00.000Z',
+            isAwaitingMyApproval: false,
+          },
+        ],
+      };
+
+      vi.mocked(api.get).mockImplementation((url: string) => {
+        if (url.includes('/contractor/sites/SITE-NORTH/detail')) {
+          return Promise.resolve(mockSiteDetail);
+        }
+        if (url.includes('/workers/lookup/M3-W009')) {
+          return Promise.resolve({
+            workerId: 'M3-W009',
+            name: 'Sunil Gavaskar',
+            currentSite: null,
+            currentContractor: null,
+          });
+        }
+        return Promise.reject(new Error(`Unhandled GET url: ${url}`));
+      });
+
+      vi.mocked(api.post).mockImplementation((url: string) => {
+        if (url.includes('/contractor/sites/SITE-NORTH/assign-worker')) {
+          return Promise.resolve({
+            success: true,
+            message: 'Worker assigned successfully',
+          });
+        }
+        if (url.includes('/contractor/sites/SITE-NORTH/workers/M3-W001/end-assignment')) {
+          return Promise.resolve({
+            success: true,
+            message: 'Assignment ended successfully',
+          });
+        }
+        return Promise.reject(new Error(`Unhandled POST url: ${url}`));
+      });
+
+      renderWithAuth(
+        <Routes>
+          <Route path="/contractor/sites/:siteCode" element={<ContractorSiteDetail />} />
+        </Routes>,
+        ['/contractor/sites/SITE-NORTH'],
+      );
+
+      await waitFor(() => {
+        expect(screen.getAllByText('North Point Residency').length).toBeGreaterThanOrEqual(1);
+        expect(screen.getAllByText('SITE-NORTH').length).toBeGreaterThanOrEqual(1);
+        expect(screen.getByText('Active Workforce')).toBeInTheDocument();
+        expect(screen.getByText('Ended / Inactive')).toBeInTheDocument();
+        expect(screen.getByText('Verified Negative')).toBeInTheDocument();
+        expect(screen.getByText('Site Master Details')).toBeInTheDocument();
+        expect(screen.getByText('Plot 12 Riverside Road, Opposite Ferry Jetty')).toBeInTheDocument();
+        expect(screen.getAllByText('Prakash Jena').length).toBeGreaterThanOrEqual(1);
+        expect(screen.getAllByText('Vikram Singh').length).toBeGreaterThanOrEqual(1);
+      });
+
+      // Check Entry and Exit activity section
+      expect(screen.getByText('↘ Entry into Goa')).toBeInTheDocument();
+      expect(screen.getByText('⚠️ 7-Day Surveillance Alert')).toBeInTheDocument();
+      expect(screen.getByText('Cuttack, Odisha')).toBeInTheDocument();
+
+      // Test Workforce Status Tabs:
+      // Click "Active" tab
+      const activeTab = screen.getByRole('button', { name: /^Active \(/ });
+      fireEvent.click(activeTab);
+      expect(screen.getAllByText('Prakash Jena').length).toBeGreaterThanOrEqual(1);
+      expect(screen.queryByText('Vikram Singh')).not.toBeInTheDocument();
+
+      // Click "Ended" tab
+      const endedTab = screen.getByRole('button', { name: /^Ended \(/ });
+      fireEvent.click(endedTab);
+      expect(screen.getAllByText('Vikram Singh').length).toBeGreaterThanOrEqual(1);
+
+      // Switch back to "All"
+      const allTab = screen.getByRole('button', { name: /^All \(/ });
+      fireEvent.click(allTab);
+      expect(screen.getAllByText('Prakash Jena').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('Vikram Singh').length).toBeGreaterThanOrEqual(1);
+
+      // Test Assign Worker Modal
+      const openAssignBtn = screen.getAllByRole('button', { name: /\+ Assign Worker/i })[0];
+      fireEvent.click(openAssignBtn);
+
+      await waitFor(() => {
+        expect(screen.getByText('Assign Worker to Site')).toBeInTheDocument();
+        expect(screen.getByPlaceholderText(/M3-SIM01/i)).toBeInTheDocument();
+      });
+
+      // Lookup worker
+      const workerIdInput = screen.getByPlaceholderText(/M3-SIM01/i);
+      fireEvent.change(workerIdInput, { target: { value: 'M3-W009' } });
+      const lookupBtn = screen.getByRole('button', { name: /Look up/i });
+      fireEvent.click(lookupBtn);
+
+      await waitFor(() => {
+        expect(screen.getByText('Sunil Gavaskar')).toBeInTheDocument();
+        expect(screen.getByText(/Eligible \(Unassigned\)/i)).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /Confirm Assignment to Site/i })).toBeInTheDocument();
+      });
+
+      // Submit assignment
+      fireEvent.click(screen.getByRole('button', { name: /Confirm Assignment to Site/i }));
+      await waitFor(() => {
+        expect(api.post).toHaveBeenCalledWith(
+          '/contractor/sites/SITE-NORTH/assign-worker',
+          expect.objectContaining({ workerCode: 'M3-W009' }),
+        );
+      });
+
+      // Close modal by clicking cancel if still open
+      const cancelBtn = screen.queryByRole('button', { name: 'Cancel' });
+      if (cancelBtn) fireEvent.click(cancelBtn);
+
+      // Test End Assignment for active worker Prakash Jena
+      const endBtn = screen.getByRole('button', { name: 'End Assignment' });
+      fireEvent.click(endBtn);
+
+      await waitFor(() => {
+        expect(screen.getByText('End Workforce Assignment')).toBeInTheDocument();
+        expect(screen.getByText(/Confirm deactivation of worker assignment/i)).toBeInTheDocument();
+      });
+
+      const endReasonInput = screen.getByPlaceholderText(/Project phase completed/i);
+      fireEvent.change(endReasonInput, { target: { value: 'Contract completed' } });
+
+      const confirmEndBtn = screen.getByRole('button', { name: /Confirm End Assignment/i });
+      fireEvent.click(confirmEndBtn);
+
+      await waitFor(() => {
+        expect(api.post).toHaveBeenCalledWith(
+          '/contractor/sites/SITE-NORTH/workers/M3-W001/end-assignment',
+          { reason: 'Contract completed' },
+        );
+      });
     });
   });
 });

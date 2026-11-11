@@ -166,15 +166,41 @@ export class ContractorService {
   async getSiteWorkers(
     contractorId: string,
     siteCode: string,
-    query: { search?: string; malaria?: string; page?: string; pageSize?: string },
+    query: {
+      search?: string;
+      malaria?: string;
+      status?: string;
+      assignmentStatus?: string;
+      page?: string;
+      pageSize?: string;
+    },
   ) {
     const site = await this.validateContractorSite(contractorId, siteCode);
     const params = parsePage(query.page, query.pageSize);
 
+    const statusUpper = query.status?.toUpperCase();
+    const assignmentUpper = query.assignmentStatus?.toUpperCase();
+    const malariaFilter = (
+      query.malaria?.toUpperCase() ||
+      (statusUpper === 'POSITIVE' || statusUpper === 'NEGATIVE' ? statusUpper : undefined)
+    );
+
+    const rawStatus = (
+      assignmentUpper ||
+      (statusUpper && ['ACTIVE', 'ENDED', 'INACTIVE', 'ALL'].includes(statusUpper) ? statusUpper : 'ACTIVE')
+    );
+
+    const whereStatus: Prisma.WorkerSiteAssignmentWhereInput =
+      rawStatus === 'ALL'
+        ? {}
+        : rawStatus === 'ENDED' || rawStatus === 'INACTIVE'
+          ? { active: false }
+          : { active: true };
+
     const assignments = await this.prisma.workerSiteAssignment.findMany({
       where: {
         siteId: site.id,
-        active: true,
+        ...whereStatus,
         OR: [
           { contractorId },
           { contractorId: null },
@@ -208,10 +234,9 @@ export class ContractorService {
       const contractorMalariaStatus: 'POSITIVE' | 'NEGATIVE' | null =
         malaria === 'POSITIVE' || malaria === 'NEGATIVE' ? malaria : null;
 
-      const rawFilter = query.malaria?.toUpperCase();
-      if (rawFilter && rawFilter !== 'ALL') {
-        if (rawFilter === 'POSITIVE' || rawFilter === 'NEGATIVE') {
-          if (contractorMalariaStatus !== rawFilter) {
+      if (malariaFilter && malariaFilter !== 'ALL') {
+        if (malariaFilter === 'POSITIVE' || malariaFilter === 'NEGATIVE') {
+          if (contractorMalariaStatus !== malariaFilter) {
             continue;
           }
         } else {
@@ -233,6 +258,7 @@ export class ContractorService {
         active: a.active,
         assignmentStatus: a.status ?? (a.active ? 'ACTIVE' : 'ENDED'),
         startedAt: a.startedAt.toISOString(),
+        endedAt: a.endedAt ? a.endedAt.toISOString() : null,
         siteCode: site.siteCode,
         siteName: site.name,
         malariaStatus: null, // Masked per Iteration 2 privacy requirement
@@ -512,10 +538,13 @@ export class ContractorService {
         workerId: r.worker.workerCode,
         workerName: r.worker.name,
         phone: r.worker.phone,
+        direction: r.direction ?? 'LEAVING_GOA',
         departureDate: dep?.toISOString() ?? null,
         returnDate: r.returnDate?.toISOString() ?? null,
         destination: r.destination,
         state: r.state,
+        originTown: r.town ?? null,
+        originState: r.originState ?? null,
         status: r.status,
         isUpcoming,
         malariaStatus: contractorMalariaStatus,
@@ -990,7 +1019,7 @@ export class ContractorService {
   }
 
   /**
-   * List construction sites assigned to contractor with optional search filter by name, area, or code.
+   * List construction sites assigned to contractor with optional search filter by name, area, code, or address.
    */
   async getContractorSitesList(contractorId: string, search?: string) {
     const sites = await this.getContractorSites(contractorId);
@@ -999,8 +1028,13 @@ export class ContractorService {
       siteCode: s.siteCode,
       name: s.name,
       area: s.area.name,
+      address: s.address ?? null,
+      landmark: s.landmark ?? null,
+      contactPhone: s.contactPhone ?? null,
       activeWorkers: s._count.assignments,
       active: s.active,
+      assignmentStatus: s.contractorId === contractorId ? 'PRIMARY_CONTRACTOR' : 'ASSOCIATED_CONTRACTOR',
+      isPrimary: s.contractorId === contractorId,
     }));
     if (search && search.trim()) {
       const q = search.trim().toLowerCase();
@@ -1008,7 +1042,9 @@ export class ContractorService {
         (s) =>
           s.name.toLowerCase().includes(q) ||
           s.area.toLowerCase().includes(q) ||
-          s.siteCode.toLowerCase().includes(q),
+          s.siteCode.toLowerCase().includes(q) ||
+          (s.address && s.address.toLowerCase().includes(q)) ||
+          (s.landmark && s.landmark.toLowerCase().includes(q)),
       );
     }
     return result;
@@ -1364,12 +1400,38 @@ export class ContractorService {
   }
 
   /** Detailed view of a specific site assigned to the contractor. */
-  async getContractorSiteDetail(contractorId: string, siteCode: string) {
+  async getContractorSiteDetail(
+    contractorId: string,
+    siteCode: string,
+    query?: { search?: string; status?: string; page?: string; pageSize?: string },
+  ) {
     const site = await this.validateContractorSite(contractorId, siteCode);
     const stats = await this.getSiteStats(contractorId, siteCode);
-    const workersRes = await this.getSiteWorkers(contractorId, siteCode, { pageSize: '25' });
+    const workersRes = await this.getSiteWorkers(contractorId, siteCode, {
+      search: query?.search,
+      status: query?.status ?? 'ALL',
+      page: query?.page ?? '1',
+      pageSize: query?.pageSize ?? '50',
+    });
     const travelsRes = await this.getSiteTravels(contractorId, siteCode);
     const transfersRes = await this.getSiteTransfers(contractorId, siteCode);
+
+    const [activeCount, inactiveCount] = await Promise.all([
+      this.prisma.workerSiteAssignment.count({
+        where: {
+          siteId: site.id,
+          active: true,
+          OR: [{ contractorId }, { contractorId: null }],
+        },
+      }),
+      this.prisma.workerSiteAssignment.count({
+        where: {
+          siteId: site.id,
+          active: false,
+          OR: [{ contractorId }, { contractorId: null }],
+        },
+      }),
+    ]);
 
     return {
       site: {
@@ -1377,15 +1439,24 @@ export class ContractorService {
         siteCode: site.siteCode,
         name: site.name,
         area: site.area.name,
-        address: site.address,
-        landmark: site.landmark,
-        contactPhone: site.contactPhone,
+        address: site.address ?? null,
+        landmark: site.landmark ?? null,
+        contactPhone: site.contactPhone ?? null,
         active: site.active,
         createdAt: site.createdAt ? site.createdAt.toISOString() : null,
+        contractorRole: site.contractorId === contractorId ? 'PRIMARY' : 'ASSOCIATED',
       },
-      stats,
+      stats: {
+        ...stats,
+        totalAssigned: activeCount + inactiveCount,
+        activeWorkers: activeCount,
+        inactiveWorkers: inactiveCount,
+      },
       workers: workersRes.items,
       totalWorkers: workersRes.total,
+      activeWorkersCount: activeCount,
+      inactiveWorkersCount: inactiveCount,
+      canAssignWorkers: true,
       travels: travelsRes.items,
       transfers: transfersRes.items,
     };
@@ -1909,5 +1980,243 @@ export class ContractorService {
     input: { workerId: string; toSiteId: string; note?: string },
   ) {
     return this.transfersService.createContractorTransfer(contractorId, input);
+  }
+
+  /**
+   * Assigns an unassigned worker directly to a construction site managed by this contractor.
+   * Invariants:
+   * 1. Contractor must be assigned to siteCode (site ownership check).
+   * 2. Worker must exist.
+   * 3. Worker must NOT already have an active site assignment.
+   *    If worker has an active assignment, direct assignment is prohibited (must go through transfer workflow).
+   * 4. Worker must NOT have a pending transfer request.
+   * 5. Creates new WorkerSiteAssignment in a transaction, records audit log, and notifies worker and admin.
+   */
+  async assignWorkerToSite(
+    contractorId: string,
+    siteCode: string,
+    body: { workerCode: string; note?: string },
+  ) {
+    if (!body?.workerCode || typeof body.workerCode !== 'string' || !body.workerCode.trim()) {
+      throw new BadRequestException('workerCode is required');
+    }
+    const cleanCode = body.workerCode.trim();
+    const site = await this.validateContractorSite(contractorId, siteCode);
+
+    const worker = await this.prisma.worker.findFirst({
+      where: {
+        OR: [
+          { workerCode: cleanCode },
+          { id: cleanCode },
+        ],
+      },
+      include: {
+        assignments: {
+          where: { active: true },
+          include: { site: true, contractor: true },
+        },
+      },
+    });
+
+    if (!worker) {
+      throw new NotFoundException(`Worker with ID or Code "${cleanCode}" was not found.`);
+    }
+
+    const activeAssignment = worker.assignments[0] ?? null;
+
+    // Check if already actively assigned to this site
+    if (activeAssignment && activeAssignment.siteId === site.id) {
+      throw new BadRequestException(
+        `Worker ${worker.name} (${worker.workerCode}) is already actively assigned to this construction site.`,
+      );
+    }
+
+    // Check if actively assigned to another site -> Direct reassignment is blocked! Must use Transfer workflow.
+    if (activeAssignment) {
+      throw new BadRequestException(
+        `Worker ${worker.name} (${worker.workerCode}) is currently assigned to site "${activeAssignment.site.name}". ` +
+        `Direct reassignment is not permitted under malaria surveillance protocol. Please initiate a Transfer Request instead.`,
+      );
+    }
+
+    // Check if worker has any pending transfer request
+    const pendingTransfer = await this.prisma.siteTransferRequest.findFirst({
+      where: {
+        workerId: worker.id,
+        status: { in: ['PENDING_DESTINATION_CONTRACTOR', 'PENDING_WORKER_RESPONSE', 'PENDING_CURRENT_CONTRACTOR'] },
+      },
+    });
+    if (pendingTransfer) {
+      throw new ConflictException(`Worker ${worker.name} already has a pending transfer request in progress.`);
+    }
+
+    // Worker is unassigned. Proceed with direct workforce assignment in transaction.
+    return this.prisma.$transaction(async (tx) => {
+      const now = new Date();
+      const assignment = await tx.workerSiteAssignment.create({
+        data: {
+          workerId: worker.id,
+          siteId: site.id,
+          contractorId,
+          active: true,
+          status: 'ACTIVE',
+          startedAt: now,
+        },
+        include: {
+          worker: true,
+          site: true,
+        },
+      });
+
+      await this.audit.record({
+        actorId: contractorId,
+        action: 'WORKER_ASSIGNED_TO_SITE',
+        entityType: 'WorkerSiteAssignment',
+        entityId: assignment.id,
+        metadata: {
+          workerId: worker.id,
+          workerCode: worker.workerCode,
+          siteId: site.id,
+          siteCode: site.siteCode,
+          contractorId,
+          note: body.note?.trim() || null,
+        },
+        tx,
+      });
+
+      await this.notify.notify({
+        audienceRoles: ['WORKER'],
+        type: 'SITE_ASSIGNMENT',
+        title: 'Workforce Assignment Confirmed',
+        body: `You have been directly assigned to the workforce at ${site.name}.`,
+        entityType: 'WorkerSiteAssignment',
+        entityId: assignment.id,
+        audienceUserIds: worker.id ? [worker.id] : undefined,
+        dedupeKey: `direct_site_assign:${assignment.id}`,
+        tx,
+      });
+
+      await this.notify.notify({
+        audienceRoles: ['ADMIN'],
+        type: 'SITE_ASSIGNMENT',
+        title: 'Worker Assigned to Site',
+        body: `Worker ${worker.name} (${worker.workerCode}) was assigned to ${site.name} by contractor.`,
+        entityType: 'WorkerSiteAssignment',
+        entityId: assignment.id,
+        dedupeKey: `admin_direct_site_assign:${assignment.id}`,
+        tx,
+      });
+
+      return {
+        success: true,
+        assignmentId: assignment.id,
+        message: `Worker ${worker.name} (${worker.workerCode}) was successfully assigned to ${site.name}.`,
+        worker: {
+          id: worker.id,
+          workerCode: worker.workerCode,
+          name: worker.name,
+        },
+        site: {
+          id: site.id,
+          siteCode: site.siteCode,
+          name: site.name,
+        },
+        startedAt: now.toISOString(),
+      };
+    });
+  }
+
+  /**
+   * Ends an active worker assignment at a construction site managed by this contractor.
+   */
+  async endWorkerAssignment(
+    contractorId: string,
+    siteCode: string,
+    workerCode: string,
+    body?: { reason?: string },
+  ) {
+    const site = await this.validateContractorSite(contractorId, siteCode);
+
+    const worker = await this.prisma.worker.findFirst({
+      where: {
+        OR: [
+          { workerCode },
+          { id: workerCode },
+        ],
+      },
+    });
+    if (!worker) {
+      throw new NotFoundException(`Worker with ID or Code "${workerCode}" was not found.`);
+    }
+
+    const activeAssignment = await this.prisma.workerSiteAssignment.findFirst({
+      where: {
+        workerId: worker.id,
+        siteId: site.id,
+        active: true,
+      },
+    });
+
+    if (!activeAssignment) {
+      throw new NotFoundException(`No active assignment found for worker ${worker.name} (${worker.workerCode}) at ${site.name}.`);
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const now = new Date();
+      await tx.workerSiteAssignment.update({
+        where: { id: activeAssignment.id },
+        data: {
+          active: false,
+          status: 'ENDED',
+          endedAt: now,
+        },
+      });
+
+      await this.audit.record({
+        actorId: contractorId,
+        action: 'WORKER_ASSIGNMENT_ENDED',
+        entityType: 'WorkerSiteAssignment',
+        entityId: activeAssignment.id,
+        metadata: {
+          workerId: worker.id,
+          workerCode: worker.workerCode,
+          siteId: site.id,
+          siteCode: site.siteCode,
+          contractorId,
+          reason: body?.reason?.trim() || null,
+        },
+        tx,
+      });
+
+      await this.notify.notify({
+        audienceRoles: ['WORKER'],
+        type: 'SITE_ASSIGNMENT',
+        title: 'Workforce Assignment Ended',
+        body: `Your workforce assignment at ${site.name} has ended.`,
+        entityType: 'WorkerSiteAssignment',
+        entityId: activeAssignment.id,
+        audienceUserIds: worker.id ? [worker.id] : undefined,
+        dedupeKey: `assign_ended:${activeAssignment.id}`,
+        tx,
+      });
+
+      await this.notify.notify({
+        audienceRoles: ['ADMIN'],
+        type: 'SITE_ASSIGNMENT',
+        title: 'Worker Assignment Ended',
+        body: `Assignment for worker ${worker.name} (${worker.workerCode}) at ${site.name} was marked ended.`,
+        entityType: 'WorkerSiteAssignment',
+        entityId: activeAssignment.id,
+        dedupeKey: `admin_assign_ended:${activeAssignment.id}`,
+        tx,
+      });
+
+      return {
+        success: true,
+        assignmentId: activeAssignment.id,
+        message: `Assignment for worker ${worker.name} at ${site.name} has ended.`,
+        endedAt: now.toISOString(),
+      };
+    });
   }
 }

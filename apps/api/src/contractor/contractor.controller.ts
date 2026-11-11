@@ -54,8 +54,47 @@ export class ContractorController {
 
   @Get('sites/:siteCode/detail')
   @ApiOperation({ summary: 'Detailed view of a construction site assigned to the contractor' })
-  siteDetail(@CurrentUser() user: RequestUser, @Param('siteCode') siteCode: string) {
-    return this.contractor.getContractorSiteDetail(this.contractorIdOf(user), siteCode);
+  siteDetail(
+    @CurrentUser() user: RequestUser,
+    @Param('siteCode') siteCode: string,
+    @Query('search') search?: string,
+    @Query('q') q?: string,
+    @Query('status') status?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    return this.contractor.getContractorSiteDetail(this.contractorIdOf(user), siteCode, {
+      search: search ?? q,
+      status,
+      page,
+      pageSize,
+    });
+  }
+
+  @Post('sites/:siteCode/assign-worker')
+  @ApiOperation({ summary: 'Directly assign an unassigned worker to this construction site' })
+  assignWorker(
+    @CurrentUser() user: RequestUser,
+    @Param('siteCode') siteCode: string,
+    @Body() body: { workerCode: string; note?: string },
+  ) {
+    return this.contractor.assignWorkerToSite(this.contractorIdOf(user), siteCode, body);
+  }
+
+  @Post('sites/:siteCode/workers/:workerCode/end-assignment')
+  @ApiOperation({ summary: 'End an active worker assignment at this construction site' })
+  endAssignment(
+    @CurrentUser() user: RequestUser,
+    @Param('siteCode') siteCode: string,
+    @Param('workerCode') workerCode: string,
+    @Body() body?: { reason?: string },
+  ) {
+    return this.contractor.endWorkerAssignment(
+      this.contractorIdOf(user),
+      siteCode,
+      workerCode,
+      body,
+    );
   }
 
   @Get('sites/:siteCode/workers')
@@ -67,12 +106,15 @@ export class ContractorController {
     @Query('q') q?: string,
     @Query('malaria') malaria?: string,
     @Query('status') status?: string,
+    @Query('assignmentStatus') assignmentStatus?: string,
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
   ) {
     return this.contractor.getSiteWorkers(this.contractorIdOf(user), siteCode, {
       search: search ?? q,
-      malaria: malaria ?? status,
+      malaria,
+      status: assignmentStatus ?? status,
+      assignmentStatus: assignmentStatus ?? status,
       page,
       pageSize,
     });

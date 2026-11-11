@@ -1263,4 +1263,233 @@ describe('Contractor Mobile Module APIs (e2e)', () => {
     expect(cancelRes.status).toBe(201);
     expect(cancelRes.body.status).toBe('CANCELLED');
   });
+
+  it('Contractor Iteration 4: Site Management, Workforce Operations, Direct Assignment, and Transfer Guardrails', async () => {
+    // 1. Setup contractors and sites
+    const areaId = await createArea(ctx, 'Candolim Coastal');
+    const cEast = await createContractor(ctx, { name: 'East Coast Developers', username: 'c.east.it4' });
+    const cWest = await createContractor(ctx, { name: 'West Valley Builders', username: 'c.west.it4' });
+    const cRogue = await createContractor(ctx, { name: 'Rogue Contractor Corp', username: 'c.rogue.it4' });
+
+    const sEast = await ctx.prisma.constructionSite.create({
+      data: {
+        siteCode: 'SITE-IT4-E',
+        name: 'East Coast Horizon',
+        areaId,
+        contractorId: cEast.contractorId,
+        address: 'Plot 45 Marine Drive, Candolim',
+        landmark: 'Near Lighthouse',
+        contactPhone: '9820000011',
+      },
+    });
+
+    const sWest = await ctx.prisma.constructionSite.create({
+      data: {
+        siteCode: 'SITE-IT4-W',
+        name: 'West Valley Heights',
+        areaId,
+        contractorId: cWest.contractorId,
+        address: 'Survey 102 Hill Road, Panaji',
+        landmark: 'Opposite State Library',
+        contactPhone: '9820000022',
+      },
+    });
+
+    // 2. Site Overview List and Search:
+    // cEast should see SITE-IT4-E with address and operational info
+    const sitesRes = await ctx.http()
+      .get('/api/v1/contractor/sites')
+      .set(...auth(cEast.token));
+    expect(sitesRes.status).toBe(200);
+    expect(Array.isArray(sitesRes.body)).toBe(true);
+
+    const eastSite = sitesRes.body.find((s: any) => s.siteCode === 'SITE-IT4-E');
+    expect(eastSite).toBeDefined();
+    expect(eastSite.name).toBe('East Coast Horizon');
+    expect(eastSite.address).toBe('Plot 45 Marine Drive, Candolim');
+    expect(eastSite.landmark).toBe('Near Lighthouse');
+    expect(eastSite.contactPhone).toBe('9820000011');
+    expect(eastSite.assignmentStatus).toBe('PRIMARY_CONTRACTOR');
+    expect(eastSite.activeWorkers).toBe(0);
+
+    // cEast should NOT see sWest
+    const westInEast = sitesRes.body.find((s: any) => s.siteCode === 'SITE-IT4-W');
+    expect(westInEast).toBeUndefined();
+
+    // Search by address keyword
+    const searchAddressRes = await ctx.http()
+      .get('/api/v1/contractor/sites?search=Marine')
+      .set(...auth(cEast.token));
+    expect(searchAddressRes.status).toBe(200);
+    expect(searchAddressRes.body.some((s: any) => s.siteCode === 'SITE-IT4-E')).toBe(true);
+
+    // Search by site code
+    const searchCodeRes = await ctx.http()
+      .get('/api/v1/contractor/sites?search=IT4-E')
+      .set(...auth(cEast.token));
+    expect(searchCodeRes.status).toBe(200);
+    expect(searchCodeRes.body.some((s: any) => s.siteCode === 'SITE-IT4-E')).toBe(true);
+
+    // Search by non-matching query -> empty list
+    const searchEmptyRes = await ctx.http()
+      .get('/api/v1/contractor/sites?search=NonExistentKeyword')
+      .set(...auth(cEast.token));
+    expect(searchEmptyRes.status).toBe(200);
+    expect(searchEmptyRes.body.length).toBe(0);
+
+    // 3. Register Unassigned Worker and Directly Assign to Site:
+    const wUnassigned = await registerWorker(ctx, {
+      name: 'Prakash Jena',
+      phone: '9820110001',
+      pin: '1234',
+    });
+
+    // Worker Prakash has no active site assignment yet
+    const lookupPrakash = await ctx.http()
+      .get(`/api/v1/workers/lookup/${wUnassigned.workerId}`)
+      .set(...auth(cEast.token));
+    expect(lookupPrakash.status).toBe(200);
+    expect(lookupPrakash.body.currentSite).toBeNull();
+
+    // cEast directly assigns Prakash to SITE-IT4-E
+    const assignRes = await ctx.http()
+      .post('/api/v1/contractor/sites/SITE-IT4-E/assign-worker')
+      .set(...auth(cEast.token))
+      .send({ workerCode: wUnassigned.workerId, note: 'Initial project deployment' });
+    expect(assignRes.status).toBe(201);
+    expect(assignRes.body.success).toBe(true);
+    expect(assignRes.body.worker.workerCode).toBe(wUnassigned.workerId);
+    expect(assignRes.body.site.siteCode).toBe('SITE-IT4-E');
+
+    // Verify database record
+    const dbAssignment = await ctx.prisma.workerSiteAssignment.findFirst({
+      where: { worker: { workerCode: wUnassigned.workerId }, active: true },
+      include: { site: true },
+    });
+    expect(dbAssignment).toBeDefined();
+    expect(dbAssignment?.site.siteCode).toBe('SITE-IT4-E');
+    expect(dbAssignment?.status).toBe('ACTIVE');
+
+    // 4. Duplicate Active Assignment Prevention:
+    // Assigning the same worker again to the same site must fail (400)
+    const dupAssignRes = await ctx.http()
+      .post('/api/v1/contractor/sites/SITE-IT4-E/assign-worker')
+      .set(...auth(cEast.token))
+      .send({ workerCode: wUnassigned.workerId });
+    expect(dupAssignRes.status).toBe(400);
+    expect(dupAssignRes.body.message).toMatch(/already actively assigned/i);
+
+    // 5. Transfer Rule Enforcement (Prevent direct reassignment of already-assigned worker):
+    // cWest attempts to directly assign Prakash to SITE-IT4-W without a transfer -> Must fail (400)
+    const reassignRes = await ctx.http()
+      .post('/api/v1/contractor/sites/SITE-IT4-W/assign-worker')
+      .set(...auth(cWest.token))
+      .send({ workerCode: wUnassigned.workerId });
+    expect(reassignRes.status).toBe(400);
+    expect(reassignRes.body.message).toMatch(/Transfer Request/i);
+
+    // Prakash remains assigned to SITE-IT4-E
+    const prakashCurrent = await ctx.prisma.workerSiteAssignment.findFirst({
+      where: { worker: { workerCode: wUnassigned.workerId }, active: true },
+      include: { site: true },
+    });
+    expect(prakashCurrent?.site.siteCode).toBe('SITE-IT4-E');
+
+    // 6. Site Details API:
+    // Check master details, active/inactive counts, workforce list, travel records, transfers
+    const detailRes = await ctx.http()
+      .get('/api/v1/contractor/sites/SITE-IT4-E/detail')
+      .set(...auth(cEast.token));
+    expect(detailRes.status).toBe(200);
+    expect(detailRes.body.site.siteCode).toBe('SITE-IT4-E');
+    expect(detailRes.body.site.name).toBe('East Coast Horizon');
+    expect(detailRes.body.site.address).toBe('Plot 45 Marine Drive, Candolim');
+    expect(detailRes.body.site.landmark).toBe('Near Lighthouse');
+    expect(detailRes.body.site.contactPhone).toBe('9820000011');
+    expect(detailRes.body.site.contractorRole).toBe('PRIMARY');
+    expect(detailRes.body.canAssignWorkers).toBe(true);
+
+    // Verify active/inactive counts
+    expect(detailRes.body.stats.activeWorkers).toBe(1);
+    expect(detailRes.body.stats.inactiveWorkers).toBe(0);
+    expect(detailRes.body.stats.totalAssigned).toBe(1);
+
+    // Verify workforce list
+    expect(detailRes.body.workers.length).toBe(1);
+    const wRow = detailRes.body.workers[0];
+    expect(wRow.workerId).toBe(wUnassigned.workerId);
+    expect(wRow.name).toBe('Prakash Jena');
+    expect(wRow.assignmentStatus).toBe('ACTIVE');
+    expect(wRow.startedAt).toBeDefined();
+    expect(wRow.malariaStatus).toBeNull(); // Strictly masked
+
+    // 7. Site Workforce Filtering & Search:
+    // Search within site workforce
+    const searchWorkforce = await ctx.http()
+      .get('/api/v1/contractor/sites/SITE-IT4-E/workers?search=Prakash')
+      .set(...auth(cEast.token));
+    expect(searchWorkforce.status).toBe(200);
+    expect(searchWorkforce.body.items.length).toBe(1);
+    expect(searchWorkforce.body.items[0].workerId).toBe(wUnassigned.workerId);
+
+    // 8. Ending Worker Assignment:
+    const endAssignRes = await ctx.http()
+      .post(`/api/v1/contractor/sites/SITE-IT4-E/workers/${wUnassigned.workerId}/end-assignment`)
+      .set(...auth(cEast.token))
+      .send({ reason: 'Project phase completed' });
+    expect(endAssignRes.status).toBe(201);
+    expect(endAssignRes.body.success).toBe(true);
+
+    // Verify database record is ended
+    const endedDbAssignment = await ctx.prisma.workerSiteAssignment.findFirst({
+      where: { worker: { workerCode: wUnassigned.workerId }, siteId: sEast.id },
+    });
+    expect(endedDbAssignment?.active).toBe(false);
+    expect(endedDbAssignment?.status).toBe('ENDED');
+    expect(endedDbAssignment?.endedAt).toBeDefined();
+
+    // Verify site detail active/inactive counts updated
+    const detailAfterEnd = await ctx.http()
+      .get('/api/v1/contractor/sites/SITE-IT4-E/detail')
+      .set(...auth(cEast.token));
+    expect(detailAfterEnd.status).toBe(200);
+    expect(detailAfterEnd.body.stats.activeWorkers).toBe(0);
+    expect(detailAfterEnd.body.stats.inactiveWorkers).toBe(1);
+    expect(detailAfterEnd.body.stats.totalAssigned).toBe(1);
+
+    // Workforce list with status=ENDED
+    const endedWorkforce = await ctx.http()
+      .get('/api/v1/contractor/sites/SITE-IT4-E/workers?status=ENDED')
+      .set(...auth(cEast.token));
+    expect(endedWorkforce.status).toBe(200);
+    expect(endedWorkforce.body.items.length).toBe(1);
+    expect(endedWorkforce.body.items[0].assignmentStatus).toBe('ENDED');
+
+    // Workforce list with status=ACTIVE -> empty
+    const activeWorkforce = await ctx.http()
+      .get('/api/v1/contractor/sites/SITE-IT4-E/workers?status=ACTIVE')
+      .set(...auth(cEast.token));
+    expect(activeWorkforce.status).toBe(200);
+    expect(activeWorkforce.body.items.length).toBe(0);
+
+    // 9. RBAC & Cross-Contractor Isolation:
+    // Rogue contractor cannot view SITE-IT4-E details
+    const rogueDetail = await ctx.http()
+      .get('/api/v1/contractor/sites/SITE-IT4-E/detail')
+      .set(...auth(cRogue.token));
+    expect(rogueDetail.status).toBe(403);
+
+    // Rogue contractor cannot assign workers to SITE-IT4-E
+    const rogueAssign = await ctx.http()
+      .post('/api/v1/contractor/sites/SITE-IT4-E/assign-worker')
+      .set(...auth(cRogue.token))
+      .send({ workerCode: wUnassigned.workerId });
+    expect(rogueAssign.status).toBe(403);
+
+    // Rogue contractor cannot end assignments at SITE-IT4-E
+    const rogueEnd = await ctx.http()
+      .post(`/api/v1/contractor/sites/SITE-IT4-E/workers/${wUnassigned.workerId}/end-assignment`)
+      .set(...auth(cRogue.token));
+    expect(rogueEnd.status).toBe(403);
+  });
 });
