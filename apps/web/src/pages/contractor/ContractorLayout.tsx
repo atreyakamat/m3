@@ -7,6 +7,8 @@ const nav: NavItem[] = [
   { to: '/contractor/workers', label: 'Worker Management' },
   { to: '/contractor/transfers', label: 'Transfer Requests' },
   { to: '/contractor/initiate', label: 'Initiate Transfer' },
+  { to: '/contractor/activity', label: 'Worker Activity' },
+  { to: '/contractor/alerts', label: 'Operational Alerts' },
 ];
 
 export function ContractorLayout() {

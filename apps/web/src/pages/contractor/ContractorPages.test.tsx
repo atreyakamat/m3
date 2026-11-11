@@ -8,6 +8,8 @@ import { ContractorWorkers } from './Workers';
 import { MySites } from './MySites';
 import { ContractorSiteDetail } from './SiteDetail';
 import { Approvals } from './Approvals';
+import { ActivityTimeline } from './ActivityTimeline';
+import { AlertsCenter } from './AlertsCenter';
 
 vi.mock('../../lib/api', () => ({
   api: {
@@ -923,6 +925,206 @@ describe('Contractor Application — Iteration 1 & 2', () => {
           '/contractor/sites/SITE-NORTH/workers/M3-W001/end-assignment',
           { reason: 'Contract completed' },
         );
+      });
+    });
+  });
+
+  describe('Iteration 5: Worker Activity Timeline and Operational Alerts Center', () => {
+    it('renders Activity Timeline with event badges, filters, search, and pagination', async () => {
+      const mockActivityData = {
+        items: [
+          {
+            id: 'act-1',
+            eventType: 'ENTRY_GOA',
+            workerId: 'M3-W001',
+            workerName: 'Ramesh Kumar',
+            siteCode: 'SITE-TEST01',
+            siteName: 'Miramar Heights',
+            timestamp: '2026-11-08T09:00:00.000Z',
+            status: 'COMPLETED',
+            details: 'Arrived from Patna, Bihar to Candolim, Goa',
+          },
+          {
+            id: 'act-2',
+            eventType: 'ASSIGNMENT_STARTED',
+            workerId: 'M3-W001',
+            workerName: 'Ramesh Kumar',
+            siteCode: 'SITE-TEST01',
+            siteName: 'Miramar Heights',
+            timestamp: '2026-11-09T10:00:00.000Z',
+            status: 'ACTIVE',
+            details: 'Assigned to Miramar Heights',
+          },
+          {
+            id: 'act-3',
+            eventType: 'TRANSFER_REQUESTED',
+            workerId: 'M3-W002',
+            workerName: 'Suresh Patel',
+            siteCode: 'SITE-TEST01',
+            siteName: 'Miramar Heights',
+            timestamp: '2026-11-10T11:00:00.000Z',
+            status: 'PENDING_WORKER_RESPONSE',
+            details: 'Transfer to Panaji Residency requested',
+          },
+        ],
+        total: 3,
+        page: 1,
+        pageSize: 15,
+        totalPages: 1,
+      };
+
+      (api.get as any).mockImplementation((url: string) => {
+        if (url.startsWith('/contractor/activity')) {
+          return Promise.resolve(mockActivityData);
+        }
+        if (url.startsWith('/contractor/sites')) {
+          return Promise.resolve({ sites: [{ siteCode: 'SITE-TEST01', name: 'Miramar Heights' }] });
+        }
+        return Promise.reject(new Error(`Unhandled URL: ${url}`));
+      });
+
+      render(
+        <AuthContext.Provider value={mockContractorAuth}>
+          <MemoryRouter initialEntries={['/contractor/activity']}>
+            <Routes>
+              <Route path="/contractor/activity" element={<ActivityTimeline />} />
+            </Routes>
+          </MemoryRouter>
+        </AuthContext.Provider>,
+      );
+
+      // Verify title and description
+      await waitFor(() => {
+        expect(screen.getByText('Worker Activity Timeline')).toBeInTheDocument();
+        expect(screen.getAllByText('Ramesh Kumar').length).toBeGreaterThanOrEqual(1);
+        expect(screen.getByText('Suresh Patel')).toBeInTheDocument();
+        expect(screen.getAllByText(/Entered Goa/i).length).toBeGreaterThanOrEqual(1);
+        expect(screen.getAllByText(/Assigned to Site/i).length).toBeGreaterThanOrEqual(1);
+        expect(screen.getAllByText(/Transfer Requested/i).length).toBeGreaterThanOrEqual(1);
+      });
+
+      // Filter by event type
+      const eventSelect = screen.getByLabelText(/Event Category \/ Type/i);
+      fireEvent.change(eventSelect, { target: { value: 'TRAVEL' } });
+
+      await waitFor(() => {
+        expect(api.get).toHaveBeenCalledWith(
+          expect.stringContaining('type=TRAVEL'),
+        );
+      });
+
+      // Search worker
+      const searchInput = screen.getByPlaceholderText(/Worker name or ID/i);
+      fireEvent.change(searchInput, { target: { value: 'Ramesh' } });
+
+      await waitFor(() => {
+        expect(api.get).toHaveBeenCalledWith(
+          expect.stringContaining('search=Ramesh'),
+        );
+      });
+    });
+
+    it('renders Alerts Center with categories, Health Coordination guidelines, and read actions', async () => {
+      const mockAlertsData = {
+        items: [
+          {
+            id: 'alert-1',
+            type: 'WORKER_FEELING_UNWELL',
+            category: 'HEALTH_REPORT',
+            title: 'Worker Unwell Notice',
+            body: 'Worker Santosh Rawat at Alpha Palm Residency reported feeling unwell. Please follow health coordination guidelines.',
+            read: false,
+            createdAt: '2026-11-10T08:00:00.000Z',
+            workerId: 'M3-W003',
+            workerName: 'Santosh Rawat',
+            siteCode: 'SITE-TEST01',
+            siteName: 'Miramar Heights',
+            actionUrl: null,
+            healthCoordination: {
+              facilityName: 'Candolim Primary Health Centre (PHC)',
+              contactPhone: '0832-2489012',
+              actionNotice: 'Please advise worker to visit Candolim PHC or coordinate with the local surveillance team. Do not attempt unapproved self-medication.',
+            },
+          },
+          {
+            id: 'alert-2',
+            type: 'TRANSFER_APPROVAL_REQUIRED',
+            category: 'TRANSFER_REQUEST',
+            title: 'Transfer Approval Required',
+            body: 'New transfer request initiated for Dinesh Kumar to Alpha Palm Residency.',
+            read: true,
+            createdAt: '2026-11-09T14:00:00.000Z',
+            workerId: 'M3-W004',
+            workerName: 'Dinesh Kumar',
+            siteCode: 'SITE-TEST01',
+            siteName: 'Miramar Heights',
+            actionUrl: '/contractor/transfers',
+          },
+        ],
+        unreadCount: 1,
+        total: 2,
+      };
+
+      (api.get as any).mockImplementation((url: string) => {
+        if (url.startsWith('/contractor/alerts')) {
+          return Promise.resolve(mockAlertsData);
+        }
+        return Promise.reject(new Error(`Unhandled URL: ${url}`));
+      });
+
+      (api.post as any).mockImplementation((url: string) => {
+        if (url === '/contractor/alerts/alert-1/read') {
+          return Promise.resolve({ success: true, read: true });
+        }
+        if (url === '/contractor/alerts/read-all') {
+          return Promise.resolve({ success: true });
+        }
+        return Promise.reject(new Error(`Unhandled POST: ${url}`));
+      });
+
+      render(
+        <AuthContext.Provider value={mockContractorAuth}>
+          <MemoryRouter initialEntries={['/contractor/alerts']}>
+            <Routes>
+              <Route path="/contractor/alerts" element={<AlertsCenter />} />
+            </Routes>
+          </MemoryRouter>
+        </AuthContext.Provider>,
+      );
+
+      // Verify Alerts Center header and unread count badge
+      await waitFor(() => {
+        expect(screen.getByText(/Operational Alerts/i)).toBeInTheDocument();
+        expect(screen.getByText(/1 Unread/i)).toBeInTheDocument();
+        expect(screen.getByText('Worker Unwell Notice')).toBeInTheDocument();
+        expect(screen.getByText('Transfer Approval Required')).toBeInTheDocument();
+      });
+
+      // Strict Medical Privacy Verification:
+      // Verify Health Coordination guidance is shown
+      expect(screen.getByText(/Health Team Coordination/i)).toBeInTheDocument();
+      expect(screen.getByText(/Candolim Primary Health Centre \(PHC\)/i)).toBeInTheDocument();
+      expect(screen.getByText(/0832-2489012/i)).toBeInTheDocument();
+
+      // Clinical data must NEVER appear
+      expect(screen.queryByText(/fever/i)).toBeNull();
+      expect(screen.queryByText(/chills/i)).toBeNull();
+      expect(screen.queryByText(/malaria/i)).toBeNull();
+
+      // Mark single alert as read
+      const markReadBtn = screen.getByRole('button', { name: /Mark as read/i });
+      fireEvent.click(markReadBtn);
+
+      await waitFor(() => {
+        expect(api.post).toHaveBeenCalledWith('/contractor/alerts/alert-1/read');
+      });
+
+      // Mark all alerts as read
+      const markAllReadBtn = screen.getByRole('button', { name: /Mark all as read/i });
+      fireEvent.click(markAllReadBtn);
+
+      await waitFor(() => {
+        expect(api.post).toHaveBeenCalledWith('/contractor/alerts/read-all');
       });
     });
   });

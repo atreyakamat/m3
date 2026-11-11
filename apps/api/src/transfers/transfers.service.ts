@@ -104,6 +104,25 @@ export class TransfersService {
         metadata: { fromSiteId: assignment.siteId, toSiteId: toSite.id },
         tx,
       });
+
+      if (toContractorId) {
+        const destCu = await tx.user.findFirst({
+          where: { contractorId: toContractorId, role: 'CONTRACTOR', active: true },
+        });
+        if (destCu) {
+          await this.notify.notify({
+            audienceUserIds: [destCu.id],
+            type: 'TRANSFER_APPROVAL_REQUIRED',
+            title: 'Transfer Approval Required',
+            body: `Worker transfer requested to ${toSite.name}. Awaiting your destination approval.`,
+            entityType: 'SiteTransferRequest',
+            entityId: created.id,
+            dedupeKey: `trans_dest_req:${created.id}:${destCu.id}`,
+            tx,
+          });
+        }
+      }
+
       return created;
     });
   }
@@ -181,6 +200,25 @@ export class TransfersService {
         metadata: { workerId: worker.id, toSiteId: toSite.id, fromContractorId, toContractorId },
         tx,
       });
+
+      if (fromContractorId && status === 'PENDING_CURRENT_CONTRACTOR') {
+        const fromCu = await tx.user.findFirst({
+          where: { contractorId: fromContractorId, role: 'CONTRACTOR', active: true },
+        });
+        if (fromCu) {
+          await this.notify.notify({
+            audienceUserIds: [fromCu.id],
+            type: 'TRANSFER_RELEASE_REQUIRED',
+            title: 'Worker Release Required',
+            body: `Transfer for ${worker.name} (${worker.workerCode}) to ${toSite.name} requires your release approval.`,
+            entityType: 'SiteTransferRequest',
+            entityId: created.id,
+            dedupeKey: `trans_rel_req:${created.id}:${fromCu.id}`,
+            tx,
+          });
+        }
+      }
+
       return created;
     });
   }
@@ -309,6 +347,86 @@ export class TransfersService {
         dedupeKey: `transfer_decision:${transferId}:${actor}:${nextStatus}`,
         tx,
       });
+
+      // Contractor Alerts for Transfer Stages (Iteration 5)
+      if (nextStatus === 'PENDING_CURRENT_CONTRACTOR' && t.fromContractorId) {
+        const fromCu = await tx.user.findFirst({
+          where: { contractorId: t.fromContractorId, role: 'CONTRACTOR', active: true },
+        });
+        if (fromCu) {
+          await this.notify.notify({
+            audienceUserIds: [fromCu.id],
+            type: 'TRANSFER_RELEASE_REQUIRED',
+            title: 'Worker Release Required',
+            body: `Transfer for worker to destination site requires your release approval.`,
+            entityType: 'SiteTransferRequest',
+            entityId: transferId,
+            dedupeKey: `trans_rel_stage:${transferId}:${fromCu.id}`,
+            tx,
+          });
+        }
+      }
+
+      if (nextStatus === 'ACCEPTED') {
+        const contractorIds = [t.fromContractorId, t.toContractorId].filter(Boolean) as string[];
+        const cus = await tx.user.findMany({
+          where: { contractorId: { in: contractorIds }, role: 'CONTRACTOR', active: true },
+        });
+        for (const cu of cus) {
+          await this.notify.notify({
+            audienceUserIds: [cu.id],
+            type: 'TRANSFER_COMPLETED',
+            title: 'Transfer Completed',
+            body: `Transfer for worker has been successfully completed.`,
+            entityType: 'SiteTransferRequest',
+            entityId: transferId,
+            dedupeKey: `trans_comp:${transferId}:${cu.id}`,
+            tx,
+          });
+        }
+      }
+
+      if (nextStatus === 'REJECTED') {
+        const contractorIds = [t.fromContractorId, t.toContractorId].filter(Boolean) as string[];
+        const cus = await tx.user.findMany({
+          where: { contractorId: { in: contractorIds }, role: 'CONTRACTOR', active: true },
+        });
+        for (const cu of cus) {
+          await this.notify.notify({
+            audienceUserIds: [cu.id],
+            type: 'TRANSFER_REJECTED',
+            title: 'Transfer Rejected',
+            body: `Transfer request was declined by ${actor}.`,
+            entityType: 'SiteTransferRequest',
+            entityId: transferId,
+            dedupeKey: `trans_rej:${transferId}:${actor}:${cu.id}`,
+            tx,
+          });
+        }
+      }
+
+      if (actor === 'worker') {
+        const toContractorId = t.toContractorId ?? t.toSite?.contractorId;
+        if (toContractorId) {
+          const toCu = await tx.user.findFirst({
+            where: { contractorId: toContractorId, role: 'CONTRACTOR', active: true },
+          });
+          if (toCu) {
+            await this.notify.notify({
+              audienceUserIds: [toCu.id],
+              type: 'TRANSFER_WORKER_RESPONSE',
+              title: approve ? 'Worker Accepted Transfer' : 'Worker Declined Transfer',
+              body: approve
+                ? `Worker accepted the transfer request.`
+                : `Worker declined the transfer request.`,
+              entityType: 'SiteTransferRequest',
+              entityId: transferId,
+              dedupeKey: `trans_w_resp:${transferId}:${approve ? 'acc' : 'rej'}:${toCu.id}`,
+              tx,
+            });
+          }
+        }
+      }
       return updated;
     });
     return result;

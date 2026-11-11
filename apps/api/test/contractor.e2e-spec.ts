@@ -1492,4 +1492,286 @@ describe('Contractor Mobile Module APIs (e2e)', () => {
       .set(...auth(cRogue.token));
     expect(rogueEnd.status).toBe(403);
   });
+
+  it('Contractor Iteration 5: Worker Activity Timeline, Operational Alerts, Health Surveillance Coordination, and Strict Privacy', async () => {
+    // 1. Setup contractors and sites
+    const areaId = await createArea(ctx, 'Candolim Surveillance Area IT5');
+    const cAlpha = await createContractor(ctx, { name: 'Alpha Infrastructure Ltd', username: 'c.alpha.it5' });
+    const cBeta = await createContractor(ctx, { name: 'Beta Constructions', username: 'c.beta.it5' });
+
+    const sAlpha = await ctx.prisma.constructionSite.create({
+      data: {
+        siteCode: 'SITE-IT5-A',
+        name: 'Alpha Palm Residency',
+        areaId,
+        address: 'Plot 100 Coastal Highway, Candolim',
+        landmark: 'Near Football Ground',
+        contactPhone: '9822001122',
+        contractorId: cAlpha.contractorId,
+        active: true,
+      },
+    });
+
+    const sBeta = await ctx.prisma.constructionSite.create({
+      data: {
+        siteCode: 'SITE-IT5-B',
+        name: 'Beta Bayfront Towers',
+        areaId,
+        address: 'Plot 200 Marine Drive, Miramar',
+        landmark: 'Near Circle',
+        contactPhone: '9822003344',
+        contractorId: cBeta.contractorId,
+        active: true,
+      },
+    });
+
+    // 2. Register workers
+    const w1 = await registerWorker(ctx, {
+      name: 'Santosh Rawat',
+      phone: '9820550001',
+      pin: '1234',
+    });
+    const w2 = await registerWorker(ctx, {
+      name: 'Dinesh Kumar',
+      phone: '9820550002',
+      pin: '1234',
+    });
+
+    // Worker 1 direct assignment to Alpha site
+    const assignRes1 = await ctx.http()
+      .post('/api/v1/contractor/sites/SITE-IT5-A/assign-worker')
+      .set(...auth(cAlpha.token))
+      .send({ workerCode: w1.workerId, note: 'Deployment for Foundation phase' });
+    expect(assignRes1.status).toBe(201);
+
+    // Worker 2 direct assignment to Alpha site
+    const assignRes2 = await ctx.http()
+      .post('/api/v1/contractor/sites/SITE-IT5-A/assign-worker')
+      .set(...auth(cAlpha.token))
+      .send({ workerCode: w2.workerId, note: 'Deployment for Framing phase' });
+    expect(assignRes2.status).toBe(201);
+
+    // 3. Worker Travel Events:
+    // w1 entered Goa
+    const w1Record = await ctx.prisma.worker.findUnique({ where: { workerCode: w1.workerId } });
+    await ctx.prisma.travelRecord.create({
+      data: {
+        workerId: w1Record!.id,
+        planningTravel: false,
+        direction: 'ENTERING_GOA',
+        originTown: 'Rourkela',
+        originState: 'Odisha',
+        destination: 'Candolim',
+        state: 'Goa',
+        departureDate: new Date('2026-11-01T08:00:00.000Z'),
+        status: 'CONFIRMED',
+        updatedAt: new Date(),
+      },
+    });
+
+    // w2 exited Goa
+    const w2Record = await ctx.prisma.worker.findUnique({ where: { workerCode: w2.workerId } });
+    await ctx.prisma.travelRecord.create({
+      data: {
+        workerId: w2Record!.id,
+        planningTravel: true,
+        direction: 'LEAVING_GOA',
+        destination: 'Ranchi',
+        state: 'Jharkhand',
+        departureDate: new Date('2026-11-05T09:00:00.000Z'),
+        returnDate: new Date('2026-11-25T18:00:00.000Z'),
+        status: 'SUBMITTED',
+        updatedAt: new Date(),
+      },
+    });
+
+    // 4. End assignment for worker 2
+    const endAssignRes = await ctx.http()
+      .post(`/api/v1/contractor/sites/SITE-IT5-A/workers/${w2.workerId}/end-assignment`)
+      .set(...auth(cAlpha.token))
+      .send({ reason: 'Framing phase complete, worker released' });
+    expect(endAssignRes.status).toBe(201);
+
+    // 5. Worker Transfer Workflow:
+    // Transfer w2 to Beta site (initiated by contractor Beta)
+    const initTransferRes = await ctx.http()
+      .post('/api/v1/contractor/transfers/initiate')
+      .set(...auth(cBeta.token))
+      .send({
+        workerId: w2.workerId,
+        toSiteId: 'SITE-IT5-B',
+        note: 'Requesting worker for electrical wiring',
+      });
+    expect(initTransferRes.status).toBe(201);
+    const transferId = initTransferRes.body.id;
+
+    // Worker accepts transfer
+    const wAccept = await ctx.http()
+      .post(`/api/v1/transfers/${transferId}/worker/accept`)
+      .set(...auth(w2.token))
+      .send({});
+    expect(wAccept.status).toBe(201);
+
+    // 6. Test Worker Activity Timeline API (`GET /contractor/activity`):
+    const activityRes = await ctx.http()
+      .get('/api/v1/contractor/activity')
+      .set(...auth(cAlpha.token));
+    expect(activityRes.status).toBe(200);
+    expect(activityRes.body.items).toBeDefined();
+    expect(activityRes.body.items.length).toBeGreaterThanOrEqual(4);
+
+    // Verify presence of all expected event types
+    const eventTypes = activityRes.body.items.map((e: any) => e.eventType);
+    expect(eventTypes).toContain('ASSIGNMENT_STARTED');
+    expect(eventTypes).toContain('ASSIGNMENT_ENDED');
+    expect(eventTypes).toContain('ENTRY_GOA');
+    expect(eventTypes).toContain('EXIT_GOA');
+
+    // Verify event item format
+    const startEvent = activityRes.body.items.find((e: any) => e.eventType === 'ASSIGNMENT_STARTED');
+    expect(startEvent.workerName).toBeDefined();
+    expect(startEvent.workerId).toBeDefined();
+    expect(startEvent.siteCode).toBe('SITE-IT5-A');
+    expect(startEvent.siteName).toBe('Alpha Palm Residency');
+    expect(startEvent.timestamp).toBeDefined();
+    expect(startEvent.status).toBeDefined();
+
+    // Test Event-Type Filter: type=TRAVEL
+    const travelActivity = await ctx.http()
+      .get('/api/v1/contractor/activity?type=TRAVEL')
+      .set(...auth(cAlpha.token));
+    expect(travelActivity.status).toBe(200);
+    expect(travelActivity.body.items.every((e: any) => ['ENTRY_GOA', 'EXIT_GOA'].includes(e.eventType))).toBe(true);
+
+    // Test Worker Search Filter: search=Santosh
+    const searchActivity = await ctx.http()
+      .get('/api/v1/contractor/activity?search=Santosh')
+      .set(...auth(cAlpha.token));
+    expect(searchActivity.status).toBe(200);
+    expect(searchActivity.body.items.length).toBeGreaterThanOrEqual(2);
+    expect(searchActivity.body.items.every((e: any) => e.workerName.includes('Santosh'))).toBe(true);
+
+    // Test Pagination: page=1&pageSize=2
+    const pagedActivity = await ctx.http()
+      .get('/api/v1/contractor/activity?page=1&pageSize=2')
+      .set(...auth(cAlpha.token));
+    expect(pagedActivity.status).toBe(200);
+    expect(pagedActivity.body.items.length).toBe(2);
+    expect(pagedActivity.body.pageSize).toBe(2);
+    expect(pagedActivity.body.totalPages).toBeGreaterThanOrEqual(2);
+
+    // 7. Not Feeling Well (Symptom Report) Alert Generation:
+    // Worker 1 (actively assigned to Alpha Palm Residency) submits a symptom report
+    const symptomRes = await ctx.http()
+      .post('/api/v1/records/me/symptom-reports')
+      .set(...auth(w1.token))
+      .send({
+        symptoms: ['FEVER', 'CHILLS', 'HEADACHE'],
+        note: 'High fever and severe body pain since morning',
+        voiceData: 'base64audio...',
+        idempotencyKey: '00000000-0000-0000-0000-000000000001',
+      });
+    expect(symptomRes.status).toBe(201);
+    const reportId = symptomRes.body.id;
+
+    // Verify contractor Alpha received the operational alert
+    const alertsRes = await ctx.http()
+      .get('/api/v1/contractor/alerts?category=HEALTH_REPORT')
+      .set(...auth(cAlpha.token));
+    expect(alertsRes.status).toBe(200);
+    expect(alertsRes.body.items.length).toBeGreaterThanOrEqual(1);
+
+    const healthAlert = alertsRes.body.items.find((a: any) => a.entityId === reportId);
+    expect(healthAlert).toBeDefined();
+    expect(healthAlert.category).toBe('HEALTH_REPORT');
+    expect(healthAlert.title).toMatch(/Worker Unwell/i);
+    expect(healthAlert.workerId).toBe(w1.workerId);
+    expect(healthAlert.workerName).toBe('Santosh Rawat');
+    expect(healthAlert.siteCode).toBe('SITE-IT5-A');
+    expect(healthAlert.siteName).toBe('Alpha Palm Residency');
+    expect(healthAlert.read).toBe(false);
+
+    // STRICT MEDICAL PRIVACY VERIFICATION:
+    // Operational notice must NEVER expose cleartext symptoms, voice, or clinical diagnosis
+    expect(healthAlert.body).not.toMatch(/FEVER|CHILLS|HEADACHE/i);
+    expect(healthAlert.body).not.toMatch(/severe body pain/i);
+    expect(healthAlert.body).not.toMatch(/base64audio/i);
+    expect((healthAlert as any).symptoms).toBeUndefined();
+    expect((healthAlert as any).voiceData).toBeUndefined();
+    expect((healthAlert as any).note).toBeUndefined();
+    expect((healthAlert as any).malariaStatus).toBeUndefined();
+
+    // Health coordination information provided for local surveillance team
+    expect(healthAlert.healthCoordination).toBeDefined();
+    expect(healthAlert.healthCoordination.contactPhone).toBeDefined();
+    expect(healthAlert.healthCoordination.actionNotice).toMatch(/surveillance team/i);
+
+    // Deduplication check: Replaying the report does not create duplicate alerts
+    const repeatSymptomRes = await ctx.http()
+      .post('/api/v1/records/me/symptom-reports')
+      .set(...auth(w1.token))
+      .send({
+        symptoms: ['FEVER', 'CHILLS', 'HEADACHE'],
+        note: 'High fever and severe body pain since morning',
+        idempotencyKey: '00000000-0000-0000-0000-000000000001',
+      });
+    expect(repeatSymptomRes.status).toBe(201);
+
+    const alertsAfterRepeat = await ctx.http()
+      .get('/api/v1/contractor/alerts?category=HEALTH_REPORT')
+      .set(...auth(cAlpha.token));
+    const matchingAlerts = alertsAfterRepeat.body.items.filter((a: any) => a.entityId === reportId);
+    expect(matchingAlerts.length).toBe(1); // Deduped
+
+    // 8. Transfer and Assignment Operational Alerts:
+    // Contractor Beta should have received TRANSFER_WORKER_RESPONSE (worker accepted transfer)
+    const betaAlerts = await ctx.http()
+      .get('/api/v1/contractor/alerts?category=TRANSFER_REQUEST')
+      .set(...auth(cBeta.token));
+    expect(betaAlerts.status).toBe(200);
+    expect(betaAlerts.body.items.length).toBeGreaterThanOrEqual(1);
+
+    // 9. Alert Management: Read / Unread Status and Mark as Read:
+    expect(alertsRes.body.unreadCount).toBeGreaterThanOrEqual(1);
+
+    // Mark single alert as read
+    const markReadRes = await ctx.http()
+      .post(`/api/v1/contractor/alerts/${healthAlert.id}/read`)
+      .set(...auth(cAlpha.token));
+    expect(markReadRes.status).toBe(201);
+    expect(markReadRes.body.read).toBe(true);
+
+    // Query unread alerts only
+    const unreadAlerts = await ctx.http()
+      .get('/api/v1/contractor/alerts?status=UNREAD')
+      .set(...auth(cAlpha.token));
+    expect(unreadAlerts.status).toBe(200);
+    const readItem = unreadAlerts.body.items.find((a: any) => a.id === healthAlert.id);
+    expect(readItem).toBeUndefined();
+
+    // Mark all as read
+    const markAllRead = await ctx.http()
+      .post('/api/v1/contractor/alerts/read-all')
+      .set(...auth(cAlpha.token));
+    expect(markAllRead.status).toBe(201);
+    expect(markAllRead.body.success).toBe(true);
+
+    const unreadAfterAll = await ctx.http()
+      .get('/api/v1/contractor/alerts?status=UNREAD')
+      .set(...auth(cAlpha.token));
+    expect(unreadAfterAll.body.unreadCount).toBe(0);
+
+    // 10. Privacy & Cross-Contractor Isolation:
+    // Contractor Beta cannot read or acknowledge Contractor Alpha's alerts
+    const crossRead = await ctx.http()
+      .post(`/api/v1/contractor/alerts/${healthAlert.id}/read`)
+      .set(...auth(cBeta.token));
+    expect(crossRead.status).toBe(403);
+
+    // Contractor Beta cannot see Contractor Alpha's worker activity
+    const betaActivity = await ctx.http()
+      .get('/api/v1/contractor/activity?siteCode=SITE-IT5-A')
+      .set(...auth(cBeta.token));
+    expect(betaActivity.body.items.length).toBe(0);
+  });
 });

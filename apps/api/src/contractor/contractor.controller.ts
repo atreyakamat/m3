@@ -292,4 +292,69 @@ export class ContractorController {
   ) {
     return this.contractor.initiateContractorTransfer(this.contractorIdOf(user), body);
   }
+
+  // ---- Iteration 5: Worker Activity Timeline & Operational Alerts --------------
+
+  @Get('alerts')
+  @ApiOperation({ summary: 'Contractor operational alerts with status/category filtering and health coordination' })
+  getAlerts(
+    @CurrentUser() user: RequestUser,
+    @Query('status') status?: string,
+    @Query('category') category?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    return this.contractor.getContractorAlerts(this.contractorIdOf(user), user.userId, {
+      status,
+      category,
+      page,
+      pageSize,
+    });
+  }
+
+  @Post('alerts/:id/read')
+  @ApiOperation({ summary: 'Mark an operational alert as read' })
+  readAlert(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+  ) {
+    return this.contractor.ackContractorAlert(this.contractorIdOf(user), user.userId, id);
+  }
+
+  @Post('alerts/read-all')
+  @ApiOperation({ summary: 'Mark all contractor alerts as read' })
+  readAllAlerts(
+    @CurrentUser() user: RequestUser,
+  ) {
+    return this.contractor.ackAllContractorAlerts(this.contractorIdOf(user), user.userId);
+  }
+
+  @Get('activity')
+  @ApiOperation({ summary: 'Worker activity timeline for contractor sites and workforce' })
+  getActivity(
+    @CurrentUser() user: RequestUser,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('type') type?: string,
+    @Query('eventType') eventType?: string,
+    @Query('siteCode') siteCode?: string,
+    @Query('search') search?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    return this.contractor.getContractorActivity(this.contractorIdOf(user), {
+      startDate,
+      endDate,
+      from,
+      to,
+      type,
+      eventType,
+      siteCode,
+      search,
+      page,
+      pageSize,
+    });
+  }
 }

@@ -142,10 +142,26 @@ export class RecordsService {
     if (shouldNotify) {
       const worker = await this.prisma.worker.findUnique({
         where: { id: workerId },
-        select: { workerCode: true },
+        select: {
+          id: true,
+          workerCode: true,
+          name: true,
+          assignments: {
+            where: { active: true },
+            include: {
+              site: {
+                include: {
+                  contractor: { include: { user: true } },
+                  contractorSites: { include: { contractor: { include: { user: true } } } },
+                },
+              },
+              contractor: { include: { user: true } },
+            },
+          },
+        },
       });
 
-      // Generic notification message (Phase 8: Do not expose cleartext clinical symptoms in notification previews)
+      // Generic notification message to ADMIN (Phase 8: Do not expose cleartext clinical symptoms)
       await this.notification.notify({
         audienceRoles: [Role.ADMIN],
         type: 'WORKER_FEELING_UNWELL',
@@ -155,6 +171,39 @@ export class RecordsService {
         entityId: report.id,
         dedupeKey: `unwell:${report.id}:admin`,
       });
+
+      // Operational Alert to Authorised Contractor(s) (Iteration 5)
+      // Zero clinical details: no symptoms, no voice notes, no diagnoses, no household data
+      const activeAssignment = worker?.assignments?.[0];
+      if (activeAssignment) {
+        const contractorUsers: Array<{ id: string }> = [];
+        if (activeAssignment.contractor?.user?.active) {
+          contractorUsers.push(activeAssignment.contractor.user);
+        }
+        if (
+          activeAssignment.site.contractor?.user?.active &&
+          !contractorUsers.some((u) => u.id === activeAssignment.site.contractor?.user?.id)
+        ) {
+          contractorUsers.push(activeAssignment.site.contractor.user);
+        }
+        for (const cs of activeAssignment.site.contractorSites) {
+          if (cs.contractor?.user?.active && !contractorUsers.some((u) => u.id === cs.contractor?.user?.id)) {
+            contractorUsers.push(cs.contractor.user);
+          }
+        }
+
+        for (const cu of contractorUsers) {
+          await this.notification.notify({
+            audienceUserIds: [cu.id],
+            type: 'WORKER_FEELING_UNWELL',
+            title: 'Health Alert: Worker Unwell',
+            body: `Worker ${worker.name} (${worker.workerCode}) at ${activeAssignment.site.name} reported feeling unwell. Please coordinate with local health surveillance team.`,
+            entityType: 'SymptomReport',
+            entityId: report.id,
+            dedupeKey: `unwell_contractor:${report.id}:${cu.id}`,
+          });
+        }
+      }
     }
 
     // Check translation if note contains non-English text

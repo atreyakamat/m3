@@ -2107,6 +2107,22 @@ export class ContractorService {
         tx,
       });
 
+      const contractorUser = await tx.user.findFirst({
+        where: { contractorId, role: 'CONTRACTOR', active: true },
+      });
+      if (contractorUser) {
+        await this.notify.notify({
+          audienceUserIds: [contractorUser.id],
+          type: 'SITE_ASSIGNMENT',
+          title: 'Worker Assigned to Site',
+          body: `Worker ${worker.name} (${worker.workerCode}) was assigned to ${site.name}.`,
+          entityType: 'WorkerSiteAssignment',
+          entityId: assignment.id,
+          dedupeKey: `c_direct_assign:${assignment.id}:${contractorUser.id}`,
+          tx,
+        });
+      }
+
       return {
         success: true,
         assignmentId: assignment.id,
@@ -2211,6 +2227,22 @@ export class ContractorService {
         tx,
       });
 
+      const contractorUser = await tx.user.findFirst({
+        where: { contractorId, role: 'CONTRACTOR', active: true },
+      });
+      if (contractorUser) {
+        await this.notify.notify({
+          audienceUserIds: [contractorUser.id],
+          type: 'ASSIGNMENT_ENDED',
+          title: 'Worker Assignment Ended',
+          body: `Workforce assignment for ${worker.name} (${worker.workerCode}) at ${site.name} was marked ended.`,
+          entityType: 'WorkerSiteAssignment',
+          entityId: activeAssignment.id,
+          dedupeKey: `c_assign_ended:${activeAssignment.id}:${contractorUser.id}`,
+          tx,
+        });
+      }
+
       return {
         success: true,
         assignmentId: activeAssignment.id,
@@ -2218,5 +2250,545 @@ export class ContractorService {
         endedAt: now.toISOString(),
       };
     });
+  }
+
+  /**
+   * Iteration 5: Operational Alerts for Authenticated Contractor
+   */
+  async getContractorAlerts(
+    contractorId: string,
+    userId: string,
+    query: {
+      status?: string;
+      category?: string;
+      page?: string;
+      pageSize?: string;
+    },
+  ) {
+    const params = parsePage(query.page, query.pageSize);
+    const sites = await this.getContractorSites(contractorId);
+    const siteIds = sites.map((s) => s.id);
+
+    const statusFilter = (query.status ?? 'ALL').toUpperCase();
+    const categoryFilter = (query.category ?? 'ALL').toUpperCase();
+
+    // Query notifications directed specifically to this contractor user
+    const where: Prisma.NotificationWhereInput = {
+      audienceUserId: userId,
+      ...(statusFilter === 'UNREAD' ? { readAt: null } : statusFilter === 'READ' ? { readAt: { not: null } } : {}),
+    };
+
+    const [rows, unreadCount] = await Promise.all([
+      this.prisma.notification.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.notification.count({
+        where: {
+          audienceUserId: userId,
+          readAt: null,
+        },
+      }),
+    ]);
+
+    // Pre-load reference entities where applicable
+    const symptomReportIds = rows.filter((r) => r.entityType === 'SymptomReport' && r.entityId).map((r) => r.entityId as string);
+    const transferIds = rows.filter((r) => r.entityType === 'SiteTransferRequest' && r.entityId).map((r) => r.entityId as string);
+    const assignmentIds = rows.filter((r) => r.entityType === 'WorkerSiteAssignment' && r.entityId).map((r) => r.entityId as string);
+
+    const [symptomReports, transfersList, assignmentsList, defaultFacility] = await Promise.all([
+      symptomReportIds.length > 0
+        ? this.prisma.symptomReport.findMany({
+            where: { id: { in: symptomReportIds } },
+            select: {
+              id: true,
+              worker: {
+                select: {
+                  workerCode: true,
+                  name: true,
+                  assignments: {
+                    where: { active: true },
+                    include: { site: true },
+                  },
+                },
+              },
+            },
+          })
+        : [],
+      transferIds.length > 0
+        ? this.prisma.siteTransferRequest.findMany({
+            where: { id: { in: transferIds } },
+            select: {
+              id: true,
+              worker: { select: { workerCode: true, name: true } },
+              fromSite: { select: { siteCode: true, name: true } },
+              toSite: { select: { siteCode: true, name: true } },
+            },
+          })
+        : [],
+      assignmentIds.length > 0
+        ? this.prisma.workerSiteAssignment.findMany({
+            where: { id: { in: assignmentIds } },
+            select: {
+              id: true,
+              worker: { select: { workerCode: true, name: true } },
+              site: { select: { siteCode: true, name: true } },
+            },
+          })
+        : [],
+      this.prisma.facility.findFirst({
+        where: { active: true },
+      }),
+    ]);
+
+    const symptomReportMap = new Map(symptomReports.map((s) => [s.id, s]));
+    const transferMap = new Map(transfersList.map((t) => [t.id, t]));
+    const assignmentMap = new Map(assignmentsList.map((a) => [a.id, a]));
+
+    const mapped: Array<{
+      id: string;
+      type: string;
+      category: 'HEALTH_REPORT' | 'TRANSFER_REQUEST' | 'WORKFORCE_ASSIGNMENT' | 'TRAVEL_SURVEILLANCE' | 'GENERAL';
+      title: string;
+      body: string;
+      entityType: string | null;
+      entityId: string | null;
+      workerId: string | null;
+      workerName: string | null;
+      siteCode: string | null;
+      siteName: string | null;
+      read: boolean;
+      readAt: string | null;
+      createdAt: string;
+      actionUrl: string;
+      healthCoordination?: {
+        facilityName: string;
+        facilityCode: string;
+        contactPhone: string;
+        taluka: string;
+        actionNotice: string;
+      };
+    }> = [];
+
+    for (const n of rows) {
+      let category: 'HEALTH_REPORT' | 'TRANSFER_REQUEST' | 'WORKFORCE_ASSIGNMENT' | 'TRAVEL_SURVEILLANCE' | 'GENERAL' = 'GENERAL';
+      if (n.type === 'WORKER_FEELING_UNWELL' || n.entityType === 'SymptomReport') {
+        category = 'HEALTH_REPORT';
+      } else if (n.type.startsWith('TRANSFER') || n.entityType === 'SiteTransferRequest') {
+        category = 'TRANSFER_REQUEST';
+      } else if (n.type === 'SITE_ASSIGNMENT' || n.type === 'ASSIGNMENT_ENDED' || n.entityType === 'WorkerSiteAssignment') {
+        category = 'WORKFORCE_ASSIGNMENT';
+      } else if (n.type.includes('TRAVEL') || n.entityType === 'TravelRecord') {
+        category = 'TRAVEL_SURVEILLANCE';
+      }
+
+      if (categoryFilter !== 'ALL' && category !== categoryFilter) {
+        continue;
+      }
+
+      let workerId: string | null = null;
+      let workerName: string | null = null;
+      let siteCode: string | null = null;
+      let siteName: string | null = null;
+      let actionUrl = '/contractor';
+      let healthCoordination: any = undefined;
+
+      if (n.entityType === 'SymptomReport' && n.entityId) {
+        const sr = symptomReportMap.get(n.entityId);
+        if (sr) {
+          workerId = sr.worker.workerCode;
+          workerName = sr.worker.name;
+          const activeAss = sr.worker.assignments[0];
+          if (activeAss) {
+            siteCode = activeAss.site.siteCode;
+            siteName = activeAss.site.name;
+          }
+        }
+        actionUrl = siteCode ? `/contractor/sites/${siteCode}` : '/contractor/workers';
+        healthCoordination = {
+          facilityName: defaultFacility?.name ?? 'Candolim Primary Health Centre (PHC)',
+          facilityCode: defaultFacility?.facilityCode ?? 'PHC-CAN-01',
+          contactPhone: defaultFacility?.contactPhone ?? '0832-2489022',
+          taluka: defaultFacility?.taluka ?? 'Bardez',
+          actionNotice: 'Coordinate clinical triage and malaria testing with the local health surveillance team. Operational notice only (not a diagnosis).',
+        };
+      } else if (n.entityType === 'SiteTransferRequest' && n.entityId) {
+        const tr = transferMap.get(n.entityId);
+        if (tr) {
+          workerId = tr.worker.workerCode;
+          workerName = tr.worker.name;
+          siteCode = tr.toSite?.siteCode ?? tr.fromSite?.siteCode ?? null;
+          siteName = tr.toSite?.name ?? tr.fromSite?.name ?? null;
+        }
+        actionUrl = '/contractor/transfers';
+      } else if (n.entityType === 'WorkerSiteAssignment' && n.entityId) {
+        const ass = assignmentMap.get(n.entityId);
+        if (ass) {
+          workerId = ass.worker.workerCode;
+          workerName = ass.worker.name;
+          siteCode = ass.site.siteCode;
+          siteName = ass.site.name;
+        }
+        actionUrl = siteCode ? `/contractor/sites/${siteCode}` : '/contractor/workers';
+      } else if (n.entityType === 'TravelRecord') {
+        actionUrl = '/contractor/workers';
+      }
+
+      mapped.push({
+        id: n.id,
+        type: n.type,
+        category,
+        title: n.title,
+        body: n.body,
+        entityType: n.entityType,
+        entityId: n.entityId,
+        workerId,
+        workerName,
+        siteCode,
+        siteName,
+        read: n.readAt !== null,
+        readAt: n.readAt ? n.readAt.toISOString() : null,
+        createdAt: n.createdAt.toISOString(),
+        actionUrl,
+        healthCoordination,
+      });
+    }
+
+    const filteredTotal = mapped.length;
+    const items = mapped.slice(params.skip, params.skip + params.take);
+
+    return {
+      items,
+      total: filteredTotal,
+      unreadCount,
+      page: params.page,
+      pageSize: params.pageSize,
+      totalPages: Math.ceil(filteredTotal / params.pageSize) || 1,
+    };
+  }
+
+  /**
+   * Iteration 5: Mark single contractor alert as read
+   */
+  async ackContractorAlert(contractorId: string, userId: string, alertId: string) {
+    const notif = await this.prisma.notification.findUnique({
+      where: { id: alertId },
+    });
+    if (!notif) throw new NotFoundException('Alert not found');
+    if (notif.audienceUserId && notif.audienceUserId !== userId) {
+      throw new ForbiddenException('You are not authorized to manage this alert');
+    }
+    await this.prisma.notification.update({
+      where: { id: alertId },
+      data: { readAt: new Date() },
+    });
+    return { id: alertId, read: true };
+  }
+
+  /**
+   * Iteration 5: Mark all unread contractor alerts as read
+   */
+  async ackAllContractorAlerts(contractorId: string, userId: string) {
+    const updated = await this.prisma.notification.updateMany({
+      where: {
+        audienceUserId: userId,
+        readAt: null,
+      },
+      data: { readAt: new Date() },
+    });
+    return { success: true, count: updated.count };
+  }
+
+  /**
+   * Iteration 5: Worker Activity Timeline for Authenticated Contractor
+   */
+  async getContractorActivity(
+    contractorId: string,
+    query: {
+      startDate?: string;
+      endDate?: string;
+      from?: string;
+      to?: string;
+      type?: string;
+      eventType?: string;
+      siteCode?: string;
+      search?: string;
+      page?: string;
+      pageSize?: string;
+    },
+  ) {
+    const params = parsePage(query.page, query.pageSize);
+    const sites = await this.getContractorSites(contractorId);
+    const siteIds = sites.map((s) => s.id);
+
+    const fromDateStr = query.startDate || query.from;
+    const toDateStr = query.endDate || query.to;
+    const fromDate = fromDateStr ? new Date(fromDateStr) : null;
+    const toDate = toDateStr ? new Date(toDateStr) : null;
+    if (toDate && toDateStr && toDateStr.length <= 10) {
+      toDate.setUTCHours(23, 59, 59, 999);
+    }
+
+    const typeFilter = (query.eventType || query.type || 'ALL').toUpperCase();
+    const siteCodeFilter = query.siteCode && query.siteCode !== 'ALL' ? query.siteCode : null;
+    const searchFilter = query.search?.trim().toLowerCase();
+
+    // 1. Fetch site assignments (Started and Ended events)
+    const assignments = await this.prisma.workerSiteAssignment.findMany({
+      where: {
+        siteId: { in: siteIds },
+      },
+      include: {
+        worker: { select: { id: true, workerCode: true, name: true, phone: true } },
+        site: { select: { id: true, siteCode: true, name: true } },
+      },
+      orderBy: { startedAt: 'desc' },
+    });
+
+    const events: Array<{
+      id: string;
+      eventType: string;
+      title: string;
+      description: string;
+      timestamp: string;
+      workerId: string;
+      workerName: string;
+      siteCode: string | null;
+      siteName: string | null;
+      status: string;
+      details: any;
+    }> = [];
+
+    for (const a of assignments) {
+      // Event: ASSIGNMENT_STARTED
+      events.push({
+        id: `act-assign-start-${a.id}`,
+        eventType: 'ASSIGNMENT_STARTED',
+        title: 'Worker Assigned to Site',
+        description: `${a.worker.name} (${a.worker.workerCode}) assigned to workforce at ${a.site.name}`,
+        timestamp: a.startedAt.toISOString(),
+        workerId: a.worker.workerCode,
+        workerName: a.worker.name,
+        siteCode: a.site.siteCode,
+        siteName: a.site.name,
+        status: a.status ?? (a.active ? 'ACTIVE' : 'ENDED'),
+        details: { assignmentId: a.id },
+      });
+
+      // Event: ASSIGNMENT_ENDED
+      if (a.status === 'ENDED' || a.endedAt || a.active === false) {
+        events.push({
+          id: `act-assign-end-${a.id}`,
+          eventType: 'ASSIGNMENT_ENDED',
+          title: 'Worker Assignment Ended',
+          description: `Workforce assignment for ${a.worker.name} (${a.worker.workerCode}) at ${a.site.name} has ended`,
+          timestamp: (a.endedAt ?? a.startedAt).toISOString(),
+          workerId: a.worker.workerCode,
+          workerName: a.worker.name,
+          siteCode: a.site.siteCode,
+          siteName: a.site.name,
+          status: 'ENDED',
+          details: { assignmentId: a.id },
+        });
+      }
+    }
+
+    // 2. Fetch Travels for assigned workers
+    const assignedWorkerIds = Array.from(new Set(assignments.map((a) => a.workerId)));
+    if (assignedWorkerIds.length > 0) {
+      const travels = await this.prisma.travelRecord.findMany({
+        where: {
+          workerId: { in: assignedWorkerIds },
+        },
+        include: {
+          worker: {
+            select: {
+              id: true,
+              workerCode: true,
+              name: true,
+              assignments: {
+                where: { active: true },
+                include: { site: true },
+              },
+            },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      for (const t of travels) {
+        const isEntry = t.direction === 'ENTERING_GOA';
+        const activeSite = t.worker.assignments[0]?.site;
+        const eventType = isEntry ? 'ENTRY_GOA' : 'EXIT_GOA';
+        const title = isEntry ? 'Worker Entered Goa' : 'Worker Exited Goa';
+        const description = isEntry
+          ? `${t.worker.name} (${t.worker.workerCode}) arrived in Goa from ${t.originTown || t.originState || 'out of state'}`
+          : `${t.worker.name} (${t.worker.workerCode}) departed Goa for ${t.destination || t.state || 'hometown'}`;
+
+        events.push({
+          id: `act-travel-${t.id}`,
+          eventType,
+          title,
+          description,
+          timestamp: (t.departureDate ?? t.createdAt).toISOString(),
+          workerId: t.worker.workerCode,
+          workerName: t.worker.name,
+          siteCode: activeSite?.siteCode ?? null,
+          siteName: activeSite?.name ?? null,
+          status: t.status,
+          details: {
+            direction: t.direction,
+            route: isEntry
+              ? [t.originTown, t.originState].filter(Boolean).join(', ') || 'Out of state'
+              : [t.destination, t.state].filter(Boolean).join(', ') || 'Hometown',
+          },
+        });
+      }
+    }
+
+    // 3. Fetch Transfers involving contractor
+    const transfers = await this.prisma.siteTransferRequest.findMany({
+      where: {
+        OR: [
+          { fromContractorId: contractorId },
+          { toContractorId: contractorId },
+          { fromSiteId: { in: siteIds } },
+          { toSiteId: { in: siteIds } },
+        ],
+      },
+      include: {
+        worker: { select: { id: true, workerCode: true, name: true } },
+        fromSite: { select: { id: true, siteCode: true, name: true } },
+        toSite: { select: { id: true, siteCode: true, name: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    for (const tr of transfers) {
+      // Event: TRANSFER_REQUESTED
+      events.push({
+        id: `act-trans-req-${tr.id}`,
+        eventType: 'TRANSFER_REQUESTED',
+        title: 'Transfer Requested',
+        description: `Transfer requested for ${tr.worker.name} (${tr.worker.workerCode}) from ${tr.fromSite?.name ?? 'Site'} to ${tr.toSite.name}`,
+        timestamp: tr.createdAt.toISOString(),
+        workerId: tr.worker.workerCode,
+        workerName: tr.worker.name,
+        siteCode: tr.toSite.siteCode,
+        siteName: tr.toSite.name,
+        status: tr.status,
+        details: { transferId: tr.id, fromSite: tr.fromSite?.name, toSite: tr.toSite.name },
+      });
+
+      // Event: TRANSFER_WORKER_RESPONSE
+      if (tr.workerDecisionAt) {
+        events.push({
+          id: `act-trans-wresp-${tr.id}`,
+          eventType: 'TRANSFER_WORKER_RESPONSE',
+          title: `Worker ${tr.workerDecision === 'APPROVED' ? 'Accepted' : 'Declined'} Transfer`,
+          description: `${tr.worker.name} ${tr.workerDecision === 'APPROVED' ? 'accepted' : 'declined'} transfer to ${tr.toSite.name}`,
+          timestamp: tr.workerDecisionAt.toISOString(),
+          workerId: tr.worker.workerCode,
+          workerName: tr.worker.name,
+          siteCode: tr.toSite.siteCode,
+          siteName: tr.toSite.name,
+          status: tr.workerDecision ?? 'PENDING',
+          details: { transferId: tr.id },
+        });
+      }
+
+      // Event: Current contractor decision
+      if (tr.fromContractorDecisionAt) {
+        events.push({
+          id: `act-trans-fresp-${tr.id}`,
+          eventType: tr.fromContractorDecision === 'APPROVED' ? 'TRANSFER_APPROVED' : 'TRANSFER_REJECTED',
+          title: `Transfer ${tr.fromContractorDecision === 'APPROVED' ? 'Released' : 'Declined'} by Current Contractor`,
+          description: `Current contractor ${tr.fromContractorDecision === 'APPROVED' ? 'approved release' : 'rejected'} transfer for ${tr.worker.name}`,
+          timestamp: tr.fromContractorDecisionAt.toISOString(),
+          workerId: tr.worker.workerCode,
+          workerName: tr.worker.name,
+          siteCode: tr.fromSite?.siteCode ?? tr.toSite.siteCode,
+          siteName: tr.fromSite?.name ?? tr.toSite.name,
+          status: tr.fromContractorDecision ?? 'PENDING',
+          details: { transferId: tr.id },
+        });
+      }
+
+      // Event: Destination contractor decision
+      if (tr.toContractorDecisionAt) {
+        events.push({
+          id: `act-trans-tresp-${tr.id}`,
+          eventType: tr.toContractorDecision === 'APPROVED' ? 'TRANSFER_APPROVED' : 'TRANSFER_REJECTED',
+          title: `Transfer ${tr.toContractorDecision === 'APPROVED' ? 'Approved' : 'Declined'} by Destination Contractor`,
+          description: `Destination contractor ${tr.toContractorDecision === 'APPROVED' ? 'approved' : 'rejected'} transfer for ${tr.worker.name}`,
+          timestamp: tr.toContractorDecisionAt.toISOString(),
+          workerId: tr.worker.workerCode,
+          workerName: tr.worker.name,
+          siteCode: tr.toSite.siteCode,
+          siteName: tr.toSite.name,
+          status: tr.toContractorDecision ?? 'PENDING',
+          details: { transferId: tr.id },
+        });
+      }
+
+      // Event: TRANSFER_COMPLETED
+      if (tr.status === 'ACCEPTED' || tr.effectiveAt) {
+        events.push({
+          id: `act-trans-comp-${tr.id}`,
+          eventType: 'TRANSFER_COMPLETED',
+          title: 'Transfer Completed',
+          description: `Transfer completed for ${tr.worker.name}. Worker assigned to ${tr.toSite.name}`,
+          timestamp: (tr.effectiveAt ?? tr.createdAt).toISOString(),
+          workerId: tr.worker.workerCode,
+          workerName: tr.worker.name,
+          siteCode: tr.toSite.siteCode,
+          siteName: tr.toSite.name,
+          status: 'COMPLETED',
+          details: { transferId: tr.id, destinationSite: tr.toSite.name },
+        });
+      }
+    }
+
+    // Filter events
+    const filtered = events.filter((e) => {
+      // Date filter
+      const evTime = new Date(e.timestamp).getTime();
+      if (fromDate && evTime < fromDate.getTime()) return false;
+      if (toDate && evTime > toDate.getTime()) return false;
+
+      // Event type filter
+      if (typeFilter !== 'ALL') {
+        if (typeFilter === 'TRAVEL' && !['ENTRY_GOA', 'EXIT_GOA'].includes(e.eventType)) return false;
+        if (typeFilter === 'ASSIGNMENT' && !['ASSIGNMENT_STARTED', 'ASSIGNMENT_ENDED'].includes(e.eventType)) return false;
+        if (typeFilter === 'TRANSFER' && !e.eventType.startsWith('TRANSFER')) return false;
+        if (!['TRAVEL', 'ASSIGNMENT', 'TRANSFER'].includes(typeFilter) && e.eventType !== typeFilter) return false;
+      }
+
+      // Site filter
+      if (siteCodeFilter && e.siteCode !== siteCodeFilter) return false;
+
+      // Search filter
+      if (searchFilter) {
+        const matchName = e.workerName.toLowerCase().includes(searchFilter);
+        const matchId = e.workerId.toLowerCase().includes(searchFilter);
+        if (!matchName && !matchId) return false;
+      }
+
+      return true;
+    });
+
+    // Sort by timestamp descending
+    filtered.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+    const total = filtered.length;
+    const items = filtered.slice(params.skip, params.skip + params.take);
+
+    return {
+      items,
+      total,
+      page: params.page,
+      pageSize: params.pageSize,
+      totalPages: Math.ceil(total / params.pageSize) || 1,
+    };
   }
 }

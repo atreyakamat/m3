@@ -40,6 +40,8 @@ import { ContractorSiteDetail } from './pages/contractor/SiteDetail';
 import { ContractorWorkers } from './pages/contractor/Workers';
 import { Approvals } from './pages/contractor/Approvals';
 import { InitiateTransfer } from './pages/contractor/InitiateTransfer';
+import { ActivityTimeline } from './pages/contractor/ActivityTimeline';
+import { AlertsCenter } from './pages/contractor/AlertsCenter';
 
 export function App() {
   const { user } = useAuth();
@@ -107,6 +109,8 @@ export function App() {
         <Route path="approvals" element={<Approvals />} />
         <Route path="transfers" element={<Approvals />} />
         <Route path="initiate" element={<InitiateTransfer />} />
+        <Route path="activity" element={<ActivityTimeline />} />
+        <Route path="alerts" element={<AlertsCenter />} />
       </Route>
 
       {/* Admin dashboard — standard login, ADMIN role enforced by the backend as well. */}

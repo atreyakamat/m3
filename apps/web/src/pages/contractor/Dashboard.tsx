@@ -122,7 +122,13 @@ export function ContractorDashboard() {
             Contractor ID: <strong>{contractor.contractorCode}</strong> · Registered Phone: {contractor.phone || '—'}
           </div>
         </div>
-        <div className="row" style={{ gap: 8 }}>
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+          <Button variant="secondary" onClick={() => nav('/contractor/alerts')}>
+            Operational Alerts
+          </Button>
+          <Button variant="secondary" onClick={() => nav('/contractor/activity')}>
+            Activity Timeline
+          </Button>
           <Button variant="secondary" onClick={() => nav('/contractor/initiate')}>
             + Initiate Transfer
           </Button>
@@ -304,18 +310,26 @@ export function ContractorDashboard() {
                 Latest authorized workforce events
               </p>
             </div>
-            <span
-              style={{
-                fontSize: 11,
-                padding: '2px 8px',
-                borderRadius: 999,
-                background: '#E2E8F0',
-                color: '#475569',
-                fontWeight: 600,
-              }}
-            >
-              Live Feed
-            </span>
+            <div className="row" style={{ alignItems: 'center', gap: 8 }}>
+              <span
+                style={{
+                  fontSize: 11,
+                  padding: '2px 8px',
+                  borderRadius: 999,
+                  background: '#E2E8F0',
+                  color: '#475569',
+                  fontWeight: 600,
+                }}
+              >
+                Live Feed
+              </span>
+              <Link
+                to="/contractor/activity"
+                style={{ fontSize: 13, color: '#3D5A80', textDecoration: 'none', fontWeight: 600 }}
+              >
+                Full timeline →
+              </Link>
+            </div>
           </div>
 
           {recentActivity.length === 0 ? (
