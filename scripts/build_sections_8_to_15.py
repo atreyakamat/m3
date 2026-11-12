@@ -10,16 +10,16 @@ from scripts.build_full_submission import (
 def add_sec8(doc):
     add_h1(doc, "SECTION 8 — PRODUCTION DEPLOYMENT READINESS & INFRASTRUCTURE VERIFICATION")
     
-    add_p(doc, "Pursuant to Prompt 1 (Production Deployment and Infrastructure Setup), the M3 release candidate v2.0.0-RC1 has undergone comprehensive infrastructure auditing, cryptographic checksum verification, database migration verification, and disaster recovery testing.")
+    add_p(doc, "Pursuant to production infrastructure and release engineering requirements, the M3 release candidate v2.0.0-RC3 has undergone comprehensive infrastructure auditing, cryptographic checksum verification, database migration verification, and disaster recovery testing.")
     
     add_callout(doc,
-        "Production Readiness Audit Score: 22 / 22 Automated Infrastructure Checks Passing (100.0% Compliance). The release tree is strictly frozen at commit 8f535e368d3d2a264b7ff6fa0581068b53974f0c with zero untracked dependencies, zero modifications, and clean git status.",
-        title="INFRASTRUCTURE AUDIT RESULT", warn=False)
+        "Production Readiness Audit Score: Technical Acceptance Complete. The release tree is strictly frozen at commit 557ab75f0a0d859ebcc5938435d6481cf13ceca1 with zero untracked dependencies, zero modifications, and clean git status. Release candidate v2.0.0-RC3 incorporates verified departure-reason selection, destination-site search and picker, and a 100% key-parity 18-language localization matrix.",
+        title="INFRASTRUCTURE AUDIT RESULT — TECHNICAL RELEASE BASELINE FROZEN", warn=False)
     
     add_h2(doc, "8.1 Release Integrity & Git Freeze")
     add_p(doc, "The codebase was locked and tagged under strict release engineering protocols:")
-    add_bullet(doc, " `v2.0.0-RC1`", bold_prefix="Git Release Tag: ")
-    add_bullet(doc, " `8f535e368d3d2a264b7ff6fa0581068b53974f0c`", bold_prefix="Git Commit Hash: ")
+    add_bullet(doc, " `v2.0.0-RC3` (Frozen Technical Baseline)", bold_prefix="Git Release Tag: ")
+    add_bullet(doc, " `557ab75f0a0d859ebcc5938435d6481cf13ceca1`", bold_prefix="Git Commit Hash: ")
     add_bullet(doc, " `main` (frozen release branch)", bold_prefix="Branch Head: ")
     add_bullet(doc, " Clean (`working tree clean, nothing to commit`)", bold_prefix="Working Tree Status: ")
     
@@ -28,7 +28,7 @@ def add_sec8(doc):
     
     cs_headers = ["Release Artifact Description", "Artifact File Path", "SHA-256 Cryptographic Checksum", "Size"]
     cs_data = [
-        ["Android Client APK", "m3-worker-android.apk", "b0fb58271b7b2ccf45ff6a83d6c3a0255e424747b2f2e0463b102b759f739df3", "81.4 MB"],
+        ["Android Client APK", "m3-worker-android.apk", "d58fd1f5860b62287455f117dbd26f6cafb01695f1543cc81a73d8ddd6715c24", "82.5 MB"],
         ["Production Compose Spec", "docker-compose.yml", "ec15d7950ce158b7b2bd2a74b18e33a529e3dd46a095aef1275596cc0596cc5b", "1.4 KB"],
         ["Staging Compose Spec", "docker-compose.staging.yml", "d0e7cd5133e862639b9b295da6dd4f05d234caffd26992b77b01df01fba5dfba", "1.9 KB"],
         ["Staging DB Binary Dump", "backups/m3_staging_backup.dump", "f69250f39068c8eab61c8b881ee9bf65360c0cceaea72fb5e8f6b59e5f665704", "68.9 KB"],
@@ -39,25 +39,34 @@ def add_sec8(doc):
     add_h2(doc, "8.3 Android APK Package & Cryptographic Signature")
     add_p(doc, "The Android worker mobile package was inspected via `apksigner` and `aapt2`:")
     add_bullet(doc, " `org.m3.surveillance`", bold_prefix="Package Identity: ")
-    add_bullet(doc, " Version Code `1`, Version Name `2.0.0`", bold_prefix="Version Identifiers: ")
+    add_bullet(doc, " Version Code `3`, Version Name `2.0.0-RC3`", bold_prefix="Version Identifiers: ")
     add_bullet(doc, " Min SDK `24` (Android 7.0 Nougat), Target SDK `34` (Android 14), Compile SDK `35`", bold_prefix="SDK Compatibility: ")
     add_bullet(doc, " Scheme v1: Disabled; Scheme v2 (Full APK Signature): Verified Clean", bold_prefix="Signature Scheme: ")
     add_bullet(doc, " `CN=M3 Prototype, OU=Dev, O=M3, L=Goa, ST=Goa, C=IN`", bold_prefix="Certificate Subject: ")
     add_bullet(doc, " `0ebc29e81908e9689991b5e0957ed971c3dc834ab76ed67b1c551f3485b78e2f`", bold_prefix="Certificate Fingerprint (SHA-256): ")
-    
-    add_h2(doc, "8.4 Production and Staging Environment Separation")
+
+    add_h2(doc, "8.4 Signing-Key Custody & Institutional Provisioning Protocol")
+    add_p(doc, "The current release candidate APK is signed using a development keystore (`CN=M3 Prototype`). This signing key is strictly restricted to authorized pilot testing on registered hardware (Samsung Galaxy Tab A7 Lite pool, SM-T225). Prior to any public distribution, MDM deployment, or post-pilot expansion, cryptographic signing custody must transition to an institutional Hardware Security Module (HSM) or secure KMS managed by the Goa State Data Centre (GSDC) / National Informatics Centre (NIC) Goa under formal health authority custody.")
+
+    add_h2(doc, "8.5 Offline Outbox Retention Proposals (Awaiting Departmental Approval)")
+    add_p(doc, "The mobile client provides local offline persistence via SQLite and Drizzle ORM (`outboxRepo`). To balance data freshness with intermittent field connectivity, the following retention thresholds are submitted as operational proposals awaiting DHS Goa and NVBDCP formal approval:")
+    add_bullet(doc, " 24 Hours. When unsynchronized fever or symptom reports exceed 24 hours, the client displays a high-contrast red alert banner directing the laborer to connect to network or visit the local PHC/Sub-Centre; simultaneously, field health workers are flagged for direct physical follow-up.", bold_prefix="Critical Symptom / Fever Alerts: ")
+    add_bullet(doc, " 72 Hours (3 Days). When unsynchronized travel logs or household updates exceed 72 hours, an amber sync banner is displayed on the dashboard.", bold_prefix="Routine Travel & Household Records: ")
+    add_bullet(doc, " Locally queued outbox records are never purged automatically until positive server acknowledgement (HTTP 200 or HTTP 409 idempotency resolution) is received.", bold_prefix="Local Storage Protection: ")
+
+    add_h2(doc, "8.6 Production and Staging Environment Separation")
     add_p(doc, "Production and staging clusters are completely isolated across compute, network, and storage boundaries:")
     add_bullet(doc, " Production runs on isolated Docker bridge `m3_prod_network`; staging runs on `m3_staging_network`. There is zero cross-network route advertisement.", bold_prefix="Network Isolation: ")
     add_bullet(doc, " Staging runs on ports `8013` (API) and `5183` (Web); production services bind to no public host ports and route exclusively through Nginx on port `443`.", bold_prefix="Port Allocation: ")
     add_bullet(doc, " Staging database (`m3_staging`) uses separate high-entropy credentials from production (`m3_production`).", bold_prefix="Credential Separation: ")
     add_bullet(doc, " `SEED_ON_START=false` is enforced in production, guaranteeing zero mock or test data in the live pilot database.", bold_prefix="Data Contamination Protection: ")
     
-    add_h2(doc, "8.5 Private Database Architecture & Port Protection")
+    add_h2(doc, "8.7 Private Database Architecture & Port Protection")
     add_p(doc, "The production PostgreSQL 16 container (`m3-prod-db`) is strictly isolated:")
     add_bullet(doc, " Port 5432 is not mapped to host interfaces (`0.0.0.0` or `127.0.0.1`). Ingress is accessible strictly to container services within `m3_prod_network`.", bold_prefix="Zero Host Exposure: ")
     add_bullet(doc, " Database connections require strong authenticated credentials with connection pool limits managed via Prisma.", bold_prefix="Access Controls: ")
     
-    add_h2(doc, "8.6 TLS Configuration & CORS Origin Whitelisting")
+    add_h2(doc, "8.8 TLS Configuration & CORS Origin Whitelisting")
     add_p(doc, "Network edge security is enforced at the Nginx reverse proxy gateway:")
     add_bullet(doc, " TLS 1.3 is enforced with forward secrecy ciphers. HTTP port 80 issues an immediate 301 redirect to HTTPS port 443.", bold_prefix="TLS Enforcement: ")
     add_bullet(doc, " Strict Transport Security (`Strict-Transport-Security: max-age=31536000; includeSubDomains; preload`) is configured on all HTTPS responses.", bold_prefix="HSTS Header: ")
@@ -162,49 +171,62 @@ def add_sec11(doc):
         "PROPOSED DEPLOYMENT ARRANGEMENTS: The geographic focus, facility partnerships, hardware allocations, and operational timelines detailed in this section represent proposed deployment arrangements submitted for institutional appraisal. They do NOT constitute an approved rollout and must not be implemented until formal written authorization is granted by DHS Goa and NVBDCP.",
         title="PROPOSED PILOT NOTICE — PENDING INSTITUTIONAL SANCTION", warn=True)
     
-    add_p(doc, "To establish operational feasibility and empirical validation under authentic field conditions, a staged, controlled pilot deployment is proposed prior to any statewide expansion across Goa's 12 Talukas.")
+    add_p(doc, "To establish operational feasibility and empirical validation under authentic field conditions, a staged, two-phase controlled pilot deployment is proposed prior to any consideration of broader expansion across Goa's 12 Talukas.")
     
     add_h2(doc, "11.1 Proposed Pilot Scope & Site Selection")
-    add_bullet(doc, " Bardez Taluka, North Goa District. Bardez represents one of the highest concentrations of rapid commercial, tourism, and resort construction projects in the state, with high influx of interstate migrant labor.", bold_prefix="Target Taluka: ")
-    add_bullet(doc, " High-density resort and commercial infrastructure projects located in the Candolim and Calangute coastal belt corridors.", bold_prefix="Target Construction Hubs: ")
-    add_bullet(doc, " Candolim Primary Health Centre (`PHC-CAN-01`). Candolim PHC possesses an active malaria surveillance wing, operational laboratory facilities for microscopy/RDTs, and assigned field Multipurpose Workers.", bold_prefix="Institutional Health Facility: ")
-    add_bullet(doc, " An initial controlled hardware pool of 25 enterprise Samsung Galaxy Tab A7 Lite tablets provisioned with `m3-worker-android.apk` in locked-down kiosk or application-pinned mode.", bold_prefix="Hardware Device Pool: ")
+    add_bullet(doc, " Candolim Primary Health Centre (`PHC-CAN-01`) and the Calangute Health Hub / Sub-Centre in Bardez Taluka, North Goa District. This coastal belt corridor represents the state's highest concentration of dynamic commercial, resort, and tourism construction infrastructure, characterized by dense interstate migrant labor colonies.", bold_prefix="Phase 1A Primary Pilot Facility (14 Days): ")
+    add_bullet(doc, " Panaji Urban Primary Health Centre (UPHC) in Tiswadi Taluka. Designated for secondary multi-taluka expansion to evaluate inter-taluka migrant mobility and site-to-site transfer workflows, strictly contingent upon successful completion and evaluation of Phase 1A.", bold_prefix="Phase 1B Multi-Taluka Expansion (Contingent): ")
+    add_bullet(doc, " High-density resort, residential, and commercial infrastructure construction projects located along the Candolim–Calangute coastal belt.", bold_prefix="Target Construction Hubs: ")
+    add_bullet(doc, " An initial controlled hardware pool of 25 enterprise Samsung Galaxy Tab A7 Lite tablets provisioned with `m3-worker-android.apk` (v2.0.0-RC3) in locked-down kiosk or application-pinned mode.", bold_prefix="Hardware Device Pool: ")
     add_bullet(doc, " Designee from Goa DHS NVBDCP State Programme Management assigned for direct operational oversight and compliance monitoring.", bold_prefix="Field Surveillance Officer: ")
     
-    add_h2(doc, "11.2 Proposed Seven-Day Pilot Schedule")
+    add_h2(doc, "11.2 Proposed Fourteen-Day Pilot Schedule (Phase 1A)")
     pilot_sched_headers = ["Pilot Timeline", "Key Operational Milestones & Deployment Procedures"]
     pilot_sched_data = [
         ["Day 1: Platform Ingress & Device Handover", "Deploy production backend containers; provision Candolim PHC facility credentials; distribute 25 Samsung tablets to designated site supervisors and field workers."],
-        ["Day 2: Worker Intake & Language Baseline", "Execute digital worker registration and baseline screening across participating sites in Candolim and Calangute; verify Konkani, Hindi, and Bengali UI interactions."],
-        ["Day 3: Ingress/Egress Travel Tracking", "Capture georeferenced arrival checkpoints at construction site gates; test GPS fix accuracy and landmark tagging."],
+        ["Day 2: Worker Intake & Language Baseline", "Execute digital worker registration and baseline screening across participating sites in Candolim and Calangute; verify multilingual interactions across local and migrant languages."],
+        ["Day 3: Ingress/Egress Travel Tracking", "Capture georeferenced arrival and departure checkpoints at construction site gates; test GPS fix accuracy and landmark tagging; test departure reason selection (Work Completed vs Other)."],
         ["Day 4: Operational Triage & Symptom Alerts", "Simulate and capture authentic symptom self-reports ('Not Feeling Well'); verify operational alert routing to contractor and PHC emergency hotline."],
-        ["Day 5: Field Follow-Up & Diagnostic Referral", "Health workers conduct field follow-up visits; queue lab referral orders for microscopy blood smears at Candolim PHC laboratory."],
-        ["Day 6: Workforce Mobility & Transfers", "Execute multi-party site transfer handshakes between participating contractors; verify atomic database locking and single-site invariant."],
-        ["Day 7: Offline Outbox & Network Recovery", "Test tablet data entry in cellular dead zones (basements); restore network connectivity and verify idempotent outbox replay."],
-        ["Day 8: Institutional Evaluation Gate", "Convene formal review committee (DHS Goa, NVBDCP, Technical Lead) to audit quantitative KPIs against established evaluation criteria."]
+        ["Day 5: Field Follow-Up & Diagnostic Referral", "Health workers conduct field follow-up visits; queue lab referral orders for microscopy blood smears and RDTs at Candolim PHC laboratory."],
+        ["Day 6: Radical Cure Regimen Monitoring", "Initiate treatment adherence tracking for confirmed cases; verify clinician-only prescribing boundaries and daily supervised dose verification."],
+        ["Day 7: Mid-Pilot Data Audit & Review", "Conduct interim database audit of active records, offline outbox logs, and contractor alert redaction compliance."],
+        ["Day 8: Workforce Mobility & Transfers", "Execute multi-party site transfer handshakes between participating contractors; verify destination site search/picker, atomic database locking, and single-site invariant."],
+        ["Day 9: Offline Outbox & Network Recovery", "Test tablet data entry in cellular dead zones (basements); restore network connectivity and verify idempotent outbox replay without duplicate creation."],
+        ["Day 10: Household & Accommodation Tracking", "Register family members and roommates across onsite hutments; test accommodation density reporting and vector risk mapping."],
+        ["Day 11: Cross-Site Migration Simulation", "Simulate inter-site movement between Candolim and Calangute construction beats; test supervisor reassignment workflows."],
+        ["Day 12: End-to-End Stress Testing", "Execute concurrent multi-user load testing during peak shift changes across registration, symptom reporting, and egress logging."],
+        ["Day 13: Hardware Custody & Data Reconciliation", "Reconcile physical tablet inventory; execute final database backups and export audit logs for institutional review."],
+        ["Day 14: Institutional Evaluation Gate", "Convene formal review committee (DHS Goa, NVBDCP, Technical Lead) to audit quantitative KPIs against established Day 14 evaluation criteria."]
     ]
     add_table(doc, pilot_sched_headers, pilot_sched_data, [Inches(2.2), Inches(4.7)])
+
+    add_h2(doc, "11.3 Multilingual Clinical & Colloquial Linguistic Sign-Off Protocol")
+    add_p(doc, "Automated key parity confirms structural presence of all translation keys across all 18 NVBDCP-supported languages (20 sections, 424 leaves, 100% key parity). However, automated parity is not equivalent to clinical accuracy, colloquial comprehension, or dialect safety. The following three-tier human linguistic review protocol is established for formal sign-off by accredited DHS Goa translators:")
+    add_bullet(doc, " Konkani (`kok`), Marathi (`mr`), Hindi (`hi`). Validated by State NVBDCP Health Education Cell for core clinical symptoms, fever terminology, and medication compliance instructions.", bold_prefix="Tier 1 (State Health Baseline): ")
+    add_bullet(doc, " Bengali (`bn`), Odia (`or`), Bhojpuri (`bho`), Urdu (`ur` RTL). Prioritized review by empanelled departmental translators reflecting the predominant origin states of interstate construction laborers in Goa.", bold_prefix="Tier 2 (High-Volume Migrant Languages): ")
+    add_bullet(doc, " Assamese (`as`), Gujarati (`gu`), Kannada (`kn`), Telugu (`te`), Tamil (`ta`), Malayalam (`ml`), Punjabi (`pa`), Maithili (`mai`), Santali (`sat`), Chhattisgarhi (`hne`). Review conducted by academic and linguistic panels prior to broader state rollout.", bold_prefix="Tier 3 (Regional & Tribal Languages): ")
+    add_bullet(doc, " Mandatory formal translator sign-off is required prior to statewide production rollout. During the Phase 1A pilot, frontline Health Workers will provide verbal assistance in non-local dialects.", bold_prefix="Formal Translator Sign-Off: ")
     
-    add_h2(doc, "11.3 Day 8 Evaluation Gate Criteria")
-    add_p(doc, "Statewide rollout clearance will remain strictly contingent upon achieving four quantitative technical and clinical gates during the Day 8 review:")
+    add_h2(doc, "11.4 Day 14 Evaluation Gate Criteria")
+    add_p(doc, "Phase 1B expansion and broader deployment clearance will remain strictly contingent upon achieving four quantitative technical and clinical gates during the Day 14 review:")
     add_bullet(doc, " Over 95% of field travel entries achieve fine GPS accuracy (<25 meters) at arrival checkpoints.", bold_prefix="1. GPS Arrival Precision: ")
     add_bullet(doc, " 100% of offline-queued symptom reports synchronize without server-side duplication upon network reconnection.", bold_prefix="2. Offline Outbox Replay: ")
     add_bullet(doc, " Zero clinical symptoms, diagnoses, or voice recordings exposed in contractor-facing dashboards or alerts (100% privacy compliance).", bold_prefix="3. Absolute Medical Privacy: ")
     add_bullet(doc, " 100% of initiated site transfers complete cleanly or reject cleanly without orphaned or duplicate active worker assignments.", bold_prefix="4. Transfer Invariant Integrity: ")
     
-    add_h2(doc, "11.4 Operational Parameters Requiring Confirmation (Missing Information)")
+    add_h2(doc, "11.5 Operational Parameters Requiring Confirmation (Missing Information)")
     add_p(doc, "The following operational parameters represent unconfirmed field assumptions that require formal institutional determination prior to field launch:")
     add_bullet(doc, " Confirmation of whether contractor symptom concerns must route exclusively to the designated Primary Health Centre (Candolim PHC) or simultaneously to the specific field Multipurpose Health Worker (MPHW) assigned to that construction site's sub-centre beat.", bold_prefix="1. Contractor Emergency Routing: ")
     add_bullet(doc, " Clarification on whether contractors entering a roommate record will capture minimal linkage data (Worker Code or Phone Number) or execute full demographic intake on behalf of the roommate.", bold_prefix="2. Roommate Identity Onboarding Scope: ")
     add_bullet(doc, " Field baseline for acceptable GPS dilution of precision (HDOP) in multi-storey basement construction projects where satellite lock is degraded.", bold_prefix="3. Off-Network GPS Accuracy Threshold: ")
     add_bullet(doc, " Selection of institutional cellular SIM service providers (e.g., BSNL, Jio, Airtel) for the 25 pilot tablets to guarantee connectivity in coastal Bardez construction corridors.", bold_prefix="4. Cellular Data Carrier Allocation: ")
     
-    add_h2(doc, "11.5 Key Institutional Decisions Required (DHS Goa & NVBDCP)")
+    add_h2(doc, "11.6 Key Institutional Decisions Required (DHS Goa & NVBDCP)")
     add_p(doc, "The following institutional determinations must be executed by authorized healthcare leadership:")
     add_bullet(doc, " Formal clinical decision regarding whether frontline Health Workers are authorized to issue pre-packaged blister packs (ACT or Primaquine) under standing institutional protocols, or whether all physical medication dispensing must occur strictly on the premises of Candolim PHC following Clinician consultation.", bold_prefix="1. Scope of Health Worker Medication Dispensing: ")
-    add_bullet(doc, " Formal written administrative approval from the Directorate of Health Services (DHS), Government of Goa, authorizing the 7-day controlled field deployment across Candolim and Calangute construction hubs.", bold_prefix="2. Formal Field Pilot Authorization: ")
+    add_bullet(doc, " Formal written administrative approval from the Directorate of Health Services (DHS), Government of Goa, authorizing the 14-day controlled field deployment across Candolim and Calangute construction hubs.", bold_prefix="2. Formal Field Pilot Authorization: ")
     add_bullet(doc, " Approval of the physical hardware custody chain and daily check-out / check-in protocols for the 25 enterprise Samsung Galaxy Tab A7 Lite tablets between Candolim PHC and site supervisors.", bold_prefix="3. Hardware Device Custody Protocol: ")
-    add_bullet(doc, " Formal designation of the institutional review panel members (DHS Goa, NVBDCP, Clinical Lead, Technical Lead) convened to evaluate pilot KPIs on Day 8 prior to any consideration of statewide expansion.", bold_prefix="4. Day 8 Review Committee Constitution: ")
+    add_bullet(doc, " Formal designation of the institutional review panel members (DHS Goa, NVBDCP, Clinical Lead, Technical Lead) convened to evaluate pilot KPIs on Day 14 prior to Phase 1B consideration.", bold_prefix="4. Day 14 Review Committee Constitution: ")
 
 def add_sec12(doc):
     add_h1(doc, "SECTION 12 — QUANTITATIVE MONITORING AND EVALUATION FRAMEWORK")
@@ -249,12 +271,27 @@ def add_sec13(doc):
 def add_sec14(doc):
     add_h1(doc, "SECTION 14 — INSTITUTIONAL GOVERNANCE AND REGULATORY APPROVAL SIGN-OFF")
     
-    add_p(doc, "Formal institutional review, clinical endorsement, and statutory authorization by designated health authorities are mandatory prior to the deployment of Release Candidate v2.0.0-RC1 in any field demonstration or public health capacity.")
+    add_p(doc, "Formal institutional review, clinical endorsement, and statutory authorization by designated health authorities are mandatory prior to the deployment of Release Candidate v2.0.0-RC3 in any field demonstration or public health capacity. Technical acceptance does NOT constitute statutory authorization.")
     
     add_callout(doc,
-        "INSTRUCTIONS FOR REVIEWING AUTHORITIES: Reviewers must indicate their formal appraisal decision, provide institutional remarks or operational conditions, and execute signatures in the designated fields below. No fabricated names or signatures are permitted in this governance record.",
-        title="INSTITUTIONAL APPRAISAL DIRECTIVE", warn=False)
+        "INSTRUCTIONS FOR REVIEWING AUTHORITIES: Reviewers must indicate their formal appraisal decision in the Decision Register and execute signatures in the designated fields below. No fabricated names or signatures are permitted in this governance record. The worker-name disclosure policy remains explicitly UNRESOLVED pending formal institutional determination.",
+        title="INSTITUTIONAL APPRAISAL DIRECTIVE & DECISION REGISTER", warn=False)
     
+    add_h2(doc, "14.1 Institutional Decision Register")
+    add_p(doc, "The following formal decision register codifies the specific statutory authorizations, clinical policies, and operational approvals required before initiating field activities:")
+    
+    reg_headers = ["Item #", "Responsible Authority", "Decision Required", "Regulatory Basis", "Approval Status", "Date", "Signature / Remarks"]
+    reg_data = [
+        ["DEC-01", "Directorate of Health Services (DHS), Goa & NVBDCP State Programme Officer", "Approve Phase 1A Controlled Field Pilot (Candolim PHC & Calangute Health Hub for 14 days) and Phase 1B (Panaji UPHC expansion subject to evaluation).", "National Framework for Malaria Elimination", "PENDING REVIEW", "DD/MM/2026", "[  ]"],
+        ["DEC-02", "Clinical Lead & Chief Medical Officer", "Enforce non-prescribing boundary on frontline Health Workers; mandate clinical diagnostic confirmation (RDT/microscopy) prior to antimalarial dispensing.", "National Anti-Malaria Drug Policy (MoHFW)", "PENDING REVIEW", "DD/MM/2026", "[  ]"],
+        ["DEC-03", "DHS Goa Health Education & Communication Cell", "Convene accredited translator panel to validate clinical and colloquial accuracy of all 17 non-English language sets across Tiers 1-3.", "State Health Communication Guidelines", "PENDING REVIEW", "DD/MM/2026", "[  ]"],
+        ["DEC-04", "Goa State Data Centre (GSDC) / NIC Goa & Systems Architect", "Provision state-governed HSM / Cloud KMS production signing key; restrict development prototype key (CN=M3 Prototype) strictly to authorized pilot tablet pool.", "MeitY Government Cloud Security Standards", "PENDING REVIEW", "DD/MM/2026", "[  ]"],
+        ["DEC-05", "Directorate of Health Services & State NVBDCP", "Formally adopt proposed 24-hour critical-alert and 72-hour routine-record offline outbox synchronization thresholds and escalation protocols.", "NVBDCP Digital Health Surveillance SOPs", "PENDING REVIEW", "DD/MM/2026", "[  ]"],
+        ["DEC-06", "DHS Goa Ethics & Legal Directorate", "Policy determination on worker-name disclosure in contractor health alerts: Option A (Proposal for Informed Consent for Duty Relief) vs Option B (Strict Pseudonymization with workerId only). Notice: DPDP Act 2023 does not automatically authorize disclosure merely because a worker consents; institutional authorization remains required.", "Digital Personal Data Protection (DPDP) Act 2023", "UNRESOLVED / PENDING STATUTORY DETERMINATION", "DD/MM/2026", "[  ]"]
+    ]
+    add_table(doc, reg_headers, reg_data, [Inches(0.7), Inches(1.5), Inches(2.0), Inches(1.2), Inches(1.0), Inches(0.8), Inches(0.6)])
+
+    add_h2(doc, "14.2 Formal Institutional Sign-Off Executions")
     signoffs = [
         ("1. Principal Investigator (PI) / Research Director", "Overall project governance, academic integrity, and surveillance protocol conformance."),
         ("2. Clinical Lead / Chief Medical Officer", "Clinical assessment protocols, diagnostic validity, and anti-malarial prescribing boundary governance."),
@@ -265,7 +302,7 @@ def add_sec14(doc):
     ]
     
     for s_title, s_scope in signoffs:
-        add_h2(doc, s_title)
+        add_h3(doc, s_title)
         add_p(doc, s_scope, bold_prefix="Institutional Mandate: ")
         
         sig_table_headers = ["Governance Field", "Official Institutional Record"]
@@ -285,11 +322,11 @@ def add_sec15(doc):
     
     # Appendix A
     add_h2(doc, "Appendix A: Complete Release Package & Cryptographic Integrity Manifest")
-    add_p(doc, "Release Candidate v2.0.0-RC1 was frozen on November 11, 2026 at commit `8f535e368d3d2a264b7ff6fa0581068b53974f0c`. Cryptographic SHA-256 hashes are verified as follows:")
+    add_p(doc, "Release Candidate v2.0.0-RC3 was frozen on November 12, 2026 at commit `557ab75f0a0d859ebcc5938435d6481cf13ceca1`. Cryptographic SHA-256 hashes are verified as follows:")
     
     app_a_headers = ["Component", "File Identifier", "Cryptographic Checksum (SHA-256)", "Status"]
     app_a_data = [
-        ["Android Client APK", "m3-worker-android.apk", "b0fb58271b7b2ccf45ff6a83d6c3a0255e424747b2f2e0463b102b759f739df3", "VERIFIED"],
+        ["Android Client APK", "m3-worker-android.apk", "d58fd1f5860b62287455f117dbd26f6cafb01695f1543cc81a73d8ddd6715c24", "VERIFIED"],
         ["Production Docker Spec", "docker-compose.yml", "ec15d7950ce158b7b2bd2a74b18e33a529e3dd46a095aef1275596cc0596cc5b", "VERIFIED"],
         ["Staging Docker Spec", "docker-compose.staging.yml", "d0e7cd5133e862639b9b295da6dd4f05d234caffd26992b77b01df01fba5dfba", "VERIFIED"],
         ["Staging Database Dump", "backups/m3_staging_backup.dump", "f69250f39068c8eab61c8b881ee9bf65360c0cceaea72fb5e8f6b59e5f665704", "VERIFIED"],

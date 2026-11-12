@@ -11,7 +11,7 @@ def build_cover_and_toc(doc, toc_page_map=None):
     add_subtitle(doc, "FINAL TECHNICAL AND CLINICAL GOVERNANCE SUBMISSION\nInstitutional Review & Evaluation for Controlled Field Deployment in Goa")
     
     add_callout(doc, 
-        "This document is a formal institutional governance submission prepared for official review by the Directorate of Health Services (DHS), Government of Goa, and the National Vector Borne Disease Control Programme (NVBDCP). It provides comprehensive architectural, clinical, and security specifications alongside full testing evidence for Release Candidate v2.0.0-RC1. This document constitutes a formal submission for institutional appraisal and does NOT claim existing government authorization, statutory clearance, or statewide clinical validation.",
+        "This document is a formal institutional governance submission prepared for official review by the Directorate of Health Services (DHS), Government of Goa, and the National Vector Borne Disease Control Programme (NVBDCP). It provides comprehensive architectural, clinical, and security specifications alongside full testing evidence for Release Candidate v2.0.0-RC3. This document constitutes a formal submission for institutional appraisal and does NOT claim existing government authorization, statutory clearance, or statewide clinical validation.",
         title="STATUTORY GOVERNANCE & APPRAISAL NOTICE", warn=False)
     
     # Metadata table
@@ -19,18 +19,19 @@ def build_cover_and_toc(doc, toc_page_map=None):
     meta_data = [
         ["Platform Name", "M3 Malaria Surveillance Platform (Migrant Worker Surveillance System)"],
         ["Target Population", "Interstate Migrant Construction Workers in the State of Goa"],
-        ["Release Candidate", "v2.0.0-RC1 (Semantic Version 2.0.0)"],
-        ["Git Release Tag", "v2.0.0-RC1"],
-        ["Git Commit Hash", "8f535e368d3d2a264b7ff6fa0581068b53974f0c (Clean working tree)"],
+        ["Release Candidate", "v2.0.0-RC3 (Semantic Version 2.0.0)"],
+        ["Git Release Tag", "v2.0.0-RC3 (Release Candidate Frozen)"],
+        ["Git Commit Hash", "557ab75f0a0d859ebcc5938435d6481cf13ceca1 (Clean working tree)"],
         ["Release Freeze Status", "FROZEN — Strict immutability active; zero feature additions or scope alterations"],
         ["Submission Date", "November 12, 2026"],
         ["Submitted To", "Directorate of Health Services (DHS), Goa & NVBDCP State Programme Management"],
-        ["Target Demonstration Facility", "Candolim Primary Health Centre (PHC-CAN-01), Bardez Taluka, North Goa"],
+        ["Target Demonstration Facilities", "Phase 1A: Candolim PHC (PHC-CAN-01) & Calangute Health Hub / Sub-Centre (14 Days)\nPhase 1B: Panaji UPHC (Tiswadi Taluka) subject to evaluation & approval"],
         ["Target Device Hardware", "Samsung Galaxy Tab A7 Lite (SM-T225, Android 14 / API 34) — 25 Enterprise Pool"],
-        ["Reported Production Readiness", "22 / 22 Automated Infrastructure Checks Passing (100.0%)"],
-        ["Reported Field Pilot Acceptance", "44 / 44 Multi-Role End-to-End Scenarios Passing (100.0%)"],
-        ["Reported Role-Permission Audit", "41 / 41 Automated RBAC & Privacy Invariants Passing (100.0%)"],
-        ["Institutional Approval Status", "PENDING FORMAL REVIEW & WRITTEN STATUTORY SANCTION"]
+        ["Technical Acceptance Status", "Reported Passed: 14/14 Transfer Lifecycle Checks, 18 Languages (100% Key Parity)"],
+        ["Automated Test Suites", "Reported Passed: 155 / 155 Tests (111 Mobile Jest + 44 Shared Vitest), 0 TS Errors"],
+        ["Physical-Device Validation", "Reported Passed: 8 / 8 Reference UI Flows Matching M3_MOBILE_APP_UI.pptx"],
+        ["Cryptographic Signature", "Android Signature Scheme v2 (CN=M3 Prototype — Restricted to Pilot Hardware)"],
+        ["Institutional Approval Status", "PENDING FORMAL REVIEW & WRITTEN STATUTORY SANCTION (Separate Technical Acceptance vs Clinical Authorization vs Data Governance vs Conditional Pilot Authorization)"]
     ]
     add_table(doc, meta_headers, meta_data, [Inches(2.3), Inches(4.5)])
     
