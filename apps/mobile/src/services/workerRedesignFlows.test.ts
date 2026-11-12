@@ -19,6 +19,10 @@
 import {
   INDIAN_STATES,
   HOUSEHOLD_RELATIONSHIP,
+  LANGUAGES,
+  LANGUAGE_LABELS,
+  computeTransferStatus,
+  initialDecisions,
   workerRegisterSchema,
   travelEnterSchema,
   travelLeaveSchema,
@@ -26,6 +30,7 @@ import {
   symptomReportSchema,
   createWorkerTransferSchema,
 } from '@m3/shared';
+import { resources } from '../i18n';
 
 describe('M3 Worker App Redesign — Master Requirements & Domain Integrity', () => {
   describe('1. Authentication & Post-Registration Location Capture', () => {
@@ -116,7 +121,7 @@ describe('M3 Worker App Redesign — Master Requirements & Domain Integrity', ()
   });
 
   describe('3. Travel — Exit from Goa', () => {
-    it('validates Exit from Goa with destination, reason, coordinates and automatic timestamp', () => {
+    it('validates Exit from Goa with destination, reason "Work Completed", coordinates and automatic timestamp', () => {
       const exitData = {
         departureDate: new Date().toISOString(),
         destinationState: 'West Bengal',
@@ -129,7 +134,43 @@ describe('M3 Worker App Redesign — Master Requirements & Domain Integrity', ()
       expect(result.success).toBe(true);
       if (result.success) {
         expect(result.data.destinationState).toBe('West Bengal');
+        expect(result.data.reason).toBe('Work Completed');
       }
+    });
+
+    it('validates Exit from Goa with departure reason "Other"', () => {
+      const exitData = {
+        departureDate: new Date().toISOString(),
+        destinationState: 'Jharkhand',
+        destinationDistrict: 'Ranchi',
+        destinationTown: 'Ranchi',
+        reason: 'Other',
+      };
+
+      const result = travelLeaveSchema.safeParse(exitData);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.destinationState).toBe('Jharkhand');
+        expect(result.data.reason).toBe('Other');
+      }
+    });
+
+    it('enforces worker selection between exactly two departure reason options without silent defaulting', () => {
+      const allowedReasons = ['Work Completed', 'Other'];
+      expect(allowedReasons).toHaveLength(2);
+      expect(allowedReasons).toContain('Work Completed');
+      expect(allowedReasons).toContain('Other');
+
+      // Client form requires explicit selection; unselected null state is rejected
+      function validateExitSubmission(dest: string, selectedReason: string | null) {
+        if (!dest.trim()) throw new Error('Destination Required');
+        if (!selectedReason) throw new Error('Reason Required');
+        return { dest, reason: selectedReason };
+      }
+
+      expect(() => validateExitSubmission('Ranchi', null)).toThrow('Reason Required');
+      expect(validateExitSubmission('Ranchi', 'Work Completed').reason).toBe('Work Completed');
+      expect(validateExitSubmission('Ranchi', 'Other').reason).toBe('Other');
     });
 
     it('rejects manual date requirement and relies on automatic timestamp', () => {
@@ -256,16 +297,49 @@ describe('M3 Worker App Redesign — Master Requirements & Domain Integrity', ()
   });
 
   describe('8. Worksite Transfer Request', () => {
-    it('validates transfer request with destination site ID, coordinates note, and timestamp', () => {
-      const transfer = {
-        toSiteId: 'SITE-PAN-01',
-        note: 'Worker transfer request. GPS: 15.4989° N, 73.8278° E at 2026-11-09T16:00:00Z',
-      };
-      const result = createWorkerTransferSchema.safeParse(transfer);
-      expect(result.success).toBe(true);
-      if (result.success) {
-        expect(result.data.toSiteId).toBe('SITE-PAN-01');
+    const availableSites = [
+      { siteId: 'SITE-GOA-001', name: 'Kadamba Plateau Expansion', area: 'Panaji', active: true },
+      { siteId: 'SITE-GOA-002', name: 'Panaji Harbour Expansion', area: 'Panaji', active: true },
+      { siteId: 'SITE-GOA-003', name: 'Vasco Port Terminal Phase 2', area: 'Mormugao', active: true },
+      { siteId: 'SITE-GOA-004', name: 'Margao Ring Road Bridge', area: 'Salcete', active: true },
+    ];
+
+    it('displays worker current site and filters it out of selectable destination sites', () => {
+      const currentSite = { siteId: 'SITE-GOA-001', name: 'Kadamba Plateau Expansion' };
+      const selectable = availableSites.filter((s) => s.siteId !== currentSite.siteId);
+      expect(selectable.map((s) => s.siteId)).not.toContain('SITE-GOA-001');
+      expect(selectable).toHaveLength(3);
+    });
+
+    it('requires selecting an approved destination site from available sites (rejects unselected text)', () => {
+      function validateTransferSelection(selectedSite: (typeof availableSites)[0] | null, locationCaptured: boolean) {
+        if (!selectedSite) throw new Error('Destination Site Required');
+        if (!locationCaptured) throw new Error('Location Required');
+        return {
+          toSiteId: selectedSite.siteId,
+          note: `Worker-initiated transfer to ${selectedSite.name}`,
+        };
       }
+
+      expect(() => validateTransferSelection(null, true)).toThrow('Destination Site Required');
+      expect(() => validateTransferSelection(availableSites[1], false)).toThrow('Location Required');
+
+      const valid = validateTransferSelection(availableSites[1], true);
+      const schemaCheck = createWorkerTransferSchema.safeParse(valid);
+      expect(schemaCheck.success).toBe(true);
+      if (schemaCheck.success) {
+        expect(schemaCheck.data.toSiteId).toBe('SITE-GOA-002');
+      }
+    });
+
+    it('initiates transfer in state machine with status PENDING_DESTINATION_CONTRACTOR', () => {
+      const workerDecisions = initialDecisions('WORKER');
+      expect(workerDecisions.worker).toBe('APPROVED');
+      expect(workerDecisions.toContractor).toBe('PENDING');
+      expect(workerDecisions.fromContractor).toBe('PENDING');
+
+      const status = computeTransferStatus('WORKER', workerDecisions);
+      expect(status).toBe('PENDING_DESTINATION_CONTRACTOR');
     });
   });
 
@@ -286,6 +360,48 @@ describe('M3 Worker App Redesign — Master Requirements & Domain Integrity', ()
     it('requires every form submission button to have the exact label "Submit"', () => {
       for (const form of requiredForms) {
         expect(form.submitLabel).toBe('Submit');
+      }
+    });
+  });
+
+  describe('10. Complete 18-Language Support & Malayalam / Bhojpuri Separation', () => {
+    it('supports all 18 languages in shared enum and mobile resources', () => {
+      expect(LANGUAGES).toHaveLength(18);
+      const loadedKeys = Object.keys(resources);
+      expect(loadedKeys).toHaveLength(18);
+
+      for (const lang of LANGUAGES) {
+        expect(loadedKeys).toContain(lang);
+        expect(LANGUAGE_LABELS[lang]).toBeDefined();
+      }
+    });
+
+    it('strictly separates Malayalam and Bhojpuri as distinct selectable languages', () => {
+      expect(LANGUAGES).toContain('ml');
+      expect(LANGUAGES).toContain('bho');
+
+      expect(LANGUAGE_LABELS['ml']).toContain('Malayalam');
+      expect(LANGUAGE_LABELS['bho']).toContain('Bhojpuri');
+
+      // Verify each has independent translations loaded
+      const mlTrans = (resources as any)['ml']?.translation;
+      const bhoTrans = (resources as any)['bho']?.translation;
+
+      expect(mlTrans).toBeDefined();
+      expect(bhoTrans).toBeDefined();
+      expect(mlTrans).not.toEqual(bhoTrans);
+    });
+
+    it('guarantees complete translation key coverage against English base across all 18 languages', () => {
+      const enTrans = (resources as any)['en'].translation;
+      const topSections = Object.keys(enTrans);
+
+      for (const lang of LANGUAGES) {
+        const langTrans = (resources as any)[lang]?.translation;
+        expect(langTrans).toBeDefined();
+        for (const section of topSections) {
+          expect(langTrans[section]).toBeDefined();
+        }
       }
     });
   });

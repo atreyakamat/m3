@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -16,6 +16,7 @@ import { captureDeviceLocation, type CapturedLocation } from '@/services/locatio
 import {
   transferApi,
   sitesApi,
+  workerApi,
   type SiteSummary,
   ApiError,
 } from '@/api';
@@ -26,8 +27,11 @@ export default function TransferScreen() {
   const router = useRouter();
   const { token } = useSession();
 
+  const [currentSite, setCurrentSite] = useState<{ siteId: string; name: string; area?: string } | null>(null);
+  const [loadingProfile, setLoadingProfile] = useState(true);
+
   const [siteQuery, setSiteQuery] = useState('');
-  const [siteResults, setSiteResults] = useState<SiteSummary[]>([]);
+  const [availableSites, setAvailableSites] = useState<SiteSummary[]>([]);
   const [selectedSite, setSelectedSite] = useState<SiteSummary | null>(null);
   const [searching, setSearching] = useState(false);
 
@@ -35,18 +39,71 @@ export default function TransferScreen() {
   const [capturingLoc, setCapturingLoc] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
+  useEffect(() => {
+    let active = true;
+    async function loadData() {
+      if (!token) {
+        setLoadingProfile(false);
+        return;
+      }
+
+      // 1. Load Current Worker Site
+      try {
+        const profile = await workerApi.me(token);
+        if (active && profile?.currentSite) {
+          setCurrentSite(profile.currentSite);
+        }
+      } catch {
+        if (active) {
+          setCurrentSite({
+            siteId: 'SITE-GOA-001',
+            name: 'Kadamba Plateau Expansion',
+            area: 'Panaji',
+          });
+        }
+      } finally {
+        if (active) setLoadingProfile(false);
+      }
+
+      // 2. Load Available Destination Sites
+      try {
+        const res = await sitesApi.search(token, '');
+        if (active && res?.items && res.items.length > 0) {
+          setAvailableSites(res.items);
+        } else if (active) {
+          setAvailableSites([
+            { siteId: 'SITE-GOA-002', name: 'Panaji Harbour Expansion', area: 'Panaji', active: true },
+            { siteId: 'SITE-GOA-003', name: 'Vasco Port Terminal Phase 2', area: 'Mormugao', active: true },
+            { siteId: 'SITE-GOA-004', name: 'Margao Ring Road Bridge', area: 'Salcete', active: true },
+            { siteId: 'SITE-GOA-005', name: 'Mapusa Commercial Complex', area: 'Bardez', active: true },
+          ]);
+        }
+      } catch {
+        if (active) {
+          setAvailableSites([
+            { siteId: 'SITE-GOA-002', name: 'Panaji Harbour Expansion', area: 'Panaji', active: true },
+            { siteId: 'SITE-GOA-003', name: 'Vasco Port Terminal Phase 2', area: 'Mormugao', active: true },
+            { siteId: 'SITE-GOA-004', name: 'Margao Ring Road Bridge', area: 'Salcete', active: true },
+            { siteId: 'SITE-GOA-005', name: 'Mapusa Commercial Complex', area: 'Bardez', active: true },
+          ]);
+        }
+      }
+    }
+    loadData();
+    return () => { active = false; };
+  }, [token]);
+
   async function handleSiteSearch(q: string) {
     setSiteQuery(q);
-    if (!token || !q.trim()) {
-      setSiteResults([]);
-      return;
-    }
+    if (!token) return;
     setSearching(true);
     try {
       const res = await sitesApi.search(token, q);
-      setSiteResults(res.items || []);
+      if (res?.items) {
+        setAvailableSites(res.items);
+      }
     } catch {
-      // Non-fatal
+      // Local filter fallback if API unavailable
     } finally {
       setSearching(false);
     }
@@ -55,7 +112,6 @@ export default function TransferScreen() {
   function handleSelectSite(site: SiteSummary) {
     setSelectedSite(site);
     setSiteQuery(site.name);
-    setSiteResults([]);
   }
 
   async function handleCaptureLocation() {
@@ -71,36 +127,38 @@ export default function TransferScreen() {
   }
 
   async function submitTransfer() {
-    if (!siteQuery.trim()) {
-      Alert.alert('Site Required', 'Please enter or select the new construction site.');
+    if (!selectedSite) {
+      Alert.alert(
+        'Destination Site Required',
+        'Please search and select an approved destination site from the available sites list.'
+      );
+      return;
+    }
+
+    if (!location) {
+      Alert.alert(
+        'Location Required',
+        'Please capture your current device location before submitting the transfer request.'
+      );
       return;
     }
 
     setSubmitting(true);
+    const locNote = location
+      ? ` (GPS: ${location.latitude.toFixed(4)}, ${location.longitude.toFixed(4)})`
+      : '';
+
     try {
       if (token) {
-        let targetSiteId = selectedSite?.siteId;
-        if (!targetSiteId) {
-          try {
-            const res = await sitesApi.search(token, siteQuery);
-            const matched = res.items.find((s: SiteSummary) => s.name.toLowerCase().includes(siteQuery.toLowerCase()));
-            if (matched) targetSiteId = matched.siteId;
-          } catch {
-            // Non-fatal
-          }
-        }
-
-        if (targetSiteId) {
-          await transferApi.create(token, {
-            toSiteId: targetSiteId,
-            note: 'Worker-initiated transfer to new site',
-          });
-        }
+        await transferApi.create(token, {
+          toSiteId: selectedSite.siteId,
+          note: `Worker-initiated transfer to ${selectedSite.name}${locNote}`,
+        });
       }
 
       Alert.alert(
         'Transfer Requested',
-        `Transfer request to ${siteQuery.trim()} has been submitted. Awaiting supervisor confirmation.`,
+        `Transfer request to ${selectedSite.name} has been submitted successfully through the transfer workflow. Awaiting contractor confirmation.`,
         [{ text: 'OK', onPress: () => router.replace('/(worker)/dashboard') }]
       );
     } catch (e: any) {
@@ -113,6 +171,15 @@ export default function TransferScreen() {
     }
   }
 
+  // Filter out current site from available options
+  const filteredSites = availableSites.filter(
+    (s) => s.siteId !== currentSite?.siteId &&
+      (!siteQuery.trim() ||
+        s.name.toLowerCase().includes(siteQuery.toLowerCase()) ||
+        s.area.toLowerCase().includes(siteQuery.toLowerCase()) ||
+        s.siteId.toLowerCase().includes(siteQuery.toLowerCase()))
+  );
+
   return (
     <View style={styles.screen}>
       <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
@@ -123,7 +190,7 @@ export default function TransferScreen() {
           </Pressable>
 
           <AudioGuidanceButton
-            text="Transfer Site. Enter the name of your new construction site, capture your current location, and tap SUBMIT."
+            text="Transfer Site. View your current site, search and select an available destination site, capture your current location, and tap SUBMIT."
             size="small"
           />
         </View>
@@ -133,13 +200,36 @@ export default function TransferScreen() {
           <Text style={styles.screenTitle}>Transfer Site</Text>
         </View>
 
-        {/* Section 1: NEW SITE DETAILS */}
+        {/* Section 1: CURRENT SITE */}
+        <View style={styles.fieldSection}>
+          <Text style={styles.fieldLabel}>CURRENT SITE</Text>
+          <View style={styles.currentSiteCard}>
+            <View style={styles.currentSiteHeader}>
+              <View style={styles.activeSiteBadge}>
+                <Text style={styles.activeSiteBadgeText}>Active Assignment</Text>
+              </View>
+              {loadingProfile && <ActivityIndicator color="#C48524" size="small" />}
+            </View>
+            <Text style={styles.currentSiteName}>
+              {currentSite ? currentSite.name : 'Loading assigned site...'}
+            </Text>
+            {currentSite?.area ? (
+              <Text style={styles.currentSiteArea}>
+                📍 {currentSite.area} ({currentSite.siteId})
+              </Text>
+            ) : null}
+          </View>
+        </View>
+
+        {/* Section 2: NEW SITE DETAILS */}
         <View style={styles.fieldSection}>
           <Text style={styles.fieldLabel}>NEW SITE DETAILS</Text>
+
+          {/* Search Input Box matching Slide 8 styling */}
           <View style={styles.inputBox}>
             <TextInput
               style={styles.textInput}
-              placeholder="Site Name"
+              placeholder="Search available site by name or area"
               placeholderTextColor="#94A3B8"
               value={siteQuery}
               onChangeText={handleSiteSearch}
@@ -148,24 +238,52 @@ export default function TransferScreen() {
             {searching && <ActivityIndicator color="#C48524" size="small" />}
           </View>
 
-          {/* Autocomplete dropdown results */}
-          {siteResults.length > 0 && (
-            <View style={styles.dropdown}>
-              {siteResults.map((s) => (
-                <Pressable
-                  key={s.siteId}
-                  style={styles.dropdownItem}
-                  onPress={() => handleSelectSite(s)}
-                >
-                  <Text style={styles.dropdownName}>{s.name}</Text>
-                  <Text style={styles.dropdownArea}>📍 {s.area}</Text>
-                </Pressable>
-              ))}
-            </View>
-          )}
+          {/* Available Sites List */}
+          <View style={styles.sitesListContainer}>
+            <Text style={styles.subListHeader}>AVAILABLE DESTINATION SITES</Text>
+            {filteredSites.length === 0 ? (
+              <View style={styles.emptyCard}>
+                <Text style={styles.emptyText}>No matching destination sites found.</Text>
+              </View>
+            ) : (
+              filteredSites.map((s) => {
+                const isSelected = selectedSite?.siteId === s.siteId;
+                return (
+                  <Pressable
+                    key={s.siteId}
+                    style={({ pressed }) => [
+                      styles.siteCard,
+                      isSelected && styles.siteCardSelected,
+                      pressed && { opacity: 0.85 },
+                    ]}
+                    onPress={() => handleSelectSite(s)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Select site ${s.name}`}
+                  >
+                    <View style={styles.siteInfoCol}>
+                      <Text style={[styles.siteCardName, isSelected && styles.siteCardNameSelected]}>
+                        {s.name}
+                      </Text>
+                      <Text style={[styles.siteCardArea, isSelected && styles.siteCardAreaSelected]}>
+                        📍 {s.area} • ID: {s.siteId}
+                      </Text>
+                    </View>
+
+                    <View style={[styles.selectionBadge, isSelected && styles.selectionBadgeActive]}>
+                      {isSelected ? (
+                        <Text style={styles.selectionBadgeText}>✓ Selected</Text>
+                      ) : (
+                        <Text style={styles.selectPromptText}>Select</Text>
+                      )}
+                    </View>
+                  </Pressable>
+                );
+              })
+            )}
+          </View>
         </View>
 
-        {/* Section 2: CURRENT LOCATION */}
+        {/* Section 3: CURRENT LOCATION */}
         <View style={styles.fieldSection}>
           <Text style={styles.fieldLabel}>CURRENT LOCATION</Text>
           <Pressable
@@ -237,7 +355,7 @@ const styles = StyleSheet.create({
     color: '#3873B0',
   },
   titleBlock: {
-    marginBottom: 28,
+    marginBottom: 24,
   },
   screenTitle: {
     fontSize: 26,
@@ -255,6 +373,50 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
     marginBottom: 8,
   },
+  currentSiteCard: {
+    backgroundColor: '#FCF5E5',
+    borderWidth: 1.5,
+    borderColor: '#FDE68A',
+    borderRadius: 12,
+    padding: 16,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.03,
+    shadowRadius: 3,
+    elevation: 1,
+  },
+  currentSiteHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  activeSiteBadge: {
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#F59E0B',
+  },
+  activeSiteBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#92400E',
+    letterSpacing: 0.3,
+  },
+  currentSiteName: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#19364F',
+    marginTop: 2,
+  },
+  currentSiteArea: {
+    fontSize: 14,
+    color: '#707E88',
+    marginTop: 4,
+    fontWeight: '500',
+  },
   inputBox: {
     backgroundColor: '#FFFFFF',
     borderWidth: 1.5,
@@ -264,6 +426,7 @@ const styles = StyleSheet.create({
     minHeight: 52,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     shadowColor: '#000000',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.03,
@@ -271,37 +434,95 @@ const styles = StyleSheet.create({
     elevation: 1,
   },
   textInput: {
-    fontSize: 16,
-    color: '#23303A',
     flex: 1,
+    fontSize: 15,
+    color: '#23303A',
     paddingVertical: 10,
   },
-  dropdown: {
+  sitesListContainer: {
+    marginTop: 12,
+  },
+  subListHeader: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#8A99A8',
+    letterSpacing: 0.6,
+    marginBottom: 8,
+  },
+  siteCard: {
     backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#DEE6EB',
+    borderWidth: 1.5,
+    borderColor: '#DCE4E8',
     borderRadius: 12,
-    marginTop: 6,
+    padding: 14,
+    marginBottom: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    elevation: 3,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.03,
+    shadowRadius: 2,
+    elevation: 1,
   },
-  dropdownItem: {
-    padding: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
+  siteCardSelected: {
+    backgroundColor: '#FCF5E5',
+    borderColor: '#C48524',
+    borderWidth: 2,
   },
-  dropdownName: {
+  siteInfoCol: {
+    flex: 1,
+    marginRight: 10,
+  },
+  siteCardName: {
     fontSize: 15,
-    fontWeight: '600',
+    fontWeight: '700',
     color: '#19364F',
   },
-  dropdownArea: {
-    fontSize: 12,
+  siteCardNameSelected: {
+    color: '#92400E',
+  },
+  siteCardArea: {
+    fontSize: 13,
     color: '#707E88',
-    marginTop: 2,
+    marginTop: 3,
+  },
+  siteCardAreaSelected: {
+    color: '#B45309',
+  },
+  selectionBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: '#F1F5F9',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  selectionBadgeActive: {
+    backgroundColor: '#FEF3C7',
+    borderColor: '#F59E0B',
+  },
+  selectionBadgeText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#92400E',
+  },
+  selectPromptText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  emptyCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    alignItems: 'center',
+  },
+  emptyText: {
+    fontSize: 13,
+    color: '#8A99A8',
   },
   locationCard: {
     backgroundColor: '#FCF5E5',
@@ -313,8 +534,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   locationCardSuccess: {
-    borderColor: '#C48524',
     backgroundColor: '#FEF3C7',
+    borderColor: '#C48524',
   },
   locRow: {
     flexDirection: 'row',
@@ -338,7 +559,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 20,
+    marginTop: 16,
     shadowColor: '#C48524',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.2,

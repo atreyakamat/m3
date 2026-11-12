@@ -9,6 +9,7 @@ export const travelLeaveSchema = z.object({
   expectedReturnDate: z.string().optional().nullable(),
   returnDate: z.string().optional().nullable(),
   purpose: z.string().optional().nullable(),
+  reason: z.string().optional().nullable(),
   notes: z.string().max(1000).optional().nullable(),
   idempotencyKey: z.string().uuid().optional(),
 });

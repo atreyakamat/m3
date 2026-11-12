@@ -2,7 +2,7 @@
   "expo": {
     "name": "M3 Worker",
     "slug": "m3-worker",
-    "version": "2.0.0-RC2",
+    "version": "2.0.0-RC3",
     "orientation": "portrait",
     "scheme": "m3worker",
     "userInterfaceStyle": "light",

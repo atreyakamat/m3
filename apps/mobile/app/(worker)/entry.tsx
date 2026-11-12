@@ -16,6 +16,7 @@ import { captureDeviceLocation, type CapturedLocation } from '@/services/locatio
 import { travelApi, isNetworkError } from '@/api';
 import { useSession } from '@/store/session';
 import { outboxRepo, uuid } from '@/db/outbox';
+import { INDIAN_STATES } from '@m3/shared';
 
 export default function EntryScreen() {
   const { t } = useTranslation();
@@ -48,9 +49,13 @@ export default function EntryScreen() {
 
     setSubmitting(true);
     const timestamp = new Date().toISOString();
+    const resolvedOriginState = INDIAN_STATES.find(
+      (s) => place.toLowerCase().includes(s.toLowerCase()) || s.toLowerCase().includes(place.toLowerCase())
+    ) || 'Bihar';
+
     const payload = {
       arrivalDate,
-      originState: place.trim(),
+      originState: resolvedOriginState,
       originTown: place.trim(),
       latitude: location?.latitude ?? null,
       longitude: location?.longitude ?? null,

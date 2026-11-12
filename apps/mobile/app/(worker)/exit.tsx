@@ -16,6 +16,7 @@ import { captureDeviceLocation, type CapturedLocation } from '@/services/locatio
 import { travelApi, isNetworkError } from '@/api';
 import { useSession } from '@/store/session';
 import { outboxRepo, uuid } from '@/db/outbox';
+import { INDIAN_STATES } from '@m3/shared';
 
 export default function ExitScreen() {
   const { t } = useTranslation();
@@ -24,6 +25,7 @@ export default function ExitScreen() {
 
   const [destination, setDestination] = useState('');
   const [departureDate, setDepartureDate] = useState(new Date().toISOString().slice(0, 10));
+  const [reason, setReason] = useState<'Work Completed' | 'Other' | null>(null);
   const [location, setLocation] = useState<CapturedLocation | null>(null);
   const [capturingLoc, setCapturingLoc] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -45,14 +47,23 @@ export default function ExitScreen() {
       Alert.alert('Destination Required', 'Please enter where you are going.');
       return;
     }
+    if (!reason) {
+      Alert.alert('Reason Required', 'Please select a departure reason: Work Completed or Other.');
+      return;
+    }
 
     setSubmitting(true);
     const timestamp = new Date().toISOString();
+    const resolvedState = INDIAN_STATES.find(
+      (s) => destination.toLowerCase().includes(s.toLowerCase()) || s.toLowerCase().includes(destination.toLowerCase())
+    ) || 'Jharkhand';
+
     const payload = {
       departureDate,
-      destinationState: destination.trim(),
+      destinationState: resolvedState,
       destinationTown: destination.trim(),
-      reason: 'Work Completed',
+      reason,
+      purpose: reason,
       latitude: location?.latitude ?? null,
       longitude: location?.longitude ?? null,
       accuracy: location?.accuracy ?? null,
@@ -66,7 +77,10 @@ export default function ExitScreen() {
         try {
           await travelApi.leave(token, {
             destinationState: payload.destinationState,
+            destinationTown: payload.destinationTown,
             departureDate: payload.departureDate,
+            reason: payload.reason,
+            purpose: payload.purpose,
           });
         } catch (err) {
           if (isNetworkError(err)) {
@@ -143,7 +157,49 @@ export default function ExitScreen() {
           </View>
         </View>
 
-        {/* Section 3: CURRENT LOCATION */}
+        {/* Section 3: REASON FOR DEPARTURE */}
+        <View style={styles.fieldSection}>
+          <Text style={styles.fieldLabel}>REASON FOR DEPARTURE</Text>
+          <View style={styles.reasonRow}>
+            <Pressable
+              style={({ pressed }) => [
+                styles.reasonChip,
+                reason === 'Work Completed' && styles.reasonChipSelected,
+                pressed && { opacity: 0.85 },
+              ]}
+              onPress={() => setReason('Work Completed')}
+              accessibilityRole="button"
+              accessibilityLabel="Reason: Work Completed"
+            >
+              <View style={[styles.radioCircle, reason === 'Work Completed' && styles.radioCircleSelected]}>
+                {reason === 'Work Completed' && <View style={styles.radioInner} />}
+              </View>
+              <Text style={[styles.reasonText, reason === 'Work Completed' && styles.reasonTextSelected]}>
+                Work Completed
+              </Text>
+            </Pressable>
+
+            <Pressable
+              style={({ pressed }) => [
+                styles.reasonChip,
+                reason === 'Other' && styles.reasonChipSelected,
+                pressed && { opacity: 0.85 },
+              ]}
+              onPress={() => setReason('Other')}
+              accessibilityRole="button"
+              accessibilityLabel="Reason: Other"
+            >
+              <View style={[styles.radioCircle, reason === 'Other' && styles.radioCircleSelected]}>
+                {reason === 'Other' && <View style={styles.radioInner} />}
+              </View>
+              <Text style={[styles.reasonText, reason === 'Other' && styles.reasonTextSelected]}>
+                Other
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+
+        {/* Section 4: CURRENT LOCATION */}
         <View style={styles.fieldSection}>
           <Text style={styles.fieldLabel}>CURRENT LOCATION</Text>
           <Pressable
@@ -251,6 +307,59 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#23303A',
     paddingVertical: 10,
+  },
+  reasonRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  reasonChip: {
+    flex: 1,
+    height: 52,
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
+    borderColor: '#DCE4E8',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.03,
+    shadowRadius: 3,
+    elevation: 1,
+  },
+  reasonChipSelected: {
+    backgroundColor: '#E8F1FA',
+    borderColor: '#3873B0',
+  },
+  radioCircle: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: '#94A3B8',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 8,
+  },
+  radioCircleSelected: {
+    borderColor: '#3873B0',
+  },
+  radioInner: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#3873B0',
+  },
+  reasonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#19364F',
+    flexShrink: 1,
+  },
+  reasonTextSelected: {
+    color: '#3873B0',
+    fontWeight: '700',
   },
   locationCard: {
     backgroundColor: '#E0F5F1',

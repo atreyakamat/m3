@@ -357,7 +357,7 @@ export class TravelService {
           : input.returnDate
           ? new Date(input.returnDate)
           : null,
-        purpose: input.purpose ?? null,
+        purpose: (input as any).reason ?? input.purpose ?? null,
         state: input.destinationState,
         district: input.destinationDistrict ?? null,
         town: input.destinationTown ?? null,
