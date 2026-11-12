@@ -1,59 +1,44 @@
-/**
- * FamilyScreen — Master Implementation.
- *
- * Implements Section 8 requirements:
- * - Directly displays the Add Family Member form.
- * - No existing family-member list displayed on this screen.
- * - Required fields: Name, Relationship, Age.
- * - Action: Save Family Member.
- * - Saves record to worker's account via workerApi.addHousehold.
- * - Shows clear success state and allows adding another family member.
- * - Green accent theme (#16A34A).
- */
-
 import React, { useState } from 'react';
 import {
   View,
   Text,
-  Alert,
+  TextInput,
   ScrollView,
+  Alert,
   Pressable,
   StyleSheet,
   ActivityIndicator,
+  Modal,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { Card, TextField, Button } from '@/components/ui';
-import { WorkerHeader } from '@/components/WorkerHeader';
 import { AudioGuidanceButton } from '@/components/AudioGuidanceButton';
 import { workerApi, isNetworkError } from '@/api';
 import { useSession } from '@/store/session';
 import { outboxRepo, uuid } from '@/db/outbox';
-import { palette, spacing, fontSize, fontWeight, radius, shadow } from '@/theme';
 
-const RELATIONSHIPS = [
-  { value: 'SPOUSE', label: 'Spouse (Wife / Husband)' },
-  { value: 'CHILD', label: 'Child (Son / Daughter)' },
-  { value: 'PARENT', label: 'Parent (Father / Mother)' },
-  { value: 'SIBLING', label: 'Sibling (Brother / Sister)' },
+const RELATIONSHIP_OPTIONS = [
+  { value: 'SPOUSE', label: 'Spouse' },
+  { value: 'CHILD', label: 'Child' },
+  { value: 'PARENT', label: 'Parent' },
+  { value: 'SIBLING', label: 'Sibling' },
   { value: 'OTHER', label: 'Other Family Relative' },
 ];
 
 export default function FamilyScreen() {
   const { t } = useTranslation();
   const router = useRouter();
-  const { token, user } = useSession();
+  const { token } = useSession();
 
   const [name, setName] = useState('');
-  const [relationship, setRelationship] = useState<string>('SPOUSE');
+  const [relationship, setRelationship] = useState('SPOUSE');
   const [age, setAge] = useState('');
+  const [pickerVisible, setPickerVisible] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [savedSuccess, setSavedSuccess] = useState(false);
-  const [lastSavedName, setLastSavedName] = useState('');
 
   async function handleSave() {
     if (!name.trim()) {
-      Alert.alert('Name Required', 'Please enter the family member\'s full name.');
+      Alert.alert('Name Required', 'Please enter the family member full name.');
       return;
     }
     const ageNum = parseInt(age.trim(), 10);
@@ -90,310 +75,293 @@ export default function FamilyScreen() {
           }
         }
       }
-      setLastSavedName(name.trim());
-      setSavedSuccess(true);
-      setName('');
-      setAge('');
-      setRelationship('SPOUSE');
+
+      Alert.alert(
+        'Family Member Added',
+        `${name.trim()} has been registered with your household.`,
+        [{ text: 'OK', onPress: () => router.replace('/(worker)/dashboard') }]
+      );
     } catch (e: any) {
-      Alert.alert('Error', e?.message || 'Could not save family member. Please try again.');
+      Alert.alert('Error', e?.message || 'Could not save family member.');
     } finally {
       setSaving(false);
     }
   }
 
-  function handleAddAnother() {
-    setSavedSuccess(false);
-    setName('');
-    setAge('');
-    setRelationship('SPOUSE');
-  }
+  const selectedRelLabel = RELATIONSHIP_OPTIONS.find((r) => r.value === relationship)?.label || 'Select relationship';
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#F8FAFC' }}>
-      <WorkerHeader
-        title="Add Family Member"
-        subtitle="Household Surveillance"
-        showBack={true}
-        fallbackRoute="/(worker)/dashboard"
-        rightElement={
+    <View style={styles.screen}>
+      <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+        {/* Top Header Navigation */}
+        <View style={styles.topHeader}>
+          <Pressable onPress={() => router.back()} style={styles.backButton}>
+            <Text style={styles.backButtonText}>← Dashboard</Text>
+          </Pressable>
+
           <AudioGuidanceButton
-            text="Add family member. Enter name, relationship, and age to register your family member for free malaria checkups and care."
+            text="Add Family Member. Enter your family member's full name, select your relationship, enter their age, and tap SUBMIT."
             size="small"
           />
-        }
-      />
+        </View>
 
-      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
-        {/* Banner */}
-        <View style={styles.banner}>
-          <Text style={styles.bannerIcon}>👨‍👩‍👧</Text>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.bannerTitle}>Register Family Members</Text>
-            <Text style={styles.bannerText}>
-              Family members living with you in Goa receive free periodic health visits, blood tests, and malaria medications.
-            </Text>
+        {/* Title matching Slide 5 */}
+        <View style={styles.titleBlock}>
+          <Text style={styles.screenTitle}>Family</Text>
+        </View>
+
+        {/* Subtitle Card Header matching Slide 5 */}
+        <Text style={styles.cardSectionHeader}>ADD FAMILY MEMBER</Text>
+
+        {/* Field 1: NAME */}
+        <View style={styles.fieldSection}>
+          <Text style={styles.fieldLabel}>NAME</Text>
+          <View style={styles.inputBox}>
+            <TextInput
+              style={styles.textInput}
+              placeholder="Enter full name"
+              placeholderTextColor="#94A3B8"
+              value={name}
+              onChangeText={setName}
+              accessibilityLabel="Full name"
+            />
           </View>
         </View>
 
-        {/* Success Card */}
-        {savedSuccess ? (
-          <Card style={styles.successCard}>
-            <View style={styles.successIconCircle}>
-              <Text style={{ fontSize: 36 }}>✓</Text>
+        {/* Field 2: RELATIONSHIP */}
+        <View style={styles.fieldSection}>
+          <Text style={styles.fieldLabel}>RELATIONSHIP</Text>
+          <Pressable
+            style={styles.inputBox}
+            onPress={() => setPickerVisible(true)}
+            accessibilityRole="button"
+            accessibilityLabel="Select relationship"
+          >
+            <View style={styles.pickerRow}>
+              <Text style={styles.pickerText}>{selectedRelLabel}</Text>
+              <Text style={styles.pickerArrow}>▼</Text>
             </View>
-            <Text style={styles.successTitle}>Family Member Saved!</Text>
-            <Text style={styles.successText}>
-              <Text style={{ fontWeight: '700' }}>{lastSavedName}</Text> has been successfully added to your household profile and enrolled for malaria surveillance.
-            </Text>
+          </Pressable>
+        </View>
 
-            <View style={styles.successActions}>
-              <Button
-                label="+ Add Another Family Member"
-                onPress={handleAddAnother}
-                variant="primary"
-                style={{ backgroundColor: '#16A34A', minHeight: 48 }}
-              />
-              <Button
-                label="Back to Dashboard"
-                onPress={() => router.replace('/(worker)/dashboard')}
-                variant="ghost"
-                style={{ marginTop: spacing.xs }}
-              />
-            </View>
-          </Card>
-        ) : (
-          /* Direct Add Family Member Form */
-          <Card style={styles.card}>
-            <Text style={styles.formTitle}>Family Member Details</Text>
-            <Text style={styles.formSubtitle}>
-              Please provide essential details below
-            </Text>
-
-            {/* 1. Name */}
-            <TextField
-              label="Full Name *"
-              placeholder="e.g. Sunita Devi"
-              value={name}
-              onChangeText={setName}
-            />
-
-            {/* 2. Relationship */}
-            <View style={styles.fieldGroup}>
-              <Text style={styles.fieldLabel}>Relationship to Worker *</Text>
-              <View style={styles.relationList}>
-                {RELATIONSHIPS.map((rel) => {
-                  const isSelected = relationship === rel.value;
-                  return (
-                    <Pressable
-                      key={rel.value}
-                      onPress={() => setRelationship(rel.value)}
-                      style={[
-                        styles.relationRow,
-                        isSelected && styles.relationRowActive,
-                      ]}
-                    >
-                      <View
-                        style={[
-                          styles.radioCircle,
-                          isSelected && styles.radioCircleActive,
-                        ]}
-                      >
-                        {isSelected && <View style={styles.radioDot} />}
-                      </View>
-                      <Text
-                        style={[
-                          styles.relationText,
-                          isSelected && styles.relationTextActive,
-                        ]}
-                      >
-                        {rel.label}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            </View>
-
-            {/* 3. Age */}
-            <TextField
-              label="Age (in completed years) *"
-              placeholder="e.g. 28"
+        {/* Field 3: AGE */}
+        <View style={styles.fieldSection}>
+          <Text style={styles.fieldLabel}>AGE</Text>
+          <View style={styles.inputBox}>
+            <TextInput
+              style={styles.textInput}
+              placeholder="Enter age"
+              placeholderTextColor="#94A3B8"
+              keyboardType="numeric"
               value={age}
               onChangeText={setAge}
-              keyboardType="number-pad"
+              accessibilityLabel="Age"
             />
+          </View>
+        </View>
 
-            {/* Submit Button — Standardised Submit label */}
-            <Pressable
-              onPress={handleSave}
-              disabled={saving}
-              style={[
-                styles.saveButton,
-                saving && { opacity: 0.7 },
-              ]}
-            >
-              {saving ? (
-                <ActivityIndicator color="#FFFFFF" size="small" />
-              ) : (
-                <Text style={styles.saveButtonText}>Submit</Text>
-              )}
-            </Pressable>
-          </Card>
-        )}
+        {/* Submit Button matching Slide 5 (Green #2E8B57) */}
+        <Pressable
+          style={({ pressed }) => [
+            styles.submitButton,
+            saving && styles.buttonDisabled,
+            pressed && styles.buttonPressed,
+          ]}
+          onPress={handleSave}
+          disabled={saving}
+          accessibilityRole="button"
+          accessibilityLabel="SUBMIT"
+        >
+          {saving ? (
+            <ActivityIndicator color="#FFFFFF" />
+          ) : (
+            <Text style={styles.submitButtonText}>SUBMIT</Text>
+          )}
+        </Pressable>
+
+        {/* Relationship Picker Modal */}
+        <Modal
+          visible={pickerVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setPickerVisible(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalCard}>
+              <Text style={styles.modalTitle}>Select Relationship</Text>
+              {RELATIONSHIP_OPTIONS.map((opt) => (
+                <Pressable
+                  key={opt.value}
+                  style={[
+                    styles.modalOption,
+                    relationship === opt.value && styles.modalOptionSelected,
+                  ]}
+                  onPress={() => {
+                    setRelationship(opt.value);
+                    setPickerVisible(false);
+                  }}
+                >
+                  <Text
+                    style={[
+                      styles.modalOptionText,
+                      relationship === opt.value && styles.modalOptionTextSelected,
+                    ]}
+                  >
+                    {opt.label}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          </View>
+        </Modal>
       </ScrollView>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    padding: spacing.md,
-    paddingBottom: spacing.xxl,
-    gap: spacing.md,
+  screen: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
   },
-  banner: {
-    backgroundColor: '#F0FDF4', // Light green
-    borderColor: '#86EFAC',
-    borderWidth: 1.5,
-    borderRadius: radius.xl,
-    padding: spacing.md,
+  scrollContent: {
+    paddingHorizontal: 24,
+    paddingTop: 48,
+    paddingBottom: 40,
+  },
+  topHeader: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    gap: spacing.md,
+    marginBottom: 20,
   },
-  bannerIcon: {
-    fontSize: 32,
+  backButton: {
+    paddingVertical: 6,
   },
-  bannerTitle: {
-    fontSize: fontSize.sm,
-    fontWeight: '800',
-    color: '#15803D',
+  backButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#3873B0',
   },
-  bannerText: {
-    fontSize: fontSize.xs,
-    color: '#16A34A',
-    marginTop: 2,
-    lineHeight: 16,
+  titleBlock: {
+    marginBottom: 16,
   },
-  card: {
-    backgroundColor: palette.surface,
-    borderRadius: radius.xl,
-    padding: spacing.md,
-    borderWidth: 1.5,
-    borderColor: '#E2E8F0',
-    ...shadow.card,
+  screenTitle: {
+    fontSize: 26,
+    fontWeight: '700',
+    color: '#19364F',
+    letterSpacing: -0.5,
   },
-  formTitle: {
-    fontSize: fontSize.md,
-    fontWeight: fontWeight.bold as '700',
-    color: '#0F172A', // Dark navy
+  cardSectionHeader: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#19364F',
+    letterSpacing: 0.5,
+    marginBottom: 20,
   },
-  formSubtitle: {
-    fontSize: fontSize.xs,
-    color: palette.textMuted,
-    marginTop: 2,
-    marginBottom: spacing.md,
-  },
-  fieldGroup: {
-    marginBottom: spacing.md,
+  fieldSection: {
+    marginBottom: 20,
   },
   fieldLabel: {
-    fontSize: fontSize.sm,
+    fontSize: 12,
     fontWeight: '700',
-    color: '#0F172A',
-    marginBottom: spacing.xs,
+    color: '#707E88',
+    letterSpacing: 0.8,
+    marginBottom: 8,
   },
-  relationList: {
-    gap: 8,
-  },
-  relationRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: spacing.sm,
-    backgroundColor: '#F8FAFC',
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  relationRowActive: {
-    borderColor: '#16A34A',
-    backgroundColor: '#F0FDF4',
-  },
-  radioCircle: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    borderWidth: 2,
-    borderColor: '#94A3B8',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: spacing.sm,
-  },
-  radioCircleActive: {
-    borderColor: '#16A34A',
-  },
-  radioDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: '#16A34A',
-  },
-  relationText: {
-    fontSize: fontSize.sm,
-    color: palette.text,
-  },
-  relationTextActive: {
-    color: '#15803D',
-    fontWeight: '700',
-  },
-  saveButton: {
-    backgroundColor: '#16A34A', // Green accent
-    minHeight: 52,
-    borderRadius: radius.xl,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginTop: spacing.sm,
-  },
-  saveButtonText: {
-    color: '#FFFFFF',
-    fontSize: fontSize.md,
-    fontWeight: '700',
-  },
-  successCard: {
-    backgroundColor: palette.surface,
-    borderRadius: radius.xl,
-    padding: spacing.xl,
-    alignItems: 'center',
+  inputBox: {
+    backgroundColor: '#FFFFFF',
     borderWidth: 1.5,
-    borderColor: '#86EFAC',
-    ...shadow.card,
+    borderColor: '#DEE6EB',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    minHeight: 52,
+    justifyContent: 'center',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.03,
+    shadowRadius: 3,
+    elevation: 1,
   },
-  successIconCircle: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: '#F0FDF4',
-    borderWidth: 2,
-    borderColor: '#16A34A',
+  textInput: {
+    fontSize: 16,
+    color: '#23303A',
+    paddingVertical: 10,
+  },
+  pickerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  pickerText: {
+    fontSize: 16,
+    color: '#23303A',
+  },
+  pickerArrow: {
+    fontSize: 12,
+    color: '#707E88',
+  },
+  submitButton: {
+    backgroundColor: '#2E8B57',
+    height: 52,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 24,
+    shadowColor: '#2E8B57',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  submitButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  buttonPressed: {
+    opacity: 0.85,
+    transform: [{ scale: 0.99 }],
+  },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: spacing.md,
+    padding: 24,
   },
-  successTitle: {
-    fontSize: fontSize.lg,
-    fontWeight: '800',
-    color: '#0F172A',
-    marginBottom: spacing.xs,
-  },
-  successText: {
-    fontSize: fontSize.xs,
-    color: palette.textMuted,
-    textAlign: 'center',
-    lineHeight: 18,
-    marginBottom: spacing.lg,
-  },
-  successActions: {
+  modalCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 20,
     width: '100%',
+    maxWidth: 360,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#19364F',
+    marginBottom: 16,
+  },
+  modalOption: {
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    marginBottom: 4,
+  },
+  modalOptionSelected: {
+    backgroundColor: '#E7F5EB',
+  },
+  modalOptionText: {
+    fontSize: 16,
+    color: '#23303A',
+  },
+  modalOptionTextSelected: {
+    color: '#2E8B57',
+    fontWeight: '700',
   },
 });

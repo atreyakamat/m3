@@ -2,20 +2,20 @@ import React, { useState } from 'react';
 import {
   View,
   Text,
+  TextInput,
   Pressable,
   Alert,
   Modal,
   StyleSheet,
   ScrollView,
+  ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { loginSchema, LANGUAGE_LABELS, type Language } from '@m3/shared';
-import { Screen, Card, TextField, Button } from '@/components/ui';
 import { AudioGuidanceButton } from '@/components/AudioGuidanceButton';
 import { authApi, ApiError } from '@/api';
 import { useSession } from '@/store/session';
-import { palette, spacing, fontSize, fontWeight, radius, shadow } from '@/theme';
 
 export default function SignInScreen() {
   const { t } = useTranslation();
@@ -23,7 +23,6 @@ export default function SignInScreen() {
   const { language, signIn } = useSession();
   const [phone, setPhone] = useState('');
   const [pin, setPin] = useState('');
-  const [showPin, setShowPin] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [forgotModalVisible, setForgotModalVisible] = useState(false);
@@ -66,7 +65,7 @@ export default function SignInScreen() {
   }
 
   return (
-    <Screen>
+    <View style={styles.screen}>
       <ScrollView contentContainerStyle={styles.scrollContainer} keyboardShouldPersistTaps="handled">
         {/* Top Header with Language Switcher and Audio Guidance */}
         <View style={styles.topHeader}>
@@ -76,112 +75,110 @@ export default function SignInScreen() {
             accessibilityRole="button"
             accessibilityLabel={t('language.changeLanguage', 'Change Language')}
           >
-            <Text style={{ fontSize: 18, marginRight: 6 }}>🌐</Text>
+            <Text style={{ fontSize: 16, marginRight: 4 }}>🌐</Text>
             <Text style={styles.langButtonText}>
               {LANGUAGE_LABELS[language as Language] || (language ? language.toUpperCase() : 'English')}
             </Text>
-            <Text style={{ fontSize: 12, marginLeft: 4, color: palette.textMuted }}>▼</Text>
+            <Text style={{ fontSize: 11, marginLeft: 3, color: '#6F7E89' }}>▼</Text>
           </Pressable>
 
           <AudioGuidanceButton
-            text="Welcome to M3 Malaria Surveillance. Enter your 10 digit registered mobile number and PIN to sign in. New workers can tap create account."
+            text="Welcome to M3 App. Enter your registered mobile number and PIN to sign in. If you are new, tap Create your account below."
             size="small"
           />
         </View>
 
-        {/* M3 Application Branding */}
-        <View style={styles.brandContainer}>
-          <View style={styles.logoBadge}>
-            <Text style={styles.logoText}>M3</Text>
-          </View>
-          <Text style={styles.brandTitle}>M3 Malaria Surveillance</Text>
-          <Text style={styles.brandTagline}>ICMR–NIMR Field Worker Portal · Goa</Text>
+        {/* Title Header matching Slide 1 */}
+        <View style={styles.headerBlock}>
+          <Text style={styles.welcomeTitle}>Welcome to M3 App</Text>
+          <Text style={styles.welcomeSubtitle}>Malaria surveillance for workers</Text>
         </View>
 
-        {/* Sign In Form Card */}
-        <Card style={styles.formCard}>
-          <Text style={styles.formTitle}>{t('auth.returningWorker', 'Sign In')}</Text>
-          <Text style={styles.formSubtitle}>
-            {t('auth.enterCredentials', 'Enter your mobile number and PIN to access your health portal')}
-          </Text>
-
-          <TextField
-            label={t('auth.phone', 'Mobile Number')}
-            placeholder="e.g. 9497468512"
-            value={phone}
-            onChangeText={(txt) => setPhone(txt.replace(/[^0-9]/g, ''))}
-            keyboardType="phone-pad"
-            maxLength={10}
-            error={errors.phone}
-          />
-
-          <View style={{ position: 'relative' }}>
-            <TextField
-              label={t('auth.pin', 'Password / PIN')}
-              placeholder="4–6 digit security PIN"
-              value={pin}
-              onChangeText={(txt) => setPin(txt.replace(/[^0-9]/g, ''))}
-              keyboardType="number-pad"
-              secureTextEntry={!showPin}
-              maxLength={6}
-              error={errors.pin}
+        {/* Sign In Form */}
+        <View style={styles.formContainer}>
+          {/* Mobile Number Field */}
+          <Text style={styles.fieldLabel}>Mobile number</Text>
+          <View style={[styles.inputBox, errors.phone && styles.inputError]}>
+            <TextInput
+              style={styles.textInput}
+              placeholder="+91 98765 43210"
+              placeholderTextColor="#94A3B8"
+              keyboardType="phone-pad"
+              value={phone}
+              onChangeText={(val) => {
+                setPhone(val);
+                if (errors.phone) setErrors((prev) => ({ ...prev, phone: '' }));
+              }}
+              accessibilityLabel="Mobile number"
             />
-            <Pressable
-              onPress={() => setShowPin(!showPin)}
-              style={styles.eyeToggle}
-              hitSlop={10}
-              accessibilityRole="button"
-              accessibilityLabel={showPin ? 'Hide PIN' : 'Show PIN'}
-            >
-              <Text style={{ fontSize: 16 }}>{showPin ? '👁️' : '🙈'}</Text>
-            </Pressable>
           </View>
+          {errors.phone ? <Text style={styles.errorText}>{errors.phone}</Text> : null}
 
-          {/* Sign In Button — Standardised Submit label */}
-          <Button
-            label="Submit"
+          {/* Password / PIN Field */}
+          <Text style={[styles.fieldLabel, { marginTop: 16 }]}>Password / PIN</Text>
+          <View style={[styles.inputBox, errors.pin && styles.inputError]}>
+            <TextInput
+              style={styles.textInput}
+              placeholder="••••••••"
+              placeholderTextColor="#94A3B8"
+              secureTextEntry
+              keyboardType="numeric"
+              value={pin}
+              onChangeText={(val) => {
+                setPin(val);
+                if (errors.pin) setErrors((prev) => ({ ...prev, pin: '' }));
+              }}
+              accessibilityLabel="Password or PIN"
+            />
+          </View>
+          {errors.pin ? <Text style={styles.errorText}>{errors.pin}</Text> : null}
+
+          {/* Primary Submit Button matching Slide 1 (Teal #1C8982) */}
+          <Pressable
+            style={({ pressed }) => [
+              styles.submitButton,
+              loading && styles.buttonDisabled,
+              pressed && styles.buttonPressed,
+            ]}
             onPress={submit}
-            loading={loading}
-            style={styles.submitButton}
-          />
+            disabled={loading}
+            accessibilityRole="button"
+            accessibilityLabel="SUBMIT"
+          >
+            {loading ? (
+              <ActivityIndicator color="#FFFFFF" />
+            ) : (
+              <Text style={styles.submitButtonText}>SUBMIT</Text>
+            )}
+          </Pressable>
 
-          {/* Forgot PIN / Password */}
+          {/* Forgot Password Link */}
           <Pressable
             onPress={() => setForgotModalVisible(true)}
-            style={styles.forgotButton}
+            style={styles.linkButton}
             accessibilityRole="button"
           >
-            <Text style={styles.forgotText}>
-              {t('auth.forgotPin', 'Forgot PIN / Password?')}
-            </Text>
+            <Text style={styles.linkText}>Forgot password?</Text>
           </Pressable>
-        </Card>
 
-        {/* New Worker / Create Account Section */}
-        <View style={styles.newWorkerSection}>
-          <View style={styles.dividerRow}>
-            <View style={styles.dividerLine} />
-            <Text style={styles.dividerText}>{t('common.or', 'OR')}</Text>
-            <View style={styles.dividerLine} />
-          </View>
-
-          <View style={styles.newWorkerCard}>
-            <Text style={styles.newWorkerTitle}>
-              {t('auth.newHere', 'Are you a new worker in Goa?')}
-            </Text>
-            <Text style={styles.newWorkerSubtitle}>
-              {t('auth.registerHint', 'Register your profile to receive free malaria testing, healthcare monitoring and worker welfare protection.')}
-            </Text>
-            <Button
-              label={t('auth.createAccount', 'Create Account / New Worker')}
-              variant="ghost"
+          {/* New to M3 Section matching Slide 1 */}
+          <View style={styles.newWorkerSection}>
+            <Text style={styles.newWorkerLabel}>New to M3?</Text>
+            <Pressable
+              style={({ pressed }) => [
+                styles.registerButton,
+                pressed && styles.buttonPressed,
+              ]}
               onPress={() => router.push('/sign-up' as never)}
-              style={styles.registerButton}
-            />
+              accessibilityRole="button"
+              accessibilityLabel="Create your account"
+            >
+              <Text style={styles.registerButtonText}>Create your account</Text>
+            </Pressable>
           </View>
         </View>
 
-        {/* Forgot PIN Informational Modal */}
+        {/* Forgot Password Modal */}
         <Modal
           visible={forgotModalVisible}
           transparent
@@ -189,228 +186,195 @@ export default function SignInScreen() {
           onRequestClose={() => setForgotModalVisible(false)}
         >
           <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
-              <View style={styles.modalHeaderIcon}>
-                <Text style={{ fontSize: 32 }}>🔐</Text>
-              </View>
-              <Text style={styles.modalTitle}>Forgot Your Security PIN?</Text>
+            <View style={styles.modalCard}>
+              <Text style={styles.modalTitle}>PIN Reset Assistance</Text>
               <Text style={styles.modalBody}>
-                To protect your worker health records and identity in Goa, PIN resets are verified by authorized personnel.
+                To protect migrant worker health records, PIN resets must be verified in person by your assigned worksite contractor or visiting Primary Health Centre (PHC) health surveillance worker.
               </Text>
-              <View style={styles.modalInfoBox}>
-                <Text style={styles.modalStep}>1. Contact your <Text style={{ fontWeight: '700' }}>Site Contractor</Text> or Site Supervisor.</Text>
-                <Text style={styles.modalStep}>2. Or approach the on-site <Text style={{ fontWeight: '700' }}>ICMR–NIMR Health Worker</Text>.</Text>
-                <Text style={styles.modalStep}>3. They will verify your identity via mobile number/Aadhaar and issue a temporary reset PIN.</Text>
-              </View>
-              <Button
-                label="Understood / Close"
+              <Pressable
+                style={styles.modalCloseButton}
                 onPress={() => setForgotModalVisible(false)}
-                style={{ width: '100%', marginTop: spacing.md }}
-              />
+              >
+                <Text style={styles.modalCloseText}>Dismiss</Text>
+              </Pressable>
             </View>
           </View>
         </Modal>
       </ScrollView>
-    </Screen>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  screen: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+  },
   scrollContainer: {
-    paddingBottom: spacing.xxl,
+    paddingHorizontal: 24,
+    paddingTop: 48,
+    paddingBottom: 40,
   },
   topHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingTop: spacing.xs,
-    marginBottom: spacing.md,
+    marginBottom: 24,
   },
   langButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F0F9FF',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-    borderRadius: radius.pill,
-    borderWidth: 1.5,
-    borderColor: palette.primary,
-    minHeight: 44,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#DCE4E8',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
   },
   langButtonText: {
-    fontSize: fontSize.sm,
-    fontWeight: fontWeight.bold as '700',
-    color: palette.primary,
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#183043',
   },
-  brandContainer: {
-    alignItems: 'center',
-    marginBottom: spacing.lg,
+  headerBlock: {
+    marginBottom: 28,
   },
-  logoBadge: {
-    width: 68,
-    height: 68,
-    borderRadius: 20,
-    backgroundColor: palette.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: spacing.sm,
-    ...shadow.card,
+  welcomeTitle: {
+    fontSize: 26,
+    fontWeight: '700',
+    color: '#183043',
+    letterSpacing: -0.5,
   },
-  logoText: {
-    color: palette.textOnColor,
-    fontSize: 30,
-    fontWeight: '800',
-    letterSpacing: 1,
+  welcomeSubtitle: {
+    fontSize: 15,
+    color: '#6F7E89',
+    marginTop: 6,
+    lineHeight: 22,
   },
-  brandTitle: {
-    fontSize: fontSize.xl,
-    fontWeight: fontWeight.bold as '700',
-    color: palette.text,
+  formContainer: {
+    marginTop: 4,
   },
-  brandTagline: {
-    fontSize: fontSize.xs,
-    color: palette.textMuted,
-    marginTop: 2,
-    fontWeight: '500',
+  fieldLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#6F7E89',
+    marginBottom: 8,
   },
-  formCard: {
-    backgroundColor: palette.surface,
-    borderRadius: radius.xl,
-    padding: spacing.lg,
+  inputBox: {
+    backgroundColor: '#FFFFFF',
     borderWidth: 1.5,
-    borderColor: palette.border,
-    ...shadow.card,
+    borderColor: '#DCE4E8',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    minHeight: 52,
+    justifyContent: 'center',
   },
-  formTitle: {
-    fontSize: fontSize.lg,
-    fontWeight: fontWeight.bold as '700',
-    color: palette.text,
-    marginBottom: 2,
+  inputError: {
+    borderColor: '#DC2626',
   },
-  formSubtitle: {
-    fontSize: fontSize.xs,
-    color: palette.textMuted,
-    marginBottom: spacing.md,
+  textInput: {
+    fontSize: 16,
+    color: '#23303A',
+    paddingVertical: 10,
   },
-  eyeToggle: {
-    position: 'absolute',
-    right: 14,
-    top: 38,
-    padding: 6,
+  errorText: {
+    color: '#DC2626',
+    fontSize: 12,
+    marginTop: 4,
+    marginLeft: 4,
   },
   submitButton: {
-    marginTop: spacing.sm,
-    minHeight: 52,
-    borderRadius: radius.md,
-  },
-  forgotButton: {
-    alignSelf: 'center',
-    paddingVertical: spacing.md,
-    marginTop: spacing.xs,
-    minHeight: 44,
-    justifyContent: 'center',
-  },
-  forgotText: {
-    color: palette.primary,
-    fontSize: fontSize.sm,
-    fontWeight: fontWeight.semibold as '600',
-  },
-  newWorkerSection: {
-    marginTop: spacing.lg,
-  },
-  dividerRow: {
-    flexDirection: 'row',
+    backgroundColor: '#1C8982',
+    height: 52,
+    borderRadius: 12,
     alignItems: 'center',
-    marginVertical: spacing.md,
+    justifyContent: 'center',
+    marginTop: 24,
   },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: palette.border,
+  submitButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+    letterSpacing: 0.5,
   },
-  dividerText: {
-    marginHorizontal: spacing.md,
-    fontSize: fontSize.xs,
-    color: palette.textMuted,
+  buttonPressed: {
+    opacity: 0.85,
+    transform: [{ scale: 0.99 }],
+  },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+  linkButton: {
+    alignItems: 'center',
+    paddingVertical: 14,
+    marginTop: 4,
+  },
+  linkText: {
+    fontSize: 14,
+    color: '#3A70A6',
     fontWeight: '600',
   },
-  newWorkerCard: {
-    backgroundColor: '#F8FAFC',
-    borderRadius: radius.lg,
-    padding: spacing.lg,
-    borderWidth: 1.5,
-    borderColor: '#E2E8F0',
+  newWorkerSection: {
     alignItems: 'center',
+    marginTop: 20,
+    paddingTop: 20,
+    borderTopWidth: 1,
+    borderTopColor: '#E2E8F0',
   },
-  newWorkerTitle: {
-    fontSize: fontSize.md,
-    fontWeight: fontWeight.bold as '700',
-    color: palette.text,
-    textAlign: 'center',
-  },
-  newWorkerSubtitle: {
-    fontSize: fontSize.xs,
-    color: palette.textMuted,
-    textAlign: 'center',
-    marginTop: 4,
-    marginBottom: spacing.md,
-    lineHeight: 18,
+  newWorkerLabel: {
+    fontSize: 14,
+    color: '#6F7E89',
+    marginBottom: 12,
   },
   registerButton: {
+    backgroundColor: '#183043',
     width: '100%',
-    minHeight: 48,
-    borderRadius: radius.md,
-    borderColor: palette.primary,
+    height: 52,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  registerButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+    letterSpacing: 0.5,
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
     justifyContent: 'center',
     alignItems: 'center',
-    padding: spacing.lg,
+    padding: 24,
   },
-  modalContent: {
-    backgroundColor: palette.surface,
-    borderRadius: radius.xl,
-    padding: spacing.xl,
+  modalCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 24,
     width: '100%',
-    maxWidth: 420,
-    alignItems: 'center',
-    ...shadow.card,
-  },
-  modalHeaderIcon: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: '#FEF3C7',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: spacing.md,
+    maxWidth: 400,
   },
   modalTitle: {
-    fontSize: fontSize.lg,
-    fontWeight: fontWeight.bold as '700',
-    color: palette.text,
-    textAlign: 'center',
-    marginBottom: spacing.xs,
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#183043',
+    marginBottom: 12,
   },
   modalBody: {
-    fontSize: fontSize.sm,
-    color: palette.textMuted,
-    textAlign: 'center',
-    lineHeight: 20,
-    marginBottom: spacing.md,
+    fontSize: 14,
+    color: '#6F7E89',
+    lineHeight: 22,
+    marginBottom: 20,
   },
-  modalInfoBox: {
-    backgroundColor: '#F1F5F9',
-    borderRadius: radius.md,
-    padding: spacing.md,
-    width: '100%',
-    gap: spacing.xs,
+  modalCloseButton: {
+    backgroundColor: '#1C8982',
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
   },
-  modalStep: {
-    fontSize: fontSize.xs,
-    color: palette.text,
-    lineHeight: 18,
+  modalCloseText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 14,
   },
 });

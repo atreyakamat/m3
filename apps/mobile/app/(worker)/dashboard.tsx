@@ -1,21 +1,5 @@
-/**
- * Worker Dashboard — Master Implementation.
- *
- * Implements Section 5 requirements:
- * - Exactly six primary actions in a 2-column, 3-row grid:
- *   Top row:    [Exit from Goa (Left, Blue)]    [Entry in Goa (Right, Teal)]
- *   Middle row: [Not Feeling Well (Left, Red)]  [Family (Right, Green)]
- *   Bottom row: [Roommate (Left, Purple)]       [Transfer Site (Right, Amber)]
- * - Realistic smartphone layout with light theme.
- * - Consistent typography, clean rounded cards, large touch targets.
- * - No Construction Site card, no unnecessary subtitles or decorative elements.
- */
-
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  Dimensions,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -26,49 +10,42 @@ import {
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { AudioGuidanceButton } from '@/components/AudioGuidanceButton';
-import { WorkerHeader } from '@/components/WorkerHeader';
 import {
   workerApi,
-  recordsApi,
   type WorkerProfile,
-  type EpisodeDto,
   isNetworkError,
 } from '@/api';
 import { useSession } from '@/store/session';
 import { flushOutbox, pendingCount } from '@/services/sync';
-import { palette, spacing, radius, fontSize, fontWeight, shadow } from '@/theme';
 
-interface DashboardAction {
+interface ActionCardItem {
   id: string;
   route: string;
   title: string;
-  subtitle: string;
   icon: string;
-  accentColor: string;
-  lightBg: string;
+  iconColor: string;
+  bgColor: string;
   borderColor: string;
 }
 
-const DASHBOARD_ACTIONS: DashboardAction[] = [
+const DASHBOARD_ACTIONS: ActionCardItem[] = [
   // Top row
   {
     id: 'exit',
     route: '/(worker)/exit',
     title: 'Exit from Goa',
-    subtitle: 'Report departure',
-    icon: '🛫',
-    accentColor: '#2563EB', // Blue
-    lightBg: '#EFF6FF',
-    borderColor: '#93C5FD',
+    icon: '↗',
+    iconColor: '#3873B0',
+    bgColor: '#E0F5F1',
+    borderColor: '#BAE6FD',
   },
   {
     id: 'entry',
     route: '/(worker)/entry',
     title: 'Entry in Goa',
-    subtitle: 'Report arrival',
-    icon: '🛬',
-    accentColor: '#0D9488', // Teal
-    lightBg: '#F0FDFA',
+    icon: '↘️',
+    iconColor: '#008B8B',
+    bgColor: '#E8F1FA',
     borderColor: '#99F6E4',
   },
   // Middle row
@@ -76,41 +53,37 @@ const DASHBOARD_ACTIONS: DashboardAction[] = [
     id: 'unwell',
     route: '/(worker)/unwell',
     title: 'Not Feeling Well',
-    subtitle: 'Report symptoms',
     icon: '🤒',
-    accentColor: '#DC2626', // Red
-    lightBg: '#FEF2F2',
-    borderColor: '#FCA5A5',
+    iconColor: '#CD3640',
+    bgColor: '#FFEBEC',
+    borderColor: '#FECDD3',
   },
   {
     id: 'family',
     route: '/(worker)/family',
     title: 'Family',
-    subtitle: 'Add family member',
     icon: '👨‍👩‍👧',
-    accentColor: '#16A34A', // Green
-    lightBg: '#F0FDF4',
-    borderColor: '#86EFAC',
+    iconColor: '#2E8B57',
+    bgColor: '#E7F5EB',
+    borderColor: '#BBF7D0',
   },
   // Bottom row
   {
     id: 'roommate',
     route: '/(worker)/roommate',
     title: 'Roommate',
-    subtitle: 'Add roommate',
-    icon: '👥',
-    accentColor: '#9333EA', // Purple
-    lightBg: '#FAF5FF',
-    borderColor: '#D8B4FE',
+    icon: '⌂',
+    iconColor: '#6F55A6',
+    bgColor: '#F1ECFA',
+    borderColor: '#E9D5FF',
   },
   {
     id: 'transfer',
     route: '/(worker)/transfer',
     title: 'Transfer Site',
-    subtitle: 'Request site move',
-    icon: '🔄',
-    accentColor: '#D97706', // Amber/Orange
-    lightBg: '#FFFBEB',
+    icon: '⇄',
+    iconColor: '#C48524',
+    bgColor: '#FCF5E5',
     borderColor: '#FDE68A',
   },
 ];
@@ -118,7 +91,7 @@ const DASHBOARD_ACTIONS: DashboardAction[] = [
 export default function Dashboard() {
   const { t } = useTranslation();
   const router = useRouter();
-  const { token, user, signOut } = useSession();
+  const { token, user, language } = useSession();
 
   const [profile, setProfile] = useState<WorkerProfile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -158,37 +131,38 @@ export default function Dashboard() {
   }, [loadData]);
 
   const workerName = profile?.name || user?.displayName || 'Worker';
-  const workerCode = profile?.workerId || user?.workerId || 'M3-R2G6N3';
-  const siteName = profile?.currentSite?.name || 'Candolim Beach Resort Project';
-  const siteArea = profile?.currentSite?.area || 'Candolim, North Goa';
 
   return (
     <View style={styles.container}>
-      {/* Top Header */}
-      <WorkerHeader
-        title="M3 Malaria Surveillance"
-        subtitle={`Worker ID: ${workerCode}`}
-        rightElement={
-          <AudioGuidanceButton
-            text={`Worker dashboard. Welcome ${workerName}. Select from the six options: Exit from Goa, Entry in Goa, Not Feeling Well, Family, Roommate, or Transfer Site.`}
-            size="small"
-          />
-        }
-      />
+      {/* Top Bar with Language Selector and Audio Guidance */}
+      <View style={styles.topBar}>
+        <Pressable
+          onPress={() => router.push('/language')}
+          style={({ pressed }) => [styles.langButton, pressed && { opacity: 0.8 }]}
+          accessibilityRole="button"
+          accessibilityLabel="Change Language"
+        >
+          <Text style={{ fontSize: 16, marginRight: 4 }}>🌐</Text>
+          <Text style={styles.langButtonText}>
+            {language ? language.toUpperCase() : 'EN'}
+          </Text>
+          <Text style={{ fontSize: 10, marginLeft: 2, color: '#6F7E89' }}>▼</Text>
+        </Pressable>
+
+        <AudioGuidanceButton
+          text={`Welcome to M3 App ${workerName}. Select from the six options: Exit from Goa, Entry in Goa, Not Feeling Well, Family, Roommate, or Transfer Site.`}
+          size="small"
+        />
+      </View>
 
       <ScrollView
         contentContainerStyle={styles.scrollContent}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[palette.primary]} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#008B8B']} />}
       >
-        {/* Worker Greeting Card */}
-        <View style={styles.workerCard}>
-          <View style={styles.workerAvatar}>
-            <Text style={{ fontSize: 24 }}>👷‍♂️</Text>
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.greetingText}>Namaste, {workerName}</Text>
-            <Text style={styles.workerIdSub}>Worker ID: {workerCode}</Text>
-          </View>
+        {/* Header Block matching Slides 3-8 */}
+        <View style={styles.headerBlock}>
+          <Text style={styles.appTitle}>Welcome to M3 App</Text>
+          <Text style={styles.workerName}>{workerName}</Text>
         </View>
 
         {outboxPending > 0 && (
@@ -199,10 +173,7 @@ export default function Dashboard() {
           </View>
         )}
 
-        {/* Section Heading */}
-        <Text style={styles.sectionHeading}>Worker Actions</Text>
-
-        {/* Exactly Six Primary Actions in 2-Column Grid */}
+        {/* Exactly Six Primary Actions in 2-Column by 3-Row Grid matching Slides 3-8 */}
         <View style={styles.actionsGrid}>
           {DASHBOARD_ACTIONS.map((item) => (
             <Pressable
@@ -210,8 +181,8 @@ export default function Dashboard() {
               style={({ pressed }) => [
                 styles.actionCard,
                 {
+                  backgroundColor: item.bgColor,
                   borderColor: item.borderColor,
-                  backgroundColor: item.lightBg,
                 },
                 pressed && styles.cardPressed,
               ]}
@@ -219,14 +190,11 @@ export default function Dashboard() {
               accessibilityRole="button"
               accessibilityLabel={item.title}
             >
-              <View style={[styles.iconWrapper, { backgroundColor: item.accentColor }]}>
-                <Text style={styles.actionIcon}>{item.icon}</Text>
-              </View>
-              <Text style={[styles.actionTitle, { color: '#0F172A' }]}>
-                {item.title}
+              <Text style={[styles.actionIcon, { color: item.iconColor }]}>
+                {item.icon}
               </Text>
-              <Text style={[styles.actionSubtitle, { color: item.accentColor }]}>
-                {item.subtitle}
+              <Text style={styles.actionTitle}>
+                {item.title}
               </Text>
             </Pressable>
           ))}
@@ -239,126 +207,96 @@ export default function Dashboard() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F8FAFC', // Light grey background
+    backgroundColor: '#F8FAFC',
+  },
+  topBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingTop: 44,
+    paddingBottom: 8,
+  },
+  langButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#DCE4E8',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 16,
+  },
+  langButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#183043',
   },
   scrollContent: {
-    padding: spacing.md,
-    paddingBottom: spacing.xxl,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 40,
   },
-  workerCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: palette.surface,
-    padding: spacing.md,
-    borderRadius: radius.xl,
-    borderWidth: 1.5,
-    borderColor: '#E2E8F0',
-    marginBottom: spacing.md,
-    ...shadow.card,
+  headerBlock: {
+    marginBottom: 28,
   },
-  workerAvatar: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: '#F1F5F9',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: spacing.md,
-  },
-  greetingText: {
-    fontSize: fontSize.md,
-    fontWeight: fontWeight.bold as '700',
-    color: '#0F172A', // Dark navy
-  },
-  siteBadgeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 2,
-  },
-  siteIcon: {
-    fontSize: 12,
-    marginRight: 4,
-  },
-  siteNameText: {
-    fontSize: fontSize.xs,
+  appTitle: {
+    fontSize: 24,
     fontWeight: '700',
-    color: '#0D9488', // Teal accent
-    flex: 1,
+    color: '#19364F',
+    letterSpacing: -0.5,
   },
-  siteAreaText: {
-    fontSize: 11,
-    color: palette.textMuted,
-    marginTop: 1,
+  workerName: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: '#19364F',
+    marginTop: 4,
   },
   syncNotice: {
     backgroundColor: '#FEF3C7',
     borderColor: '#F59E0B',
     borderWidth: 1,
-    borderRadius: radius.md,
-    padding: spacing.sm,
-    marginBottom: spacing.md,
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 16,
   },
   syncNoticeText: {
-    fontSize: 11,
+    fontSize: 12,
     color: '#92400E',
     fontWeight: '600',
-    textAlign: 'center',
-  },
-  sectionHeading: {
-    fontSize: fontSize.xs,
-    fontWeight: '800',
-    color: '#64748B',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-    marginBottom: spacing.sm,
-    marginLeft: 2,
   },
   actionsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'space-between',
-    gap: spacing.md,
+    rowGap: 16,
   },
   actionCard: {
     width: '47.5%',
-    minHeight: 135,
-    borderRadius: radius.xl,
-    padding: spacing.md,
-    borderWidth: 1.5,
+    height: 125,
+    borderRadius: 18,
+    borderWidth: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    ...shadow.card,
+    padding: 12,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 2,
   },
   cardPressed: {
     transform: [{ scale: 0.98 }],
     opacity: 0.9,
   },
-  iconWrapper: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: spacing.sm,
-  },
   actionIcon: {
-    fontSize: 24,
+    fontSize: 32,
+    marginBottom: 10,
   },
   actionTitle: {
-    fontSize: fontSize.sm,
-    fontWeight: fontWeight.bold as '700',
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#19364F',
     textAlign: 'center',
-    marginBottom: 2,
-  },
-  actionSubtitle: {
-    fontSize: 11,
-    fontWeight: '600',
-    textAlign: 'center',
-  },
-  workerIdSub: {
-    fontSize: 12,
-    color: '#0D9488',
-    fontWeight: '600',
-    marginTop: 2,
   },
 });

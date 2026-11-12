@@ -1,15 +1,3 @@
-/**
- * RegisterLocationScreen — Post-Registration Device Location Capture Step.
- *
- * Implements Section 4 requirements:
- * - Triggered immediately after successful account creation.
- * - Requests device location permission.
- * - Captures coordinates and associates them with registration timestamp.
- * - Displays clear location-captured state.
- * - Graceful retry/fallback if permission denied or GPS unavailable.
- * - Continues to Worker Dashboard upon completion.
- */
-
 import React, { useState } from 'react';
 import {
   View,
@@ -21,10 +9,9 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Screen, Card, Button } from '@/components/ui';
+import { AudioGuidanceButton } from '@/components/AudioGuidanceButton';
 import { captureDeviceLocation, type CapturedLocation } from '@/services/location';
 import { useSession } from '@/store/session';
-import { palette, spacing, radius, fontSize, fontWeight, shadow } from '@/theme';
 
 export default function RegisterLocationScreen() {
   const router = useRouter();
@@ -68,86 +55,75 @@ export default function RegisterLocationScreen() {
   return (
     <View style={styles.screen}>
       <ScrollView contentContainerStyle={styles.container}>
-        {/* Top Branding / Step Indicator */}
-        <View style={styles.header}>
-          <View style={styles.badge}>
-            <Text style={styles.badgeText}>Registration Step 2 of 2</Text>
+        {/* Top Bar with Audio Guidance */}
+        <View style={styles.topBar}>
+          <AudioGuidanceButton
+            text="Registration Complete. Tap Capture device location to record your registration GPS coordinates, then tap SUBMIT to enter your dashboard."
+            size="small"
+          />
+        </View>
+
+        {/* Title matching Slide 2 */}
+        <View style={styles.headerBlock}>
+          <Text style={styles.title}>Registration Complete</Text>
+        </View>
+
+        {/* Card 1: Capture Device Location matching Slide 2 */}
+        <Pressable
+          style={({ pressed }) => [
+            styles.actionCard,
+            location && styles.actionCardSuccess,
+            pressed && { opacity: 0.85 },
+          ]}
+          onPress={handleCapture}
+          disabled={loading}
+          accessibilityRole="button"
+          accessibilityLabel="Capture device location"
+        >
+          <View style={styles.cardHeaderRow}>
+            <Text style={styles.cardIcon}>◎</Text>
+            <Text style={styles.cardActionText}>Capture device location</Text>
+            {loading && <ActivityIndicator color="#008B8B" style={{ marginLeft: 8 }} />}
           </View>
-          <Text style={styles.title}>Capture Device Location</Text>
-          <Text style={styles.subtitle}>
-            Welcome, {user?.displayName || 'Worker'}! Capture your current device location to complete registration with the ICMR–NIMR Malaria Surveillance Project.
+
+          <Text style={styles.cardSubtext}>
+            Allow location access to record the worker's registration location.
+          </Text>
+
+          {location && (
+            <View style={styles.capturedBadge}>
+              <Text style={styles.capturedBadgeText}>
+                ✓ {location.formattedText || 'Coordinates Captured Successfully'}
+              </Text>
+            </View>
+          )}
+
+          {error && (
+            <Text style={styles.errorText}>
+              ⚠️ {error}
+            </Text>
+          )}
+        </Pressable>
+
+        {/* Card 2: Info Box matching Slide 2 */}
+        <View style={styles.infoBanner}>
+          <Text style={styles.infoText}>
+            Location is captured after account registration.
           </Text>
         </View>
 
-        {/* Location Capture Card */}
-        <Card style={styles.card}>
-          <View style={styles.iconCircle}>
-            <Text style={{ fontSize: 36 }}>📍</Text>
-          </View>
-
-          {location ? (
-            <View style={styles.successBox}>
-              <View style={styles.successBadge}>
-                <Text style={styles.successBadgeText}>✓ Location Captured Successfully</Text>
-              </View>
-
-              <Text style={styles.coordText}>{location.formattedText}</Text>
-              <Text style={styles.timeText}>
-                Registration Timestamp:{' '}
-                {new Date(location.timestamp).toLocaleTimeString([], {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                  second: '2-digit',
-                })}
-              </Text>
-
-              <Pressable
-                onPress={handleCapture}
-                disabled={loading}
-                style={styles.recaptureLink}
-              >
-                <Text style={styles.recaptureText}>🔄 Re-capture Location</Text>
-              </Pressable>
-            </View>
-          ) : (
-            <View style={styles.promptBox}>
-              <Text style={styles.promptText}>
-                Device GPS coordinates are recorded only once during registration to associate your account with your worksite area.
-              </Text>
-
-              <Pressable
-                onPress={handleCapture}
-                disabled={loading}
-                style={[styles.captureBtn, loading && styles.btnDisabled]}
-              >
-                {loading ? (
-                  <ActivityIndicator color="#FFFFFF" size="small" />
-                ) : (
-                  <Text style={styles.captureBtnText}>📍 Capture Device Location</Text>
-                )}
-              </Pressable>
-
-              {error && (
-                <View style={styles.errorBox}>
-                  <Text style={styles.errorText}>⚠️ {error}</Text>
-                  <Pressable onPress={handleCapture} style={styles.retryBtn}>
-                    <Text style={styles.retryText}>Retry</Text>
-                  </Pressable>
-                </View>
-              )}
-            </View>
-          )}
-        </Card>
-
-        {/* Bottom Actions — Standardised Submit label */}
-        <View style={styles.footer}>
-          <Button
-            label="Submit"
-            onPress={handleContinue}
-            variant="primary"
-            style={{ minHeight: 52 }}
-          />
-        </View>
+        {/* Submit Button matching Slide 2 (Teal #008B8B) */}
+        <Pressable
+          style={({ pressed }) => [
+            styles.submitButton,
+            pressed && styles.buttonPressed,
+          ]}
+          onPress={handleContinue}
+          accessibilityRole="button"
+          accessibilityLabel="SUBMIT"
+        >
+          <Text style={styles.submitButtonText}>SUBMIT</Text>
+        </Pressable>
       </ScrollView>
     </View>
   );
@@ -155,157 +131,110 @@ export default function RegisterLocationScreen() {
 
 const styles = StyleSheet.create({
   screen: {
-    backgroundColor: '#F8FAFC',
     flex: 1,
+    backgroundColor: '#F8FAFC',
   },
   container: {
-    padding: spacing.lg,
-    paddingTop: spacing.xl,
-    justifyContent: 'space-between',
-    minHeight: '100%',
+    paddingHorizontal: 24,
+    paddingTop: 48,
+    paddingBottom: 40,
   },
-  header: {
-    alignItems: 'center',
-    marginBottom: spacing.lg,
+  topBar: {
+    alignItems: 'flex-end',
+    marginBottom: 16,
   },
-  badge: {
-    backgroundColor: '#CCFBF1',
-    borderColor: '#14B8A6',
-    borderWidth: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderRadius: radius.pill,
-    marginBottom: spacing.sm,
-  },
-  badgeText: {
-    color: '#0F766E', // Teal
-    fontSize: 12,
-    fontWeight: '700',
+  headerBlock: {
+    marginBottom: 32,
   },
   title: {
-    fontSize: fontSize.xl,
-    fontWeight: fontWeight.bold as '700',
-    color: '#0F172A', // Dark navy
-    textAlign: 'center',
-    marginBottom: spacing.xs,
-  },
-  subtitle: {
-    fontSize: fontSize.sm,
-    color: palette.textMuted,
-    textAlign: 'center',
-    lineHeight: 20,
-    paddingHorizontal: spacing.sm,
-  },
-  card: {
-    backgroundColor: palette.surface,
-    borderRadius: radius.xl,
-    padding: spacing.xl,
-    alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: '#E2E8F0',
-    ...shadow.card,
-  },
-  iconCircle: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: '#F0FDFA', // Light teal
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: spacing.md,
-    borderWidth: 2,
-    borderColor: '#0D9488',
-  },
-  promptBox: {
-    width: '100%',
-    alignItems: 'center',
-  },
-  promptText: {
-    fontSize: fontSize.xs,
-    color: palette.textMuted,
-    textAlign: 'center',
-    lineHeight: 18,
-    marginBottom: spacing.lg,
-  },
-  captureBtn: {
-    backgroundColor: '#0D9488', // Teal accent
-    width: '100%',
-    minHeight: 52,
-    borderRadius: radius.lg,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  btnDisabled: {
-    opacity: 0.7,
-  },
-  captureBtnText: {
-    color: '#FFFFFF',
-    fontSize: fontSize.md,
+    fontSize: 26,
     fontWeight: '700',
+    color: '#19364F',
+    letterSpacing: -0.5,
   },
-  errorBox: {
-    marginTop: spacing.md,
-    padding: spacing.sm,
-    backgroundColor: '#FEF2F2',
-    borderRadius: radius.md,
-    width: '100%',
+  actionCard: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
+    borderColor: '#DEE6EB',
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 16,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  actionCardSuccess: {
+    borderColor: '#008B8B',
+    backgroundColor: '#F0FDFA',
+  },
+  cardHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+  },
+  cardIcon: {
+    fontSize: 20,
+    color: '#008B8B',
+    marginRight: 10,
+    fontWeight: '700',
+  },
+  cardActionText: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#008B8B',
+  },
+  cardSubtext: {
+    fontSize: 14,
+    color: '#707E88',
+    marginTop: 10,
+    lineHeight: 20,
+  },
+  capturedBadge: {
+    backgroundColor: '#CCFBF1',
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    marginTop: 12,
+    alignSelf: 'flex-start',
+  },
+  capturedBadgeText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#0F766E',
   },
   errorText: {
-    fontSize: fontSize.xs,
-    color: palette.danger,
-    flex: 1,
-  },
-  retryBtn: {
-    backgroundColor: '#DC2626',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: radius.sm,
-    marginLeft: 6,
-  },
-  retryText: {
-    color: '#FFFFFF',
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  successBox: {
-    width: '100%',
-    alignItems: 'center',
-  },
-  successBadge: {
-    backgroundColor: '#0D9488',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: radius.md,
-    marginBottom: spacing.md,
-  },
-  successBadgeText: {
-    color: '#FFFFFF',
     fontSize: 12,
+    color: '#DC2626',
+    marginTop: 10,
+  },
+  infoBanner: {
+    backgroundColor: '#E0F5F1',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 32,
+  },
+  infoText: {
+    fontSize: 14,
+    color: '#008B8B',
+    fontWeight: '500',
+    lineHeight: 20,
+  },
+  submitButton: {
+    backgroundColor: '#008B8B',
+    height: 52,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  submitButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
     fontWeight: '700',
+    letterSpacing: 0.5,
   },
-  coordText: {
-    fontSize: fontSize.lg,
-    fontWeight: '800',
-    color: '#0F172A',
-    marginBottom: 4,
-  },
-  timeText: {
-    fontSize: fontSize.xs,
-    color: palette.textMuted,
-    marginBottom: spacing.md,
-  },
-  recaptureLink: {
-    padding: 6,
-  },
-  recaptureText: {
-    fontSize: fontSize.xs,
-    color: '#0D9488',
-    fontWeight: '700',
-  },
-  footer: {
-    marginTop: spacing.xl,
+  buttonPressed: {
+    opacity: 0.85,
+    transform: [{ scale: 0.99 }],
   },
 });
